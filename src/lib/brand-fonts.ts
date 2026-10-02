@@ -7,26 +7,32 @@
 
 export const SYSTEM_FONT_ID = "system";
 
-export type BrandFont = { id: string; family: string; category: "sans" | "serif" };
+// weights: the ones requested from Google Fonts at runtime. Every one must
+// exist for the family, or Google refuses the whole stylesheet (Lato,
+// Libre Baskerville and Merriweather have no 500 or 600).
+export type BrandFont = { id: string; family: string; category: "sans" | "serif"; weights: readonly number[] };
+
+const STANDARD = [400, 500, 600, 700] as const;
+const REGULAR_BOLD = [400, 700] as const;
 
 export const BRAND_FONTS: readonly BrandFont[] = [
-  { id: "inter", family: "Inter", category: "sans" },
-  { id: "roboto", family: "Roboto", category: "sans" },
-  { id: "open-sans", family: "Open Sans", category: "sans" },
-  { id: "lato", family: "Lato", category: "sans" },
-  { id: "montserrat", family: "Montserrat", category: "sans" },
-  { id: "poppins", family: "Poppins", category: "sans" },
-  { id: "work-sans", family: "Work Sans", category: "sans" },
-  { id: "dm-sans", family: "DM Sans", category: "sans" },
-  { id: "manrope", family: "Manrope", category: "sans" },
-  { id: "oswald", family: "Oswald", category: "sans" },
-  { id: "sora", family: "Sora", category: "sans" },
-  { id: "red-hat-display", family: "Red Hat Display", category: "sans" },
-  { id: "playfair-display", family: "Playfair Display", category: "serif" },
-  { id: "merriweather", family: "Merriweather", category: "serif" },
-  { id: "lora", family: "Lora", category: "serif" },
-  { id: "libre-baskerville", family: "Libre Baskerville", category: "serif" },
-  { id: "roboto-slab", family: "Roboto Slab", category: "serif" },
+  { id: "inter", family: "Inter", category: "sans", weights: STANDARD },
+  { id: "roboto", family: "Roboto", category: "sans", weights: STANDARD },
+  { id: "open-sans", family: "Open Sans", category: "sans", weights: STANDARD },
+  { id: "lato", family: "Lato", category: "sans", weights: REGULAR_BOLD },
+  { id: "montserrat", family: "Montserrat", category: "sans", weights: STANDARD },
+  { id: "poppins", family: "Poppins", category: "sans", weights: STANDARD },
+  { id: "work-sans", family: "Work Sans", category: "sans", weights: STANDARD },
+  { id: "dm-sans", family: "DM Sans", category: "sans", weights: STANDARD },
+  { id: "manrope", family: "Manrope", category: "sans", weights: STANDARD },
+  { id: "oswald", family: "Oswald", category: "sans", weights: STANDARD },
+  { id: "sora", family: "Sora", category: "sans", weights: STANDARD },
+  { id: "red-hat-display", family: "Red Hat Display", category: "sans", weights: STANDARD },
+  { id: "playfair-display", family: "Playfair Display", category: "serif", weights: STANDARD },
+  { id: "merriweather", family: "Merriweather", category: "serif", weights: REGULAR_BOLD },
+  { id: "lora", family: "Lora", category: "serif", weights: STANDARD },
+  { id: "libre-baskerville", family: "Libre Baskerville", category: "serif", weights: REGULAR_BOLD },
+  { id: "roboto-slab", family: "Roboto Slab", category: "serif", weights: STANDARD },
 ];
 
 const FALLBACKS: Record<BrandFont["category"], string> = {

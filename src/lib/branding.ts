@@ -9,12 +9,15 @@
 export const BRAND_RADII = ["sharp", "subtle", "soft", "rounded", "pill"] as const;
 export type BrandRadius = (typeof BRAND_RADII)[number];
 
-// One uploaded image in R2 (the PO_BUCKET binding). key is the file served to
-// the app (an SVG is sanitized before it is stored); pngKey is the PNG copy
-// that emails use, since most mail clients do not render SVG.
+// One uploaded image in R2 (the PO_BUCKET binding), under
+// branding/<workspaceId>/<slot>-<random hex>.<ext> (src/server/branding/
+// assets.ts). key is the file served to the app (an SVG is checked and
+// refused when unsafe, never stored as is); pngKey is the PNG copy that
+// emails use for SVG and WebP uploads, since Gmail and Outlook render
+// neither.
 export type BrandAsset = {
   key: string;
-  contentType: "image/svg+xml" | "image/png";
+  contentType: "image/svg+xml" | "image/png" | "image/jpeg" | "image/webp";
   pngKey: string | null;
 };
 
@@ -56,8 +59,8 @@ export function brandAssetPath(workspaceId: string, key: string): string {
 }
 
 // The key an email may show for an asset: its PNG copy, or the key itself
-// when the upload is a PNG. Never an SVG, which Gmail and Outlook do not
-// render; null means "show the workspace name instead".
+// when the upload is a PNG or JPEG. Never an SVG or WebP, which Gmail and
+// Outlook do not render; null means "show the workspace name instead".
 export function emailPngKey(asset: BrandAsset | null | undefined): string | null {
   if (!asset) {
     return null;
@@ -65,7 +68,7 @@ export function emailPngKey(asset: BrandAsset | null | undefined): string | null
   if (asset.pngKey) {
     return asset.pngKey;
   }
-  return asset.contentType === "image/png" ? asset.key : null;
+  return asset.contentType === "image/png" || asset.contentType === "image/jpeg" ? asset.key : null;
 }
 
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
