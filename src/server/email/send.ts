@@ -1,4 +1,5 @@
 import { APP_NAME } from "../../lib/brand";
+import { sanitizeSubject } from "./escape";
 
 // Email driver: Cloudflare Email Service send binding (wrangler.jsonc
 // "send_email", bound as EMAIL). All app email goes through sendEmail so the
@@ -6,9 +7,8 @@ import { APP_NAME } from "../../lib/brand";
 // really deliver, so the recipient, subject, and first link are logged and
 // flows like magic-link sign-in stay testable from the dev server log.
 
-// Default sender for app email until per-workspace senders arrive. The
-// impactrentals.store domain MUST be onboarded in Cloudflare Email Service
-// (Workers Paid) before production email can send from it.
+// The platform sender (hub mail, and workspace mail until the workspace's
+// own sender is verified). orderingdesk.com is onboarded for Email Sending.
 export const DEFAULT_FROM = `${APP_NAME} <orders@orderingdesk.com>`;
 
 // The sender actually used: EMAIL_FROM (wrangler.jsonc vars) when set, else
@@ -18,19 +18,95 @@ export function defaultFrom(env: CloudflareEnv): string {
   return env.EMAIL_FROM || DEFAULT_FROM;
 }
 
+// A structured sender: the binding builds (and encodes) the header from it.
+export type EmailSender = { name: string; email: string };
+
 export interface SendEmailOptions {
-  from: string;
+  // "Display Name <addr>", a bare address, or a structured sender.
+  from: string | EmailSender;
   to: string[];
   subject: string;
   html: string;
+  // The plain-text alternative (renderEmail returns one with the HTML).
+  text?: string;
   cc?: string[];
   replyTo?: string;
   attachments?: { filename: string; content: string }[];
 }
 
+// The workspace fields that decide who its mail comes from. replyTo is the
+// workspace setting (workspace_settings.reply_to).
+export type SenderWorkspace = {
+  name: string;
+  customDomain: string | null;
+  customDomainStatus: "pending" | "active" | "error" | null;
+  sendingAddress: string | null;
+  sendingVerifiedAt: number | null;
+  replyTo: string | null;
+};
+
+// The workspace's own sending address, verified or not: the override a
+// platform admin set (sending_address), else accounts@<custom domain> once
+// that domain is active (IMPACT: accounts@orders.impactrentals.store). null
+// when there is neither.
+export function workspaceSenderAddress(
+  workspace: SenderWorkspace,
+): { address: string; source: "override" | "domain" } | null {
+  if (workspace.sendingAddress) {
+    return { address: workspace.sendingAddress, source: "override" };
+  }
+  if (workspace.customDomain && workspace.customDomainStatus === "active") {
+    return { address: `accounts@${workspace.customDomain}`, source: "domain" };
+  }
+  return null;
+}
+
+// A display name that can never break or extend the From header: control
+// characters, quotes, angle brackets and backslashes removed, whitespace
+// collapsed, at most 78 characters.
+export function senderDisplayName(name: string): string {
+  const safe = sanitizeSubject(name.replace(/["<>\\]/g, "")).slice(0, 78).trim();
+  return safe.length > 0 ? safe : APP_NAME;
+}
+
+// The platform address alone (orders@orderingdesk.com), from EMAIL_FROM or
+// DEFAULT_FROM.
+function platformAddress(env: CloudflareEnv): string {
+  const parsed = parseAddress(defaultFrom(env));
+  return typeof parsed === "string" ? parsed.trim() : parsed.email;
+}
+
+// Who an email comes from (platform amendment section 5). EVERY email takes
+// its sender from here:
+// - null (hub mail: sign-in on orderingdesk.com, platform admin invites):
+//   the platform sender;
+// - a workspace whose own address (workspaceSenderAddress) is verified
+//   (sending_verified_at, cleared whenever the address or the custom domain
+//   changes): that address, with the workspace name as display name;
+// - any other workspace: the platform address with the workspace name as
+//   display name.
+// Workspace mail carries the workspace reply-to when one is set.
+export function senderFor(
+  env: CloudflareEnv,
+  workspace: SenderWorkspace | null,
+): { from: string | EmailSender; replyTo?: string } {
+  if (!workspace) {
+    return { from: defaultFrom(env) };
+  }
+  const own = workspaceSenderAddress(workspace);
+  const email = own && workspace.sendingVerifiedAt !== null ? own.address : platformAddress(env);
+  return {
+    from: { name: senderDisplayName(workspace.name), email },
+    ...(workspace.replyTo ? { replyTo: workspace.replyTo } : {}),
+  };
+}
+
+// The first link's address (an image URL is not what the dev log is for),
+// entity-decoded so it can be pasted into a browser.
 function firstUrlIn(html: string): string | undefined {
-  const match = html.match(/https?:\/\/[^\s"'<>]+/);
-  return match ? match[0] : undefined;
+  const link = html.match(/href="(https?:\/\/[^"]+)"/);
+  const match = link ? link[1] : html.match(/https?:\/\/[^\s"'<>]+/)?.[0];
+  return match?.replace(/&amp;/g, "&");
 }
 
 // "Display Name <addr>" becomes the structured EmailAddress the binding
@@ -89,10 +165,11 @@ export async function sendEmail(
     throw new Error("Email sending is not configured (EMAIL binding missing)");
   }
   const message: EmailMessageBuilder = {
-    from: parseAddress(opts.from),
+    from: typeof opts.from === "string" ? parseAddress(opts.from) : opts.from,
     to: opts.to,
     subject: opts.subject,
     html: opts.html,
+    ...(opts.text !== undefined ? { text: opts.text } : {}),
     ...(opts.cc ? { cc: opts.cc } : {}),
     ...(opts.replyTo ? { replyTo: opts.replyTo } : {}),
     ...(opts.attachments

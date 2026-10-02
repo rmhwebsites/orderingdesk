@@ -1,23 +1,37 @@
 import { APP_NAME } from "../../lib/brand";
-import { escapeHtml } from "./escape";
-import { defaultFrom, sendEmail } from "./send";
+import { appOrigin } from "../host";
+import { sanitizeSubject } from "./escape";
+import { emailParagraph, renderEmail } from "./layout";
+import { sendEmail, senderFor } from "./send";
+import type { MailWorkspace } from "./workspace";
 
+// The sign-in link. Requested on a workspace's client host (workspace set),
+// it comes from that workspace's sender and carries its branding; requested
+// on the hub (workspace null), it is Ordering Desk mail. The link itself
+// already points at the host where sign-in was requested (better-auth runs
+// per host, src/server/auth.ts).
 export async function sendMagicLinkEmail(
   env: CloudflareEnv,
-  email: string,
-  url: string,
+  opts: { to: string; url: string; workspace: MailWorkspace | null },
 ): Promise<void> {
+  const { workspace } = opts;
+  const heading = `Sign in to ${workspace ? `${workspace.name} orders` : APP_NAME}`;
+  const { html, text } = renderEmail({
+    workspace,
+    hubOrigin: appOrigin(env),
+    preheader: "Your sign-in link expires in 5 minutes.",
+    heading,
+    bodyHtml: emailParagraph("Press the button below to sign in. This link expires in 5 minutes."),
+    cta: { label: "Sign in", url: opts.url },
+    footerNote: "If you did not request this email, you can safely ignore it.",
+  });
+  const sender = senderFor(env, workspace);
   await sendEmail(env, {
-    from: defaultFrom(env),
-    to: [email],
-    subject: `Sign in to ${APP_NAME}`,
-    html: [
-      '<div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">',
-      `<h1 style="font-size: 20px; color: #101820;">Sign in to ${escapeHtml(APP_NAME)}</h1>`,
-      '<p style="color: #101820;">Click the button below to sign in. This link expires in 5 minutes.</p>',
-      `<p><a href="${url}" style="display: inline-block; background: #91d500; color: #101820; padding: 12px 20px; border-radius: 8px; text-decoration: none; font-weight: bold;">Sign in</a></p>`,
-      '<p style="color: #6b7280; font-size: 13px;">If you did not request this email, you can safely ignore it.</p>',
-      "</div>",
-    ].join(""),
+    from: sender.from,
+    ...(sender.replyTo ? { replyTo: sender.replyTo } : {}),
+    to: [opts.to],
+    subject: sanitizeSubject(heading),
+    html,
+    text,
   });
 }

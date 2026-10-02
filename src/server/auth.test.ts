@@ -134,6 +134,52 @@ describe("auth per host (baseURL and trusted origin from the routed host)", () =
   });
 });
 
+describe("sign-in email by host (the default deliverer, through the EMAIL binding)", () => {
+  type Mail = { from: unknown; subject: string; html: string; text?: string };
+
+  async function sentFor(host: string, origin: string) {
+    const { db } = openTestDb();
+    await seedWorkspace(db, "ws_impact");
+    await db
+      .update(schema.workspaces)
+      .set({
+        name: "Impact Rentals",
+        customDomain: "orders.impactrentals.store",
+        customDomainStatus: "active",
+        sendingVerifiedAt: 1,
+        branding: {
+          logo: {
+            light: { key: "branding/ws_impact/logo.svg", contentType: "image/svg+xml", pngKey: "branding/ws_impact/logo.png" },
+            dark: null,
+          },
+        },
+      })
+      .where(eq(schema.workspaces.id, "ws_impact"));
+    const email = { send: vi.fn(async (_message: Mail) => ({ messageId: "m1" })) };
+    const env = { ...ENV, EMAIL: email, EMAIL_FROM: "Ordering Desk <orders@orderingdesk.com>" } as unknown as CloudflareEnv;
+    const auth = await authForHost(db, env, host);
+    expect((await requestLink(auth!, "boss@example.com", { origin })).status).toBe(200);
+    expect(email.send).toHaveBeenCalledTimes(1);
+    return email.send.mock.calls[0][0];
+  }
+
+  it("sends a sign-in requested on a client host from, and branded as, that workspace", async () => {
+    const mail = await sentFor("orders.impactrentals.store", CLIENT);
+    expect(mail.from).toEqual({ name: "Impact Rentals", email: "accounts@orders.impactrentals.store" });
+    expect(mail.subject).toBe("Sign in to Impact Rentals orders");
+    expect(mail.html).toContain("https://orderingdesk.test/api/branding/ws_impact/logo.png");
+    expect(mail.text).toContain(`Sign in: ${CLIENT}/api/auth/magic-link/verify?`);
+  });
+
+  it("sends a sign-in requested on the hub from Ordering Desk, in its look", async () => {
+    const mail = await sentFor("orderingdesk.test", BASE);
+    expect(mail.from).toEqual({ name: "Ordering Desk", email: "orders@orderingdesk.com" });
+    expect(mail.subject).toBe("Sign in to Ordering Desk");
+    expect(mail.html).not.toContain("logo.png");
+    expect(mail.text).toContain(`Sign in: ${BASE}/api/auth/magic-link/verify?`);
+  });
+});
+
 describe("magic-link request (closed sign-up, no enumeration)", () => {
   it("answers a stranger exactly like everyone else and sends nothing", async () => {
     const { auth, sent } = await setup();

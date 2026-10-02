@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { roleAtLeast } from "@/lib/roles";
 import { sendWorkspaceInviteEmail } from "@/server/email/invite";
+import { loadMailWorkspace } from "@/server/email/workspace";
 import { guardResponse, requireMember } from "@/server/guard";
 import { inviteMember, listMembers, removeMember } from "@/server/members";
 
@@ -34,9 +35,14 @@ export async function POST(request: Request, context: RouteContext) {
       case "already-member":
         return NextResponse.json({ ok: true, alreadyMember: true });
       case "added":
-      case "invited":
-        await sendWorkspaceInviteEmail(env, result.email, result.workspaceName);
+      case "invited": {
+        // The invite carries the workspace's branding and sender.
+        const workspace = await loadMailWorkspace(db, id);
+        if (workspace) {
+          await sendWorkspaceInviteEmail(env, result.email, workspace);
+        }
         return NextResponse.json({ ok: true }, { status: 201 });
+      }
     }
   } catch (e) {
     return guardResponse(e);

@@ -5,6 +5,7 @@ import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { getDbFromEnv, type Db } from "@/db";
 import { canCreateAccount, hasAccountRoute } from "./access";
 import { sendMagicLinkEmail } from "./email/magic-link";
+import { loadMailWorkspace } from "./email/workspace";
 import { hostOrigin, resolveHost, type HostResolution } from "./host";
 import { claimAccessOnSignIn } from "./invites";
 import { requestHost } from "./request-host";
@@ -110,7 +111,13 @@ export function authForResolution(
   }
   const workspaceId = resolution.kind === "workspace" ? resolution.workspace.id : null;
   const send: MagicLinkDeliverer =
-    deliver ?? ((message) => sendMagicLinkEmail(env, message.email, message.url));
+    deliver ??
+    (async (message) =>
+      sendMagicLinkEmail(env, {
+        to: message.email,
+        url: message.url,
+        workspace: message.workspaceId ? await loadMailWorkspace(db, message.workspaceId) : null,
+      }));
   return createAuth({
     db,
     env,

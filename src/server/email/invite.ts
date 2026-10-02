@@ -1,49 +1,58 @@
 import { APP_NAME } from "../../lib/brand";
+import { appOrigin, workspaceOrigin } from "../host";
 import { escapeHtml, sanitizeSubject } from "./escape";
-import { defaultFrom, sendEmail } from "./send";
-
-function inviteHtml(heading: string, body: string, appUrl: string): string {
-  return [
-    '<div style="font-family: sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">',
-    `<h1 style="font-size: 20px; color: #101820;">${heading}</h1>`,
-    `<p style="color: #101820;">${body}</p>`,
-    `<p><a href="${escapeHtml(appUrl)}" style="display: inline-block; background: #91d500; color: #101820; padding: 12px 20px; border-radius: 8px; text-decoration: none; font-weight: bold;">Open ${escapeHtml(APP_NAME)}</a></p>`,
-    "</div>",
-  ].join("");
-}
+import { emailParagraph, renderEmail } from "./layout";
+import { sendEmail, senderFor } from "./send";
+import type { MailWorkspace } from "./workspace";
 
 // Sent when a manager or platform admin adds someone to a workspace (an
-// existing user, or a pending invite). Workspace names are user input:
-// entity-escaped in the HTML, control-stripped in the subject.
+// existing user, or a pending invite). Always the workspace's branding and
+// sender; the button opens the workspace's client host when it has an
+// active one, else the hub. Workspace names are user input: escaped in the
+// HTML by renderEmail and here, control-stripped in the subject.
 export async function sendWorkspaceInviteEmail(
   env: CloudflareEnv,
   to: string,
-  workspaceName: string,
+  workspace: MailWorkspace,
 ): Promise<void> {
-  const safeName = escapeHtml(workspaceName);
-  await sendEmail(env, {
-    from: defaultFrom(env),
-    to: [to],
-    subject: `You have been added to ${sanitizeSubject(workspaceName)} on ${APP_NAME}`,
-    html: inviteHtml(
-      `You have been added to ${safeName}`,
-      "Sign in with this email address to start managing orders.",
-      env.APP_URL,
+  const { html, text } = renderEmail({
+    workspace,
+    hubOrigin: appOrigin(env),
+    preheader: `You can now manage ${workspace.name} orders.`,
+    heading: `You have been added to ${workspace.name}`,
+    bodyHtml: emailParagraph(
+      `Sign in with this email address to start managing ${escapeHtml(workspace.name)} orders.`,
     ),
+    cta: { label: `Open ${workspace.name} orders`, url: `${workspaceOrigin(env, workspace)}/` },
+  });
+  const sender = senderFor(env, workspace);
+  await sendEmail(env, {
+    from: sender.from,
+    ...(sender.replyTo ? { replyTo: sender.replyTo } : {}),
+    to: [to],
+    subject: sanitizeSubject(`You have been added to ${workspace.name} orders`),
+    html,
+    text,
   });
 }
 
 // Sent when a platform admin promotes someone (an existing user, or a
-// pending platform-admin invite).
+// pending platform-admin invite). Hub mail: the Ordering Desk look and
+// sender.
 export async function sendPlatformAdminInviteEmail(env: CloudflareEnv, to: string): Promise<void> {
+  const { html, text } = renderEmail({
+    workspace: null,
+    hubOrigin: appOrigin(env),
+    preheader: `You can now manage every workspace on ${APP_NAME}.`,
+    heading: `You are now a platform admin on ${APP_NAME}`,
+    bodyHtml: emailParagraph("Sign in with this email address to manage every workspace."),
+    cta: { label: `Open ${APP_NAME}`, url: `${appOrigin(env)}/` },
+  });
   await sendEmail(env, {
-    from: defaultFrom(env),
+    from: senderFor(env, null).from,
     to: [to],
     subject: `You are now a platform admin on ${APP_NAME}`,
-    html: inviteHtml(
-      `You are now a platform admin on ${escapeHtml(APP_NAME)}`,
-      "Sign in with this email address to manage every workspace.",
-      env.APP_URL,
-    ),
+    html,
+    text,
   });
 }
