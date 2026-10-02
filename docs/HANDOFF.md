@@ -556,3 +556,154 @@ Once connected:
   the cron may never re-read that order and only the fulfillments/update
   webhook carries it (Shopify retries a failed delivery for 48 hours; not
   verified live).
+
+## Attaching a client host
+
+Written for Ryan. A client host is the address a client's team uses,
+orders.<client domain> (IMPACT: orders.impactrentals.store). It opens that
+workspace directly, with its logo on the sign-in page, and people sign in
+there separately from orderingdesk.com (each address keeps its own sign-in).
+Until a platform admin checks it in Ordering Desk, the address shows only a
+plain "Not found" page.
+
+On the Cloudflare side, one of these two:
+
+A. The client's domain is in your Cloudflare account (impactrentals.store
+   is): attach the host to the orderingdesk Worker as a custom domain.
+   - Preferred: add `{ "pattern": "orders.impactrentals.store",
+     "custom_domain": true }` to the routes list in wrangler.jsonc, commit,
+     and deploy (Workers Builds on main, or `npm run deploy`). Deploys apply
+     the routes in wrangler.jsonc, so a domain listed there survives them.
+   - Or in the dashboard: Workers & Pages > orderingdesk > Settings >
+     Domains & Routes > Add > Custom domain. A domain added only there may
+     be dropped by a later deploy, so add it to wrangler.jsonc as well.
+   Either way Cloudflare creates the DNS record and the certificate. The
+   name must not already have a DNS record (delete an old one first).
+
+B. The client's domain is somewhere else: Cloudflare for SaaS on the
+   orderingdesk.com zone.
+   1. orderingdesk.com > SSL/TLS > Custom Hostnames: enable it (once).
+   2. Add a proxied DNS record on orderingdesk.com to serve as the fallback
+      origin, for example customers.orderingdesk.com (AAAA 100::, proxied),
+      and set it as the fallback origin (once).
+   3. Send custom hostnames to the Worker: a Worker route `*/*` on the
+      orderingdesk.com zone for the orderingdesk Worker (in wrangler.jsonc:
+      `{ "pattern": "*/*", "zone_name": "orderingdesk.com" }`), once.
+   4. Custom Hostnames > Add custom hostname: orders.<client domain>.
+   5. The client adds, at their DNS host, a CNAME from orders.<client
+      domain> to customers.orderingdesk.com, plus the validation TXT record
+      Cloudflare shows. Wait until the hostname shows Active.
+
+Then in Ordering Desk (platform admins only), save and check the host. Until
+the settings screen ships, from a signed-in orderingdesk.com tab (browser
+console; the workspace id comes from GET /api/workspaces):
+
+    await fetch("/api/workspaces/<workspace id>/domain", { method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ domain: "orders.impactrentals.store" }) }).then((r) => r.json())
+    await fetch("/api/workspaces/<workspace id>/domain/check", { method: "POST" }).then((r) => r.json())
+
+The check loads https://<host>/api/health and needs that page to report the
+same host. "active" means the host now opens the workspace; "error" comes
+with a reason saying what to fix (attach it, wait for DNS, remove a
+redirect), then check again. DELETE on the same address removes the host.
+
+## Sending email for a client
+
+Written for Ryan. The client's email (sign-in on their host, team invites,
+and later order notifications and purchase orders) carries their logo and
+colors, and comes from accounts@orders.<client domain> (IMPACT:
+accounts@orders.impactrentals.store) once that address is verified. Until
+then it comes from orders@orderingdesk.com with the client's name as the
+sender name and their reply-to address.
+
+1. Attach the client host first and check it (above): the address is
+   derived from the active host.
+2. In Cloudflare: Compute > Email Service > Email Sending, onboard
+   orders.<client domain>. Cloudflare treats it as its own sending domain.
+   Choose Email Sending only, never Email Routing (the client's own inbox
+   is untouched; IMPACT's mail stays on Namecheap Private Email). This is
+   possible only when the client's zone is in your Cloudflare account,
+   because Cloudflare adds the sending records there.
+3. Press Verify in the workspace's Settings (until the settings screen
+   ships: POST /api/workspaces/<workspace id>/sender/verify from a signed-in
+   orderingdesk.com tab). A test email arrives at your address from
+   accounts@orders.<client domain>; from then on the client's email comes
+   from it. If Verify answers "Onboard <domain> under Compute > Email
+   Service > Email Sending ...", step 2 is not finished yet: finish it,
+   wait a few minutes, and press Verify again.
+
+Changing the client host or the sending address undoes the verification:
+press Verify again afterwards. To send from another address than
+accounts@..., set it first (PUT /api/workspaces/<workspace id>/sender with
+{"address": "hello@client.example"}, or null to go back) and onboard its
+domain. A client whose domain is not in your account (Cloudflare for SaaS)
+keeps sending from orders@orderingdesk.com with their name, unless you set
+an address on a domain you have onboarded.
+
+## STATE UPDATE, 2026-10-02 platform phase domains stage (supersedes above)
+
+- Branch build/m1-core: 7b53019 (client hosts, per-host sign-in), 4f879e9
+  (custom domain management), 9b27755 (branded email and per-workspace
+  sender), plus this docs commit. Not pushed, not deployed. No new
+  migration: every column used comes from 0004, which is still the one to
+  apply remotely before deploying (`npm run db:migrate:remote`).
+- Hosts (src/server/host.ts): resolveHost answers hub (APP_URL host),
+  workspace (custom_domain equal to the host, status active) or unknown.
+  custom-worker.ts gates every request with it before OpenNext: unknown
+  hosts get a plain 404 except /api/health. It also pins x-forwarded-host to
+  the routed host, because OpenNext copies that header over Host (a client
+  could otherwise choose the host the app believes it is on). Next code
+  reads the host through requestHost() (src/server/request-host.ts).
+- Auth per host (src/server/auth.ts): getAuth() builds better-auth with
+  baseURL and the only trusted origin set to the hub origin or the client
+  origin (stored domain with the APP_URL scheme and port), or returns null
+  for a refused host (the auth route and the guards answer 404). The guards
+  scope a client host to its own workspace for everyone (assertHostAllows).
+- Client host pages: "/" is the workspace desk in WorkspaceShell
+  (src/components/shell/workspace-shell.tsx); /w/<own slug> redirects to
+  "/" there and other slugs are not found; the sign-in page is branded
+  (src/server/client-host.ts). WorkspaceIdentity.basePath is "" on a client
+  host and /w/<slug> on the hub: build workspace links with it.
+- Email: senderFor (src/server/email/send.ts) decides every sender;
+  renderEmail (src/server/email/layout.ts) is the one layout;
+  loadMailWorkspace (src/server/email/workspace.ts) reads what both need.
+- For the settings stage:
+  - Build GET /api/branding/<workspaceId>/<file> (public, no session: mail
+    clients load logos from it). <file> is the last segment of the asset's
+    R2 key (brandAssetPath in src/lib/branding.ts), so keep those segments
+    unique within a workspace. The client host sign-in page and the emails
+    already reference it.
+  - Validate branding.fonts against BRAND_FONTS (src/lib/brand-fonts.ts);
+    extend that list rather than keeping a second one.
+  - On a client host the workspace lives at "/": a settings page there
+    needs a root-level route (for example /settings) using the same guards,
+    and links must use basePath. Today /w/<own slug>/anything on a client
+    host redirects to "/".
+  - Screens for the domain (PUT, check, DELETE) and sender (PUT, verify)
+    routes. The check's reason is returned, not stored (no column), so show
+    it from the response.
+- Not verified live: Cloudflare for SaaS routing to the Worker, the health
+  check fetching the Worker's own custom domain (global_fetch_strictly_public
+  is on), the Email binding's text field and its encoding of a non-ASCII
+  display name, and the exact wording of Cloudflare's sending refusals (the
+  two phrases matched come from earlier production errors).
+- Known limits:
+  - Workers Builds preview URLs are unknown hosts now: every path except
+    /api/health answers 404 there. Allow-list a preview host pattern in
+    resolveHost if previews are wanted (they share the production D1).
+  - `next dev` does not run custom-worker.ts, so an unknown host gets the
+    app's not-found page there instead of the plain 404. To try a client
+    host locally, set a workspace's custom_domain to something like
+    impact.localhost with status active in the local D1 and open
+    http://impact.localhost:3000.
+  - Local dev logs email instead of sending, so Verify there records a
+    verification without a real send.
+  - A verified sender that Cloudflare later refuses (domain offboarded)
+    makes those sends fail; there is no automatic fallback. Verify again or
+    clear the override.
+  - The sender name is the workspace name; workspace_settings.from_name is
+    not used for it.
+  - The hub still sends a single-workspace client to /w/<slug> on
+    orderingdesk.com, not to their client host.
+  - Shopify webhooks stay on APP_URL (the hub).
