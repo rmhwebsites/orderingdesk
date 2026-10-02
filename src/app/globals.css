@@ -204,6 +204,29 @@
   }
 }
 
+/*
+ * A workspace logo with a dark-mode version: both images are rendered, and
+ * the theme shows one (same selectors as the theme tokens above). A logo
+ * without a dark version is a plain image and always shows.
+ */
+.od-logo-dark {
+  display: none;
+}
+:root[data-theme="dark"] .od-logo-light {
+  display: none;
+}
+:root[data-theme="dark"] .od-logo-dark {
+  display: block;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"] .od-logo-light {
+    display: none;
+  }
+  :root[data-theme="system"] .od-logo-dark {
+    display: block;
+  }
+}
+
 /* Status tones: data-tone="<color name>" picks a fill and its text color.
    Unknown names fall back to slate. */
 [data-tone] {

@@ -91,9 +91,11 @@ export function TopBar({ name, logoUrl }: { name: string; logoUrl: string | null
     // (z-50) sit above it.
     <header className="sticky top-0 z-30 border-b border-line bg-surface">
       <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5 sm:flex-nowrap sm:px-6">
+        {/* On a client host "/" is this workspace itself; on the hub it
+            is the workspace list. */}
         <Link
           href="/"
-          title="All workspaces"
+          title={workspace.basePath === "" ? "Orders" : "All workspaces"}
           className="order-1 -m-1 flex min-w-0 flex-1 items-center gap-3 rounded-full p-1 sm:flex-none"
         >
           <WorkspaceBrandSlot name={name} logoUrl={logoUrl} />
@@ -116,7 +118,7 @@ export function TopBar({ name, logoUrl }: { name: string; logoUrl: string | null
               STAGE: restore it through SETTINGS_PAGE_AVAILABLE in
               src/lib/features.ts. */}
           {SETTINGS_PAGE_AVAILABLE ? (
-            <Link href={`/w/${workspace.slug}/settings`} className={`${ui.buttonQuiet} h-10`}>
+            <Link href={`${workspace.basePath}/settings`} className={`${ui.buttonQuiet} h-10`}>
               <GearSixIcon size={18} aria-hidden />
               <span className="sr-only sm:not-sr-only">Settings</span>
             </Link>

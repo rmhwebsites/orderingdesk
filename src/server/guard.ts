@@ -8,6 +8,8 @@ import { orders, workspaceMembers, workspaces } from "@/db/schema";
 import { roleAtLeast, type Role } from "@/lib/roles";
 import { isPlatformAdmin } from "./access";
 import { getAuth } from "./auth";
+import type { HostResolution } from "./host";
+import { requestHost } from "./request-host";
 
 export { roleAtLeast, type Role };
 
@@ -27,9 +29,17 @@ export type Viewer = { userId: string; email: string; platformAdmin: boolean };
 
 const notFound = () => new AuthError(404, "Not found");
 
-// Session guard. 401 without a session. Every other guard builds on it.
+// Session guard. 404 on a refused host (unknown, or a client domain that is
+// not active; custom-worker.ts already answers those, this covers next dev),
+// then 401 without a session. Every other guard builds on it. host is what
+// the routed host resolved to (src/server/host.ts).
 export async function requireSession() {
-  const session = await getAuth().api.getSession({ headers: await headers() });
+  const host = await requestHost();
+  const auth = await getAuth(host);
+  if (!auth) {
+    throw notFound();
+  }
+  const session = await auth.api.getSession({ headers: await headers() });
   if (!session) {
     throw new AuthError(401, "Not signed in");
   }
@@ -40,7 +50,16 @@ export async function requireSession() {
     email: session.user.email,
     platformAdmin: await isPlatformAdmin(db, env, session.user.id, session.user.email),
   };
-  return { ...viewer, viewer, db, session, env };
+  return { ...viewer, viewer, db, session, env, host };
+}
+
+// A client host exposes its own workspace and nothing else, to everyone
+// (platform admins included): any other workspace is a 404 there, exactly
+// like a missing one. The hub is unscoped.
+export function assertHostAllows(host: HostResolution, workspaceId: string): void {
+  if (host.kind === "unknown" || (host.kind === "workspace" && host.workspace.id !== workspaceId)) {
+    throw notFound();
+  }
 }
 
 // 404 (never 403) for anyone who is not a platform admin, so platform-only
@@ -98,10 +117,11 @@ export async function resolveWorkspaceRole(
   return membership.role;
 }
 
-// Guard for workspace-scoped routes: 401 without a session, then
-// resolveWorkspaceRole.
+// Guard for workspace-scoped routes: 401 without a session, the host scope
+// (assertHostAllows), then resolveWorkspaceRole.
 export async function requireMember(workspaceId: string, required: Role) {
   const guarded = await requireSession();
+  assertHostAllows(guarded.host, workspaceId);
   const role = await resolveWorkspaceRole(guarded.db, guarded.viewer, workspaceId, required);
   return { ...guarded, role };
 }
@@ -131,10 +151,11 @@ export async function resolveOrderAccess(
 }
 
 // Guard for order-scoped routes (/api/orders/[orderId]/...): 401 without a
-// session first, then resolveOrderAccess.
+// session first, then resolveOrderAccess and the host scope.
 export async function requireMemberByOrder(orderId: string, required: Role) {
   const guarded = await requireSession();
   const { role, workspaceId } = await resolveOrderAccess(guarded.db, orderId, guarded.viewer, required);
+  assertHostAllows(guarded.host, workspaceId);
   return { ...guarded, role, workspaceId };
 }
 
@@ -151,6 +172,7 @@ export const requireMemberBySlug = cache(async (slug: string, required: Role) =>
   if (!workspace) {
     throw notFound();
   }
+  assertHostAllows(guarded.host, workspace.id);
   const role = await resolveWorkspaceRole(guarded.db, guarded.viewer, workspace.id, required, true);
   return { ...guarded, workspace, role };
 });

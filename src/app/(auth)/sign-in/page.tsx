@@ -1,74 +1,80 @@
-"use client";
-
-import { useState } from "react";
-import { authClient } from "@/lib/auth-client";
+import type { Metadata } from "next";
+import { notFound } from "next/navigation";
+import { accentStyle } from "@/lib/accent";
 import { APP_NAME } from "@/lib/brand";
-import { ui } from "@/components/ui";
+import { signInView } from "@/server/client-host";
+import { requestHost } from "@/server/request-host";
+import { SignInForm } from "./sign-in-form";
 
-export default function SignInPage() {
-  const [email, setEmail] = useState("");
-  const [phase, setPhase] = useState<"idle" | "sending" | "sent" | "error">("idle");
-  const [errorMessage, setErrorMessage] = useState("");
+// Reads the request host, so it is rendered per request.
+export const dynamic = "force-dynamic";
 
-  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (phase === "sending") {
-      return;
-    }
-    setPhase("sending");
-    setErrorMessage("");
-    const { error } = await authClient.signIn.magicLink({
-      email,
-      callbackURL: "/",
-    });
-    if (error) {
-      setPhase("error");
-      setErrorMessage(error.message ?? "Could not send the sign-in link.");
-    } else {
-      setPhase("sent");
-    }
+export async function generateMetadata(): Promise<Metadata> {
+  const view = signInView(await requestHost());
+  return view.kind === "workspace" ? { title: { absolute: view.heading } } : { title: "Sign in" };
+}
+
+// The hub keeps the Ordering Desk sign-in. A workspace's client host shows
+// the workspace's logo and name and "Sign in to <workspace name> orders",
+// with its primary color on the button (src/server/client-host.ts). An
+// unknown host shows nothing.
+export default async function SignInPage() {
+  const view = signInView(await requestHost());
+  if (view.kind === "not-found") {
+    notFound();
+  }
+
+  if (view.kind === "hub") {
+    return (
+      <main className="mx-auto flex min-h-dvh max-w-sm flex-col justify-center gap-6 px-4 sm:px-6">
+        <div>
+          <h1 className="font-display text-2xl font-semibold tracking-tight">{APP_NAME}</h1>
+          <p className="mt-1 text-sm text-ink-2">Sign in with your email address.</p>
+        </div>
+        <SignInForm />
+      </main>
+    );
   }
 
   return (
-    <main className="mx-auto flex min-h-dvh max-w-sm flex-col justify-center gap-6 px-4 sm:px-6">
-      <div>
-        <h1 className="font-display text-2xl font-semibold tracking-tight">{APP_NAME}</h1>
-        <p className="mt-1 text-sm text-ink-2">Sign in with your email address.</p>
-      </div>
-      {phase === "sent" ? (
-        <div className={`${ui.panel} p-4`} role="status">
-          <p className="font-medium">Check your email</p>
-          <p className="mt-1 text-sm text-ink-2">
-            We sent a sign-in link to {email}. It expires in 5 minutes.
-          </p>
+    <main
+      data-accent-scope
+      style={accentStyle(view.accent)}
+      className="mx-auto flex min-h-dvh max-w-sm flex-col justify-center gap-6 px-4 sm:px-6"
+    >
+      <div className="flex flex-col gap-4">
+        {view.logo ? (
+          // Uploaded branding files are served by /api/branding (plain img:
+          // an SVG logo must not go through the image optimizer).
+          <span className="block">
+            <img
+              src={view.logo.light}
+              alt={view.name}
+              className={`h-10 w-auto max-w-[240px] object-contain object-left ${view.logo.dark ? "od-logo-light" : ""}`}
+            />
+            {view.logo.dark ? (
+              <img
+                src={view.logo.dark}
+                alt={view.name}
+                className="od-logo-dark h-10 w-auto max-w-[240px] object-contain object-left"
+              />
+            ) : null}
+          </span>
+        ) : (
+          <span
+            aria-hidden
+            className="grid size-10 place-items-center rounded-full bg-accent font-display text-base font-semibold text-accent-ink"
+          >
+            {view.name.trim().charAt(0).toUpperCase() || "W"}
+          </span>
+        )}
+        <div>
+          <p className="text-sm font-medium text-ink-2">{view.name}</p>
+          <h1 className="mt-1 font-display text-2xl font-semibold tracking-tight">{view.heading}</h1>
+          <p className="mt-1 text-sm text-ink-2">Sign in with your email address.</p>
         </div>
-      ) : (
-        <form onSubmit={handleSubmit} className="flex flex-col gap-2">
-          <label className={ui.label} htmlFor="email">
-            Email
-          </label>
-          <input
-            id="email"
-            type="email"
-            required
-            autoComplete="email"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            placeholder="you@company.com"
-            aria-invalid={phase === "error" ? true : undefined}
-            aria-describedby={phase === "error" ? "sign-in-error" : undefined}
-            className={ui.input}
-          />
-          <button type="submit" disabled={phase === "sending"} className={`${ui.buttonPrimary} mt-2`}>
-            {phase === "sending" ? "Sending" : "Send sign-in link"}
-          </button>
-          {phase === "error" ? (
-            <p id="sign-in-error" className={ui.errorText}>
-              {errorMessage}
-            </p>
-          ) : null}
-        </form>
-      )}
+      </div>
+      <SignInForm />
     </main>
   );
 }

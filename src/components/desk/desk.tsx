@@ -460,7 +460,7 @@ export function Desk() {
 
       {load.status === "ready" ? (
         total === 0 && desk.orders.length === 0 ? (
-          <EmptyDesk slug={workspace.slug} />
+          <EmptyDesk basePath={workspace.basePath} />
         ) : (
           <>
             <StatusStrip

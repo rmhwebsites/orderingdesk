@@ -1,11 +1,16 @@
+import type { Metadata } from "next";
 import Link from "next/link";
-import { redirect } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { accentStyle } from "@/lib/accent";
 import { APP_NAME } from "@/lib/brand";
 import { roleLabel } from "@/lib/roles";
-import { AuthError, requireSession } from "@/server/guard";
+import { AuthError, requireMemberBySlug, requireSession } from "@/server/guard";
+import type { HostWorkspace } from "@/server/host";
 import { hubView } from "@/server/hub";
+import { requestHost } from "@/server/request-host";
 import { listWorkspacesForViewer } from "@/server/workspaces";
+import { Desk } from "@/components/desk/desk";
+import { WorkspaceShell } from "@/components/shell/workspace-shell";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { ui } from "@/components/ui";
 import { NewWorkspaceForm } from "./new-workspace-form";
@@ -15,6 +20,39 @@ import { SignOutButton } from "./sign-out-button";
 // and getAuth() refuses to run without a deployed APP_URL.
 export const dynamic = "force-dynamic";
 
+export async function generateMetadata(): Promise<Metadata> {
+  const host = await requestHost();
+  return host.kind === "workspace" ? { title: { absolute: `${host.workspace.name} orders` } } : {};
+}
+
+// "/" on a workspace's own client host is that workspace's desk, behind the
+// same guards as /w/[slug]: signed out goes to this host's sign-in page; a
+// signed-in person who is neither a member nor a platform admin gets the
+// not-found page.
+async function clientHostDesk(workspace: HostWorkspace) {
+  let guarded: Awaited<ReturnType<typeof requireMemberBySlug>>;
+  try {
+    guarded = await requireMemberBySlug(workspace.slug, "staff");
+  } catch (e) {
+    if (e instanceof AuthError) {
+      if (e.status === 401) {
+        redirect("/sign-in");
+      }
+      notFound();
+    }
+    throw e;
+  }
+  return (
+    <WorkspaceShell workspace={guarded.workspace} role={guarded.role} userId={guarded.userId} clientHost>
+      <Desk />
+    </WorkspaceShell>
+  );
+}
+
+// By host (src/server/host.ts): a client host shows its workspace's desk; an
+// unknown host shows nothing (custom-worker.ts answers those before Next in
+// production); the hub shows the workspace list.
+//
 // The hub. What it shows depends on the viewer (src/server/hub.ts): a
 // platform admin sees every workspace and the New workspace form; a client
 // with one workspace goes straight into it (the magic link lands here, so
@@ -22,6 +60,13 @@ export const dynamic = "force-dynamic";
 // sees only those; a client with none is told so. Clients never see the
 // create form.
 export default async function Home() {
+  const host = await requestHost();
+  if (host.kind === "workspace") {
+    return clientHostDesk(host.workspace);
+  }
+  if (host.kind === "unknown") {
+    notFound();
+  }
   let guarded: Awaited<ReturnType<typeof requireSession>>;
   try {
     guarded = await requireSession();

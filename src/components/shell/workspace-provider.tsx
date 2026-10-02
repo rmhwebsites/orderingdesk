@@ -14,7 +14,10 @@ import { useToast } from "@/components/toasts";
 // bus that carries live events (socket or this tab's own sync) and resync
 // requests (after a reconnect, on each poll while offline).
 
-export type WorkspaceIdentity = { id: string; slug: string; name: string };
+// basePath: where this workspace's pages live on the current host. "/w/<slug>"
+// on the hub; "" on the workspace's own client host, which serves it at its
+// root (src/server/host.ts). Build workspace links as `${basePath}/...`.
+export type WorkspaceIdentity = { id: string; slug: string; name: string; basePath: string };
 
 export type BusMessage = { type: "event"; event: LiveEvent } | { type: "resync" };
 

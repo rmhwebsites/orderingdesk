@@ -44,3 +44,35 @@ export type WorkspaceBranding = {
   fonts?: { heading: string; body: string } | null;
   radius?: BrandRadius | null;
 };
+
+// Where an uploaded branding file is served: /api/branding/<workspaceId>/<file>,
+// where <file> is the last segment of the asset's R2 key. The settings stage
+// builds that route and the uploads, so it must store keys whose last
+// segment is unique within the workspace. Emails prefix the hub origin
+// (https://orderingdesk.com) because mail clients need an absolute URL.
+export function brandAssetPath(workspaceId: string, key: string): string {
+  const file = key.split("/").pop() ?? key;
+  return `/api/branding/${encodeURIComponent(workspaceId)}/${encodeURIComponent(file)}`;
+}
+
+// The key an email may show for an asset: its PNG copy, or the key itself
+// when the upload is a PNG. Never an SVG, which Gmail and Outlook do not
+// render; null means "show the workspace name instead".
+export function emailPngKey(asset: BrandAsset | null | undefined): string | null {
+  if (!asset) {
+    return null;
+  }
+  if (asset.pngKey) {
+    return asset.pngKey;
+  }
+  return asset.contentType === "image/png" ? asset.key : null;
+}
+
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+
+// A stored color as #rrggbb (lowercased), or null when it is anything else.
+// Readers check again although the settings stage validates on save,
+// because these values reach CSS and email markup.
+export function brandHex(value: unknown): string | null {
+  return typeof value === "string" && HEX_COLOR.test(value) ? value.toLowerCase() : null;
+}

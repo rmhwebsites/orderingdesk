@@ -5,15 +5,19 @@ import { openTestDb, seedMember, seedUser, seedWorkspace } from "@/server/desk/t
 
 // The route handlers run for real against an in-memory database; only the
 // request context is stood in: the session (better-auth), the request
-// headers and the Cloudflare env (PLATFORM_ADMIN_EMAILS).
+// headers (the routed hub host) and the Cloudflare env (APP_URL,
+// PLATFORM_ADMIN_EMAILS).
 const state: { db: Db | null; session: { user: { id: string; email: string } } | null } = {
   db: null,
   session: null,
 };
 
-vi.mock("next/headers", () => ({ headers: async () => new Headers() }));
+vi.mock("next/headers", () => ({ headers: async () => new Headers({ host: "orderingdesk.com" }) }));
 vi.mock("@opennextjs/cloudflare", () => ({
-  getCloudflareContext: () => ({ env: { PLATFORM_ADMIN_EMAILS: "boss@example.com" }, ctx: {} }),
+  getCloudflareContext: () => ({
+    env: { APP_URL: "https://orderingdesk.com", PLATFORM_ADMIN_EMAILS: "boss@example.com" },
+    ctx: {},
+  }),
 }));
 vi.mock("@/server/auth", () => ({
   getAuth: () => ({ api: { getSession: async () => state.session } }),

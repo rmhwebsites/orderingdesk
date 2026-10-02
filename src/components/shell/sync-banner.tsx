@@ -43,7 +43,7 @@ export function SyncBanner() {
         {/* The store connection is a platform-admin setting. */}
         {SETTINGS_PAGE_AVAILABLE && roleAtLeast(role, "platform") ? (
           <Link
-            href={`/w/${workspace.slug}/settings`}
+            href={`${workspace.basePath}/settings`}
             className="shrink-0 font-semibold underline decoration-1 underline-offset-2 hover:decoration-2"
           >
             Check the store connection

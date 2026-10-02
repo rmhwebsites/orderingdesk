@@ -21,14 +21,14 @@ function Frame({ icon, title, children }: { icon: React.ReactNode; title: string
 // The Settings link stays hidden until the settings page exists (see
 // SETTINGS_PAGE_AVAILABLE); the settings stage restores it, for platform
 // admins only, since connecting the store is theirs.
-export function EmptyDesk({ slug }: { slug: string }) {
+export function EmptyDesk({ basePath }: { basePath: string }) {
   return (
     <Frame icon={<StorefrontIcon size={24} aria-hidden />} title="No orders yet">
       <p className="max-w-[46ch] text-sm text-ink-2">
         Orders appear here once the Shopify store is connected. After that, press Sync or wait for the next automatic sync.
       </p>
       {SETTINGS_PAGE_AVAILABLE ? (
-        <Link href={`/w/${slug}/settings`} className={`${ui.buttonSecondary} mt-1`}>
+        <Link href={`${basePath}/settings`} className={`${ui.buttonSecondary} mt-1`}>
           Open Settings
         </Link>
       ) : null}
