@@ -306,8 +306,8 @@ describe("selectOrders", () => {
 
 describe("statusChips", () => {
   const statuses: StatusView[] = [
-    { key: "new", label: "New", color: "lime", sort: 0, triggersPo: false },
-    { key: "shipped", label: "Shipped", color: "violet", sort: 1, triggersPo: false },
+    { key: "new", label: "New", color: "lime", sort: 0, triggersPo: false, shopifyLink: null },
+    { key: "shipped", label: "Shipped", color: "violet", sort: 1, triggersPo: false, shopifyLink: "fulfilled" },
   ];
 
   it("lists every status in order, then unknown keys that still have orders", () => {

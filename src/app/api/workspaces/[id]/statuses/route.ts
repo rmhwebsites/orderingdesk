@@ -4,10 +4,13 @@ import { guardResponse, requireMember } from "@/server/guard";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
-// Body: the full ordered list [{key?, label, color, triggersPo}]. 200
-// {statuses}; 400 {error}; 409 {error, inUse: [{key, label, count}]} when a
-// removed status still has orders (nothing changes). The first status in the
-// list is the default for newly synced orders.
+// Managers and platform admins. Body: the full ordered list [{key?, label,
+// color, triggersPo, shopifyLink?: fulfilled | delivered | null}] (an
+// existing status without shopifyLink keeps its link; at most one status
+// per Shopify state). 200 {statuses}; 400 {error}; 409 {error, inUse:
+// [{key, label, count}]} when a removed status still has orders (nothing
+// changes). The first status in the list is the default for newly synced
+// orders.
 export async function PUT(request: Request, context: RouteContext) {
   try {
     const { id } = await context.params;

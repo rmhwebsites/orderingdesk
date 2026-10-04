@@ -116,7 +116,9 @@ export async function inviteMember(
   return { kind: "invited", email, workspaceName };
 }
 
-export type RemoveMemberResult = { kind: "invalid"; error: string } | { kind: "removed" };
+// userId: the member removed (their open sockets get closed), or null
+// when a pending invite was withdrawn.
+export type RemoveMemberResult = { kind: "invalid"; error: string } | { kind: "removed"; userId: string | null };
 
 const SHOPIFY_MEMBER =
   "This person has access through a Shopify customer tag. Remove the tag from their customer in Shopify to remove their access.";
@@ -150,15 +152,55 @@ export async function removeMember(
       return { kind: "invalid", error: SHOPIFY_MEMBER };
     }
     await db.delete(workspaceMembers).where(eq(workspaceMembers.id, target.id));
-    return { kind: "removed" };
+    return { kind: "removed", userId: targetUserId };
   }
 
   if (targetEmail.length > 0) {
     await db
       .delete(pendingInvites)
       .where(and(eq(pendingInvites.workspaceId, ctx.workspaceId), eq(pendingInvites.email, targetEmail)));
-    return { kind: "removed" };
+    return { kind: "removed", userId: null };
   }
 
   return { kind: "invalid", error: "userId or email is required" };
+}
+
+export type ChangeRoleResult = { kind: "invalid"; error: string } | { kind: "changed" };
+
+const SHOPIFY_ROLE =
+  "This person's role comes from their Shopify customer tag. Change the tag in Shopify to change their role.";
+
+// Body {userId, role: manager | staff} sets a manual member's role.
+// Refused: your own role (a manager could otherwise lock themselves out of
+// the team settings), and a member whose role comes from a Shopify tag.
+export async function changeMemberRole(
+  db: Db,
+  ctx: { workspaceId: string; actorUserId: string },
+  body: unknown,
+): Promise<ChangeRoleResult> {
+  const fields = isRecord(body) ? body : {};
+  const targetUserId = typeof fields.userId === "string" ? fields.userId : "";
+  if (targetUserId.length === 0) {
+    return { kind: "invalid", error: "userId is required" };
+  }
+  if (!isWorkspaceRole(fields.role)) {
+    return { kind: "invalid", error: "Role must be manager or staff" };
+  }
+  if (targetUserId === ctx.actorUserId) {
+    return { kind: "invalid", error: "You cannot change your own role" };
+  }
+  const rows = await db
+    .select({ id: workspaceMembers.id, source: workspaceMembers.source })
+    .from(workspaceMembers)
+    .where(and(eq(workspaceMembers.workspaceId, ctx.workspaceId), eq(workspaceMembers.userId, targetUserId)))
+    .limit(1);
+  const target = rows[0];
+  if (!target) {
+    return { kind: "invalid", error: "No such member" };
+  }
+  if (target.source === "shopify") {
+    return { kind: "invalid", error: SHOPIFY_ROLE };
+  }
+  await db.update(workspaceMembers).set({ role: fields.role }).where(eq(workspaceMembers.id, target.id));
+  return { kind: "changed" };
 }

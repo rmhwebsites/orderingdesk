@@ -11,7 +11,7 @@
 import { eq, sql } from "drizzle-orm";
 import type { Db } from "../db";
 import { applyBatch } from "../db/batch";
-import { shopifyRoster, workspaceMembers, type RosterTags } from "../db/schema";
+import { shopifyRoster, workspaceMembers, workspaces, type RosterTags } from "../db/schema";
 import { isRecord } from "./desk/shapes";
 
 export const DEFAULT_ROSTER_TAGS: RosterTags = {
@@ -29,6 +29,53 @@ export function resolveRosterTags(stored: unknown): RosterTags {
     manager: pick(tags.manager, DEFAULT_ROSTER_TAGS.manager),
     staff: pick(tags.staff, DEFAULT_ROSTER_TAGS.staff),
   };
+}
+
+export const ROSTER_TAG_MAX = 40;
+
+export type SetRosterTagsResult =
+  | { kind: "invalid"; error: string }
+  | { kind: "not-found" }
+  | { kind: "saved"; tags: RosterTags };
+
+// Platform admins (the route checks). Body {manager, staff}: the Shopify
+// customer tags that grant each role here, or null for the defaults. Each
+// is 1 to ROSTER_TAG_MAX characters with no comma (Shopify separates tags
+// with commas), and the two must differ. The cron roster sync applies a
+// change at its next run (grants the new tags, revokes the old ones).
+export async function setRosterTags(db: Db, workspaceId: string, body: unknown): Promise<SetRosterTagsResult> {
+  let next: RosterTags | null = null;
+  if (body !== null) {
+    if (!isRecord(body)) {
+      return { kind: "invalid", error: "Send the manager and staff tags, or null for the defaults" };
+    }
+    const tags: Partial<RosterTags> = {};
+    for (const role of ["manager", "staff"] as const) {
+      const raw = body[role];
+      const value = typeof raw === "string" ? raw.trim() : "";
+      const label = role === "manager" ? "The manager tag" : "The staff tag";
+      if (value.length === 0 || value.length > ROSTER_TAG_MAX) {
+        return { kind: "invalid", error: `${label} must be 1 to ${ROSTER_TAG_MAX} characters` };
+      }
+      if (value.includes(",")) {
+        return { kind: "invalid", error: `${label} cannot contain a comma: Shopify would read it as two tags` };
+      }
+      tags[role] = value;
+    }
+    if (tags.manager!.toLowerCase() === tags.staff!.toLowerCase()) {
+      return { kind: "invalid", error: "The manager and staff tags must be different" };
+    }
+    next = { manager: tags.manager!, staff: tags.staff! };
+  }
+  const updated = await db
+    .update(workspaces)
+    .set({ rosterTags: next })
+    .where(eq(workspaces.id, workspaceId))
+    .returning({ id: workspaces.id });
+  if (updated.length === 0) {
+    return { kind: "not-found" };
+  }
+  return { kind: "saved", tags: resolveRosterTags(next) };
 }
 
 // Grants every roster entry for this email as a source = shopify membership

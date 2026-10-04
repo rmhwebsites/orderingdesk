@@ -9,6 +9,9 @@ export type StatusView = {
   color: string;
   sort: number;
   triggersPo: boolean;
+  // The Shopify state this status mirrors (platform amendment section 4),
+  // or null.
+  shopifyLink: "fulfilled" | "delivered" | null;
 };
 
 export type EventView = {
@@ -41,6 +44,7 @@ export function statusView(row: typeof statuses.$inferSelect): StatusView {
     color: row.color,
     sort: row.sort,
     triggersPo: row.triggersPo,
+    shopifyLink: row.shopifyLink ?? null,
   };
 }
 

@@ -69,9 +69,9 @@ describe("replaceStatuses", () => {
     expect(result).toEqual({
       kind: "ok",
       statuses: [
-        { key: "approved", label: "Approved for PO", color: "teal", sort: 0, triggersPo: false },
-        { key: "new", label: "Fresh", color: "pink", sort: 1, triggersPo: true },
-        { key: "waiting_on_parts", label: "Waiting on Parts", color: "amber", sort: 2, triggersPo: false },
+        { key: "approved", label: "Approved for PO", color: "teal", sort: 0, triggersPo: false, shopifyLink: null },
+        { key: "new", label: "Fresh", color: "pink", sort: 1, triggersPo: true, shopifyLink: null },
+        { key: "waiting_on_parts", label: "Waiting on Parts", color: "amber", sort: 2, triggersPo: false, shopifyLink: null },
       ],
     });
     const after = await statusRows(db);
@@ -283,6 +283,52 @@ describe("replaceStatuses", () => {
     for (const body of bodies) {
       const result = await replaceStatuses(db, WS, body);
       expect(result.kind, JSON.stringify(body)?.slice(0, 80)).toBe("invalid");
+    }
+    expect(await statusRows(db)).toEqual(before);
+  });
+
+  it("saves each status's Shopify link and keeps a stored link when the entry leaves it out", async () => {
+    const { db } = await setup();
+    const result = await replaceStatuses(db, WS, [
+      { key: "new", label: "New", color: "lime", triggersPo: false, shopifyLink: "delivered" },
+      // No shopifyLink: an existing status keeps its stored one.
+      { key: "shipped", label: "Shipped", color: "violet", triggersPo: false },
+      { key: "processing", label: "Processing", color: "blue", triggersPo: false, shopifyLink: null },
+      // No shopifyLink on a new status: none.
+      entry("Packed"),
+    ]);
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") return;
+    expect(result.statuses.map((s) => [s.key, s.shopifyLink])).toEqual([
+      ["new", "delivered"],
+      ["shipped", "fulfilled"],
+      ["processing", null],
+      ["packed", null],
+    ]);
+    expect((await statusRows(db)).map((row) => [row.key, row.shopifyLink])).toEqual([
+      ["new", "delivered"],
+      ["shipped", "fulfilled"],
+      ["processing", null],
+      ["packed", null],
+    ]);
+  });
+
+  it("refuses an unknown Shopify link and two statuses linked to the same Shopify state", async () => {
+    const { db } = await setup();
+    const before = await statusRows(db);
+    for (const body of [
+      [entry("Bad link", { shopifyLink: "cancelled" })],
+      [entry("Bad link", { shopifyLink: "Fulfilled" })],
+      [entry("Bad link", { shopifyLink: 1 })],
+      [
+        { key: "shipped", label: "Shipped", color: "violet", triggersPo: false, shopifyLink: "fulfilled" },
+        entry("Also shipped", { shopifyLink: "fulfilled" }),
+      ],
+      // The kept link of "shipped" collides with a new one.
+      [{ key: "shipped", label: "Shipped", color: "violet", triggersPo: false }, entry("Sent", { shopifyLink: "fulfilled" })],
+    ]) {
+      const result = await replaceStatuses(db, WS, body);
+      expect(result.kind, JSON.stringify(body).slice(0, 80)).toBe("invalid");
     }
     expect(await statusRows(db)).toEqual(before);
   });

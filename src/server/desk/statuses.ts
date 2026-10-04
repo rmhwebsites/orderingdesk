@@ -26,6 +26,9 @@ export const STATUS_COLORS = [
 ] as const;
 export const STATUS_LIST_MAX = 20;
 const LABEL_MAX = 40;
+// The Shopify states a status may mirror (platform amendment section 4).
+export const SHOPIFY_LINKS = ["fulfilled", "delivered"] as const;
+export type ShopifyLink = (typeof SHOPIFY_LINKS)[number];
 
 export type InUseStatus = { key: string; label: string; count: number };
 
@@ -34,7 +37,15 @@ export type ReplaceStatusesResult =
   | { kind: "in-use"; error: string; inUse: InUseStatus[] }
   | { kind: "ok"; statuses: StatusView[] };
 
-type Entry = { key: string | null; label: string; color: string; triggersPo: boolean };
+// shopifyLink undefined: an existing status keeps its stored link, a new
+// one gets none.
+type Entry = {
+  key: string | null;
+  label: string;
+  color: string;
+  triggersPo: boolean;
+  shopifyLink: ShopifyLink | null | undefined;
+};
 
 function parseEntries(body: unknown): Entry[] | string {
   if (!Array.isArray(body)) {
@@ -68,7 +79,15 @@ function parseEntries(body: unknown): Entry[] | string {
       }
       key = raw.key;
     }
-    entries.push({ key, label, color, triggersPo: raw.triggersPo });
+    let shopifyLink: ShopifyLink | null | undefined;
+    if (raw.shopifyLink === null || raw.shopifyLink === undefined) {
+      shopifyLink = raw.shopifyLink;
+    } else if (typeof raw.shopifyLink === "string" && (SHOPIFY_LINKS as readonly string[]).includes(raw.shopifyLink)) {
+      shopifyLink = raw.shopifyLink as ShopifyLink;
+    } else {
+      return `${position}: the Shopify link must be fulfilled, delivered or none`;
+    }
+    entries.push({ key, label, color, triggersPo: raw.triggersPo, shopifyLink });
   }
   return entries;
 }
@@ -136,6 +155,22 @@ export async function replaceStatuses(
   }
   const removed = existing.filter((row) => !kept.has(row.key));
   const removedKeys = removed.map((row) => row.key);
+
+  // Each Shopify state moves an order to one status, so at most one status
+  // links to it. An entry without shopifyLink keeps its stored link.
+  const storedLink = new Map(existing.map((row) => [row.key, row.shopifyLink ?? null]));
+  const links = entries.map((entry) =>
+    entry.shopifyLink !== undefined ? entry.shopifyLink : entry.key !== null ? (storedLink.get(entry.key) ?? null) : null,
+  );
+  for (const state of SHOPIFY_LINKS) {
+    const linked = entries.filter((_, i) => links[i] === state);
+    if (linked.length > 1) {
+      return {
+        kind: "invalid",
+        error: `Only one status can follow Shopify's ${state} state; ${linked.map((entry) => entry.label).join(" and ")} both do`,
+      };
+    }
+  }
 
   if (removedKeys.length > 0) {
     const usage = await db
@@ -205,7 +240,13 @@ export async function replaceStatuses(
     );
   }
   entries.forEach((entry, sort) => {
-    const fields = { label: entry.label, color: entry.color, sort, triggersPo: entry.triggersPo };
+    const fields = {
+      label: entry.label,
+      color: entry.color,
+      sort,
+      triggersPo: entry.triggersPo,
+      shopifyLink: links[sort],
+    };
     if (entry.key !== null) {
       statements.push(
         db

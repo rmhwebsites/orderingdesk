@@ -63,6 +63,7 @@ describe("loadDesk", () => {
       color: "green",
       sort: 2,
       triggersPo: true,
+      shopifyLink: null,
     });
     expect(desk?.settings).toEqual({
       notificationEmails: ["desk@example.com"],

@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { and, asc, eq } from "drizzle-orm";
 import type { Db } from "@/db";
 import * as schema from "@/db/schema";
-import { inviteMember, listMembers, removeMember } from "./members";
+import { changeMemberRole, inviteMember, listMembers, removeMember } from "./members";
 import { openTestDb, seedMember, seedUser, seedWorkspace } from "./desk/test-helpers";
 
 const WS = "ws_impact";
@@ -128,14 +128,15 @@ describe("removeMember", () => {
 
   it("removes a manually added member", async () => {
     const db = await setup();
-    expect(await removeMember(db, ctx, { userId: "u_crew" })).toEqual({ kind: "removed" });
+    // The removed member's id, so the route can close their open sockets.
+    expect(await removeMember(db, ctx, { userId: "u_crew" })).toEqual({ kind: "removed", userId: "u_crew" });
     expect((await membersOf(db)).map((m) => m.userId)).toEqual(["u_lead", "u_tagged"]);
   });
 
   it("lets a manager remove another manager", async () => {
     const db = await setup();
     await seedMember(db, WS, "u_free", "manager");
-    expect(await removeMember(db, ctx, { userId: "u_free" })).toEqual({ kind: "removed" });
+    expect(await removeMember(db, ctx, { userId: "u_free" })).toEqual({ kind: "removed", userId: "u_free" });
   });
 
   it("refuses to remove the person asking", async () => {
@@ -171,7 +172,7 @@ describe("removeMember", () => {
       { id: "i2", email: "soon@example.com", workspaceId: "ws_other", role: "staff", invitedBy: "u_x", createdAt: 1 },
       { id: "i3", email: "soon@example.com", platformAdmin: true, invitedBy: "u_x", createdAt: 1 },
     ]);
-    expect(await removeMember(db, ctx, { email: " SOON@example.com" })).toEqual({ kind: "removed" });
+    expect(await removeMember(db, ctx, { email: " SOON@example.com" })).toEqual({ kind: "removed", userId: null });
     const left = await db
       .select({ id: schema.pendingInvites.id })
       .from(schema.pendingInvites)
@@ -183,5 +184,46 @@ describe("removeMember", () => {
   it("needs a userId or an email", async () => {
     const db = await setup();
     expect(await removeMember(db, ctx, {})).toEqual({ kind: "invalid", error: "userId or email is required" });
+  });
+});
+
+describe("changeMemberRole", () => {
+  const ctx = { workspaceId: WS, actorUserId: "u_lead" };
+
+  it("changes a manual member's role both ways", async () => {
+    const db = await setup();
+    expect(await changeMemberRole(db, ctx, { userId: "u_crew", role: "manager" })).toEqual({ kind: "changed" });
+    expect((await membersOf(db)).find((m) => m.userId === "u_crew")?.role).toBe("manager");
+    expect(await changeMemberRole(db, ctx, { userId: "u_crew", role: "staff" })).toEqual({ kind: "changed" });
+    expect((await membersOf(db)).find((m) => m.userId === "u_crew")?.role).toBe("staff");
+  });
+
+  it("refuses a role controlled by a Shopify tag, saying where to change it", async () => {
+    const db = await setup();
+    const result = await changeMemberRole(db, ctx, { userId: "u_tagged", role: "manager" });
+    expect(result.kind).toBe("invalid");
+    expect(result.kind === "invalid" ? result.error : "").toContain("Shopify");
+    expect((await membersOf(db)).find((m) => m.userId === "u_tagged")?.role).toBe("staff");
+  });
+
+  it("refuses changing your own role, a bad role, and someone who is not a member here", async () => {
+    const db = await setup();
+    await seedMember(db, "ws_other", "u_free", "staff");
+    expect(await changeMemberRole(db, ctx, { userId: "u_lead", role: "staff" })).toEqual({
+      kind: "invalid",
+      error: "You cannot change your own role",
+    });
+    for (const body of [{ userId: "u_crew", role: "owner" }, { userId: "u_crew" }, { role: "staff" }, null]) {
+      expect((await changeMemberRole(db, ctx, body)).kind, JSON.stringify(body)).toBe("invalid");
+    }
+    for (const userId of ["u_missing", "u_free"]) {
+      expect(await changeMemberRole(db, ctx, { userId, role: "manager" })).toEqual({ kind: "invalid", error: "No such member" });
+    }
+    expect((await membersOf(db, "ws_other"))[0].role).toBe("staff");
+    expect((await membersOf(db)).map((m) => [m.userId, m.role])).toEqual([
+      ["u_crew", "staff"],
+      ["u_lead", "manager"],
+      ["u_tagged", "staff"],
+    ]);
   });
 });
