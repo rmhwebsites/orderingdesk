@@ -846,3 +846,71 @@ an address on a domain you have onboarded.
   socket per half hour; on a client host a platform admin has manager
   access only (by design, see above); the Shopify tag limit and the
   waitUntil delivery are not verified live.
+
+## STATE UPDATE, 2026-10-04 security review repairs (supersedes above)
+
+- Branch build/m1-core, on top of 59fe68c: a9cd10c (roster approval,
+  server), 4a45c43 (Team UI for it), 8d2472f (docs), 61634c7 (unused
+  better-auth endpoints off), 337c281 (server-chosen account name),
+  25e16be (atomic invite limit), 4572fb7 (top bar), 27329f2 (settings
+  polish), plus this docs commit. Not pushed, not deployed.
+- NEW MIGRATION 0006 (drizzle/0006_roster_approval.sql): four nullable
+  columns on shopify_roster (approved_role, approved_at, approved_by,
+  denied_at). Additive; existing rows read as waiting for approval
+  (production has no roster rows yet: its D1 is still at 0003). Applied
+  locally. DEPLOY ORDER: `npm run db:migrate:remote` (applies 0004, 0005
+  and 0006), then deploy this code right away.
+- Shopify tags request access, a manager approves once (HIGH finding: any
+  storefront visitor can create a customer with tags through the newsletter
+  form's contact[tags]). Rules in the header of src/server/roster.ts, user
+  guide under "Connecting a Shopify store" above, plan in the platform
+  amendment section 2.
+  - Only rows with approved_role set and denied_at null grant anything:
+    canCreateAccount and hasAccountRoute (src/server/access.ts),
+    materializeRoster, and the roster sync's membership for existing users
+    (grant in src/server/shopify/roster-sync.ts, which brings the
+    membership in line with the row in the same batch).
+  - approved_role is the role approved and the role granted; it never
+    exceeds role. A raised tag keeps it (membership stays at the old role,
+    the request waits); a lowered tag lowers it at once. The same email on
+    another customer id starts the row over (a missed customers/delete).
+    Tag removal, customer deletion, an email change and a store disconnect
+    delete rows as before, approvals with them.
+  - Routes: POST /api/workspaces/[id]/roster/[rosterId]/approve (optional
+    body {role}: 409 when the tag now asks for another role) and .../deny,
+    requireMember(id, "manager"), scoped by workspace id (another
+    workspace's roster id is 404). GET .../members adds {requests:
+    {waiting, denied}} for managers and platform admins.
+  - Settings > Team: "Waiting for approval" panel (Approve, Deny behind
+    ConfirmStep), denied requests in a collapsed list with Approve.
+- better-auth: createAuth sets disabledPaths (DISABLED_AUTH_PATHS in
+  src/server/auth.ts) for every 1.7.7 endpoint except /sign-in/magic-link,
+  /magic-link/verify, /get-session, /sign-out and /error; /callback/:id
+  and /reset-password/:token are refused by route in a before hook. Check
+  the list again on any better-auth upgrade (getEndpoints in
+  node_modules/better-auth/dist/api/index.mjs).
+- New accounts are named by the server: the email's local part
+  (accountName), whatever name the magic-link request carried.
+- Team invites: the hourly send is reserved by one INSERT ... SELECT ...
+  WHERE (SELECT count(*) ...) < 30 (src/server/members.ts).
+- Top bar: from lg a long workspace name truncates (brand link
+  lg:flex-initial, chip row lg:shrink-0); checked at 1024px with an 80
+  character name in local dev.
+- Settings: section scroll margin 8rem below lg (the header is 109px
+  there), 6rem from lg; focus after removing a member goes to the nearest
+  row with a control (nearestRowOrder in kit.tsx) or the Team heading, and
+  back to Remove on failure; ConfirmStep's confirm button is described by
+  its question; "Use the Ordering Desk colors" keeps unsaved font and
+  corner edits (draftAfterColorsReset).
+- Known limits:
+  - Approving a request for someone who already has a manual membership
+    changes nothing (a manual membership always wins), so the Team list
+    keeps their manual role.
+  - After a store disconnect and reconnect, every tagged person is a new
+    request again (approvals are deleted with the roster rows).
+  - The deny route accepts any roster entry of the workspace, approved ones
+    included (it then revokes their tag-based access); the UI offers Deny
+    on waiting requests only.
+  - New accounts show their email's local part as their name (Team and
+    admin lists show it above the email). Existing accounts keep theirs,
+    and nobody can change a name now (/update-user is off).
