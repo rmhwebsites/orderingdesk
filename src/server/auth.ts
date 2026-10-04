@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { APIError, createAuthMiddleware } from "better-auth/api";
 import { magicLink } from "better-auth/plugins";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { getDbFromEnv, type Db } from "@/db";
@@ -54,6 +55,48 @@ type AuthEnv = {
 // - The magic-link token is stored as a hash of the origin and the token
 //   (linkTokenHash), so a link issued on one host finds nothing on
 //   another, and the database never holds a usable token.
+// Every endpoint better-auth 1.7.7 exposes that the app does not use (read
+// from node_modules/better-auth/dist/api/index.mjs, getEndpoints). They
+// act on the one global user from any host: a tenant who proxies their
+// own client host and captures a session cookie there could otherwise
+// rename the user (the name shows in other tenants' timelines), change
+// their email, list or revoke all their sessions, or delete them. Only the
+// sign-in flow stays: /sign-in/magic-link and /magic-link/verify,
+// /get-session (which also refreshes the session) and /sign-out, plus
+// /error, the static page better-auth redirects failed flows to. A
+// better-auth upgrade that adds endpoints needs this list checked again.
+export const DISABLED_AUTH_PATHS = [
+  "/update-user",
+  "/change-email",
+  "/change-password",
+  "/delete-user",
+  "/delete-user/callback",
+  "/list-sessions",
+  "/revoke-session",
+  "/revoke-sessions",
+  "/revoke-other-sessions",
+  "/list-accounts",
+  "/unlink-account",
+  "/link-social",
+  "/account-info",
+  "/get-access-token",
+  "/refresh-token",
+  "/update-session",
+  "/sign-in/social",
+  "/sign-in/email",
+  "/sign-up/email",
+  "/request-password-reset",
+  "/reset-password",
+  "/verify-password",
+  "/send-verification-email",
+  "/verify-email",
+  "/ok",
+];
+
+// The unused routes with a path parameter: disabledPaths compares the
+// exact request path, so these are refused by route in a before hook.
+const DISABLED_AUTH_ROUTES = new Set(["/callback/:id", "/reset-password/:token"]);
+
 export function createAuth(opts: {
   db: Db;
   env: AuthEnv;
@@ -79,6 +122,15 @@ export function createAuth(opts: {
     // disableOriginCheck false is better-auth's production default, stated
     // so that tests (where better-auth skips the check) exercise it too.
     advanced: { ipAddress: { ipAddressHeaders: ["cf-connecting-ip"] }, disableOriginCheck: false },
+    // 404 before anything runs (see DISABLED_AUTH_PATHS).
+    disabledPaths: DISABLED_AUTH_PATHS,
+    hooks: {
+      before: createAuthMiddleware(async (ctx) => {
+        if (DISABLED_AUTH_ROUTES.has(ctx.path)) {
+          throw new APIError("NOT_FOUND");
+        }
+      }),
+    },
     plugins: [
       magicLink({
         storeToken: { type: "custom-hasher", hash: (token) => linkTokenHash(opts.origin, token) },

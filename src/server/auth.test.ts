@@ -477,3 +477,94 @@ describe("account creation", () => {
     expect(memberships).toEqual([{ userId: "u_old", source: "shopify" }]);
   });
 });
+
+// better-auth's account endpoints act on the one global user from every
+// host. A tenant who proxies their own client host and captures a cookie
+// there could otherwise rename the user (the name shows in other tenants'
+// timelines) or revoke all their sessions. The app uses none of them, so
+// every endpoint but the sign-in flow answers 404, on the hub and on client
+// hosts alike, signed in or not.
+const UNUSED_AUTH_PATHS = [
+  "/update-user",
+  "/change-email",
+  "/change-password",
+  "/delete-user",
+  "/delete-user/callback",
+  "/list-sessions",
+  "/revoke-session",
+  "/revoke-sessions",
+  "/revoke-other-sessions",
+  "/list-accounts",
+  "/unlink-account",
+  "/link-social",
+  "/account-info",
+  "/get-access-token",
+  "/refresh-token",
+  "/update-session",
+  "/sign-in/social",
+  "/sign-in/email",
+  "/sign-up/email",
+  "/request-password-reset",
+  "/reset-password",
+  "/verify-password",
+  "/send-verification-email",
+  "/verify-email",
+  "/ok",
+  // Routes with a path parameter.
+  "/callback/google",
+  "/reset-password/a-token",
+];
+
+describe("better-auth endpoints the app does not use", () => {
+  const hosts = [
+    ["the hub", "orderingdesk.test", BASE],
+    ["a client host", "orders.impactrentals.store", CLIENT],
+  ] as const;
+
+  for (const [label, host, origin] of hosts) {
+    it(`answer 404 on ${label}, with a valid session, and change nothing`, async () => {
+      const { db } = await setup();
+      const { auth, cookie } = await signInOn(host, origin, db);
+      const sessionsBefore = await db.select({ id: schema.session.id }).from(schema.session);
+      const statuses: Array<[string, string, number]> = [];
+      for (const path of UNUSED_AUTH_PATHS) {
+        for (const method of ["GET", "POST"]) {
+          const response = await auth.handler(
+            new Request(`${origin}/api/auth${path}`, {
+              method,
+              headers: { origin, cookie, "content-type": "application/json" },
+              body:
+                method === "POST"
+                  ? JSON.stringify({ name: "Renamed by a tenant", revokeOtherSessions: true, token: "x", newEmail: "x@evil.example" })
+                  : undefined,
+            }),
+          );
+          statuses.push([method, path, response.status]);
+        }
+      }
+      expect(statuses.filter(([, , status]) => status !== 404)).toEqual([]);
+      const [boss] = await db.select({ name: schema.user.name, email: schema.user.email }).from(schema.user);
+      expect(boss.name).not.toBe("Renamed by a tenant");
+      expect(boss.email).toBe("boss@example.com");
+      expect(await db.select({ id: schema.session.id }).from(schema.session)).toEqual(sessionsBefore);
+    });
+
+    it(`keep sign-in, get-session and sign-out working on ${label}`, async () => {
+      const { db } = await setup();
+      const { auth, cookie } = await signInOn(host, origin, db);
+      const session = await auth.handler(new Request(`${origin}/api/auth/get-session`, { headers: { origin, cookie } }));
+      expect(session.status).toBe(200);
+      expect(((await session.json()) as { user: { email: string } }).user.email).toBe("boss@example.com");
+
+      const signOut = await auth.handler(
+        new Request(`${origin}/api/auth/sign-out`, {
+          method: "POST",
+          headers: { origin, cookie, "content-type": "application/json" },
+          body: "{}",
+        }),
+      );
+      expect(signOut.status).toBe(200);
+      expect(await auth.api.getSession({ headers: new Headers({ cookie }) })).toBeNull();
+    });
+  }
+});
