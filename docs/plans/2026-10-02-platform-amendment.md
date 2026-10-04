@@ -39,14 +39,38 @@ wherever they conflict. Original: `2026-10-01-order-desk-design.md`.
   1. platform admins (bootstrap list or promoted);
   2. anyone with a pending manual invite (managers and platform admins can
      invite);
-  3. **tagged Shopify customers**: customers of a workspace's connected store
-     carrying the tag `Ordering Desk Manager` or `Ordering Desk Staff` get
-     that role in that workspace. Adding or removing the tag in Shopify
-     grants or revokes access automatically (customer webhooks plus the
-     periodic sync). Memberships record their source (`manual` or
-     `shopify`); Shopify sync only ever adds or removes `shopify`-sourced
-     memberships, never manual ones. Tag names are per-workspace settings
-     with those defaults.
+  3. **tagged Shopify customers, once approved** (revised Oct 4, owner's
+     choice "Tag, then approve once"): customers of a workspace's connected
+     store carrying the tag `Ordering Desk Manager` or `Ordering Desk Staff`
+     REQUEST that role in that workspace, and a manager or platform admin
+     of the workspace approves the request once in Settings > Team.
+     - Why: a customer tag proves nothing. Any storefront visitor can create
+       a customer with tags through the Online Store's own forms (the
+       newsletter form posts contact[tags]), so a stranger could tag their
+       own email "Ordering Desk Manager" and, before this rule, become a
+       manager with no invite.
+     - A request that is waiting, or was denied, grants nothing: no sign-in
+       email (the usual "check your email" answer), no account, no
+       membership.
+     - Approval is per (workspace, email, role). Approving grants the role
+       at once to an existing user (a new email at first sign-in). A tag
+       change that raises access (staff to manager) needs a new approval,
+       and the membership stays at the approved role until then; a change
+       that lowers it applies at once.
+     - Denying revokes any tag-based membership for that email in the
+       workspace and closes their open sessions there. A denied request
+       stays denied (it does not come back as waiting) until the tag is
+       removed and added again. A denied request can still be approved
+       later.
+     - Removing the tag, deleting the customer or changing its email
+       deletes the request and revokes the tag-based membership
+       (automatically: customer webhooks plus the periodic sync), so
+       tagging again later is a fresh request. So does disconnecting the
+       store; after a reconnect the tags come back as new requests.
+     - Memberships record their source (`manual` or `shopify`); Shopify
+       sync only ever adds or removes `shopify`-sourced memberships, never
+       manual ones. Tag names are per-workspace settings with those
+       defaults.
 - An email with no route to an account gets the same "check your email"
   response as everyone else (no account enumeration), and no email is sent.
 

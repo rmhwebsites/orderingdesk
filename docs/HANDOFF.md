@@ -477,7 +477,7 @@ ticket.
    release the version:
    - read_orders and write_orders (read and tag orders)
    - read_customers (customers tagged "Ordering Desk Manager" or "Ordering
-     Desk Staff" get access)
+     Desk Staff" can request access, which a manager approves once)
    - read_merchant_managed_fulfillment_orders and
      write_merchant_managed_fulfillment_orders (moving an order to Shipped
      marks it fulfilled in Shopify, without emailing the customer)
@@ -498,11 +498,25 @@ ticket.
 
 Once connected:
 - Tag a Shopify customer "Ordering Desk Manager" or "Ordering Desk Staff"
-  to give them that role in the workspace (removing the tag removes the
-  access). People invited by hand inside Ordering Desk are never affected
-  by tags. Disconnecting the store removes every tag-based access in the
-  workspace; tagged people get it back at the first roster sync after the
-  store is connected again.
+  to REQUEST that role in the workspace, then approve the request once in
+  the workspace's Settings, Team, "Waiting for approval" (any manager of
+  the workspace or a platform admin can). Until it is approved the tag
+  gives nothing: no sign-in email, no account, no access. The approval
+  step exists because a tag proves nothing: anyone can create a customer
+  with tags from the storefront itself (the newsletter form sends
+  contact[tags]), so without it a stranger could tag their own email
+  "Ordering Desk Manager" and become a manager.
+  - Changing the tag from Staff to Manager needs a new approval (they stay
+    staff until then); Manager to Staff applies at once.
+  - Deny takes away their tag-based access in the workspace and closes
+    their open tabs; the request stays denied until the tag is removed and
+    added again. Denied requests are listed (collapsed) with Approve.
+  - Removing the tag, deleting the customer or changing its email removes
+    the access; tagging again later is a new request to approve.
+  People invited by hand inside Ordering Desk are never affected by tags.
+  Disconnecting the store removes every tag-based access in the workspace,
+  approvals included; after it is connected again the tagged people show
+  up as new requests at the first roster sync.
 - Every status change in Ordering Desk shows on the Shopify order as one
   tag, "Ordering Desk: <status>". Editing that tag in Shopify changes the
   status in Ordering Desk. Fulfilling or delivering in Shopify moves the
