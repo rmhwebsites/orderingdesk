@@ -4,6 +4,7 @@ import type { Db } from "@/db";
 import * as schema from "@/db/schema";
 import { encryptSecret } from "@/server/crypto";
 import { openTestDb, seedOrder, seedWorkspace, snapshotOf } from "@/server/desk/test-helpers";
+import { SHOPIFY_TAG_MAX, STATUS_LABEL_MAX } from "@/lib/status-label";
 import {
   ECHO_WINDOW_MS,
   STATUS_TAG_PREFIX,
@@ -43,6 +44,13 @@ describe("status tags", () => {
     expect(statusTag("Shipped")).toBe("Ordering Desk: Shipped");
     // Shopify splits tags on commas, so a comma in a label cannot survive.
     expect(statusTag("Packed, waiting")).toBe("Ordering Desk: Packed waiting");
+  });
+
+  // Shopify allows 40 characters per order tag; labels are capped so that
+  // the longest one still fits (src/server/desk/statuses.ts).
+  it("fits Shopify's 40 character tag limit for the longest label allowed", () => {
+    expect(SHOPIFY_TAG_MAX).toBe(40);
+    expect(statusTag("w".repeat(STATUS_LABEL_MAX)).length).toBe(SHOPIFY_TAG_MAX);
   });
 });
 
@@ -449,7 +457,7 @@ describe("pushOrderStatus", () => {
 
   it("records a refusal in the timeline and keeps the app's status", async () => {
     const { db } = await setup();
-    await seedOrder(db, WS, { id: "o1", statusKey: "shipped" });
+    await seedOrder(db, WS, { id: "o1", statusKey: "approved" });
     const shop = store({ tags: [], refuse: { tagsAdd: "Access denied for tagsAdd field. Required access: `write_orders`." } });
     const events = await pushOrderStatus(db, env, WS, "o1", { fulfill: true, fetchImpl: shop.impl, now: () => NOW });
     expect(events).toHaveLength(1);
@@ -457,11 +465,35 @@ describe("pushOrderStatus", () => {
       type: "shopify_write",
       source: "system",
       text: "Shopify was not updated: Access denied for tagsAdd field. Required access: `write_orders`. The status here is kept.",
-      meta: { ok: false, tag: "Ordering Desk: Shipped", statusKey: "shipped", fulfillments: 0 },
+      meta: { ok: false, tag: "Ordering Desk: Approved", statusKey: "approved", fulfillments: 0 },
     });
-    // No fulfillment after a failed tag write, and the status stays.
     expect(shop.calls.map(kindOf)).toEqual(["tags", "tagsAdd"]);
+    expect((await orderRow(db)).statusKey).toBe("approved");
+  });
+
+  // The tag only shows the status in Shopify; fulfilling is what a status
+  // linked to fulfilled is for, so a refused tag must not stop it.
+  it("still fulfills when the tag write is refused, and says what landed", async () => {
+    const { db } = await setup();
+    await seedOrder(db, WS, { id: "o1", statusKey: "shipped" });
+    const shop = store({ tags: [], refuse: { tagsAdd: "Tags is too long (maximum is 40 characters)" } });
+    const [event] = await pushOrderStatus(db, env, WS, "o1", { fulfill: true, fetchImpl: shop.impl, now: () => NOW });
+    expect(shop.calls.map(kindOf)).toEqual(["tags", "tagsAdd", "fulfillmentOrders", "fulfillmentCreate"]);
+    expect(event).toMatchObject({
+      text: "Shopify was only partly updated (marked fulfilled without emailing the customer): Tags is too long (maximum is 40 characters). The status here is kept.",
+      meta: { ok: false, fulfillments: 1 },
+    });
     expect((await orderRow(db)).statusKey).toBe("shipped");
+  });
+
+  it("names both refusals when the tag and the fulfillment are both refused", async () => {
+    const { db } = await setup();
+    await seedOrder(db, WS, { id: "o1", statusKey: "shipped" });
+    const shop = store({ tags: [], refuse: { tagsAdd: "Tag refused.", fulfillmentCreate: "Fulfillment order is on hold" } });
+    const [event] = await pushOrderStatus(db, env, WS, "o1", { fulfill: true, fetchImpl: shop.impl, now: () => NOW });
+    expect(event.text).toBe(
+      "Shopify was not updated: Tag refused; Fulfillment order is on hold. The status here is kept.",
+    );
   });
 
   it("says what did land when the fulfillment is refused after the tag", async () => {

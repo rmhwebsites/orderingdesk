@@ -6,10 +6,12 @@
 // - the order carries exactly one tag "Ordering Desk: <Status label>": any
 //   other tag starting with "Ordering Desk: " is removed (tagsRemove), then
 //   the current one is added (tagsAdd). The tags are read first and nothing
-//   is written when Shopify already shows the status.
+//   is written when Shopify already shows the status. Labels are capped so
+//   the tag fits Shopify's 40 characters (src/lib/status-label.ts).
 // - a status linked to fulfilled also fulfills the order's open
 //   fulfillment orders, with notifyCustomer false. Only for a change made in
-//   the app: a move that came from Shopify never fulfills.
+//   the app: a move that came from Shopify never fulfills. A refused tag
+//   write does not stop the fulfillment (the tag only shows the status).
 // - the outcome is a shopify_write event (source system) on the order's
 //   timeline, with Shopify's own words when it refused. The app's status is
 //   never rolled back because Shopify failed.
@@ -57,6 +59,7 @@ import type { Db } from "../../db";
 import { applyBatch, rowsAffected } from "../../db/batch";
 import { events, orders, statuses, storeConnections } from "../../db/schema";
 import type { LiveOrderStatus } from "../../lib/live-events";
+import { STATUS_TAG_PREFIX } from "../../lib/status-label";
 import { eventView, type EventView } from "../desk/shapes";
 import {
   addOrderTags,
@@ -69,7 +72,7 @@ import {
 } from "./admin";
 import { getAccessToken, type AccessTokenResult } from "./token";
 
-export const STATUS_TAG_PREFIX = "Ordering Desk: ";
+export { STATUS_TAG_PREFIX };
 // How long a status the order held counts as a possible echo of the app's
 // own tag write.
 export const ECHO_WINDOW_MS = 10 * 60 * 1000;
@@ -384,7 +387,10 @@ function tokenFailureText(token: Exclude<AccessTokenResult, { kind: "ok" | "unav
 }
 
 // One round of writing the status to Shopify: read the tags, fix them, and
-// fulfill when asked. Stops at the first failure, reporting what landed.
+// fulfill when asked. The tag and the fulfillment are separate steps: a
+// refused tag write still lets the fulfillment run, and the outcome names
+// what landed and every refusal. Only an order Shopify no longer has stops
+// everything.
 async function writeStatus(
   shopDomain: string,
   token: string,
@@ -393,57 +399,68 @@ async function writeStatus(
   fulfill: boolean,
   fetchImpl: typeof fetch,
 ): Promise<PushOutcome> {
-  const outcome: PushOutcome = { done: [], fulfillments: 0, failure: null };
-  const fail = (failure: AdminFailure | string): PushOutcome => ({
-    ...outcome,
-    failure: typeof failure === "string" ? failure : failureText(failure),
+  const done: string[] = [];
+  const failures: string[] = [];
+  let fulfillments = 0;
+  const text = (failure: AdminFailure | string) => (typeof failure === "string" ? failure : failureText(failure));
+  const outcome = (): PushOutcome => ({
+    done,
+    fulfillments,
+    failure: failures.length > 0 ? failures.map((failure) => failure.replace(/[.\s]+$/, "")).join("; ") : null,
   });
   const desired = statusTag(status.label);
 
   const current = await fetchOrderTags(shopDomain, token, orderGid, fetchImpl);
+  if (current.kind === "ok" && current.tags === null) {
+    failures.push("Shopify no longer has this order");
+    return outcome();
+  }
   if (current.kind !== "ok") {
-    return fail(current);
-  }
-  if (current.tags === null) {
-    return fail("Shopify no longer has this order");
-  }
-  const stale = current.tags.filter((tag) => isStatusTag(tag) && tag !== desired);
-  if (stale.length > 0) {
-    const removed = await removeOrderTags(shopDomain, token, orderGid, stale, fetchImpl);
-    if (removed.kind !== "ok") {
-      return fail(removed);
+    failures.push(text(current));
+  } else {
+    const tags = current.tags ?? [];
+    const stale = tags.filter((tag) => isStatusTag(tag) && tag !== desired);
+    let tagged = true;
+    if (stale.length > 0) {
+      const removed = await removeOrderTags(shopDomain, token, orderGid, stale, fetchImpl);
+      if (removed.kind !== "ok") {
+        failures.push(text(removed));
+        tagged = false;
+      }
     }
-  }
-  if (!current.tags.includes(desired)) {
-    const added = await addOrderTags(shopDomain, token, orderGid, [desired], fetchImpl);
-    if (added.kind !== "ok") {
-      return fail(added);
+    if (tagged && !tags.includes(desired)) {
+      const added = await addOrderTags(shopDomain, token, orderGid, [desired], fetchImpl);
+      if (added.kind !== "ok") {
+        failures.push(text(added));
+        tagged = false;
+      }
     }
-  }
-  if (stale.length > 0 || !current.tags.includes(desired)) {
-    outcome.done.push(`tagged ${desired}`);
+    if (tagged && (stale.length > 0 || !tags.includes(desired))) {
+      done.push(`tagged ${desired}`);
+    }
   }
 
   if (fulfill && status.shopifyLink === "fulfilled") {
     const open = await fetchFulfillableOrderIds(shopDomain, token, orderGid, fetchImpl);
     if (open.kind !== "ok") {
-      return fail(open);
-    }
-    if (open.ids === null) {
-      return fail("Shopify no longer has this order");
-    }
-    for (const fulfillmentOrderId of open.ids) {
-      const created = await createFulfillment(shopDomain, token, fulfillmentOrderId, fetchImpl);
-      if (created.kind !== "ok") {
-        return fail(created);
+      failures.push(text(open));
+    } else if (open.ids === null) {
+      failures.push("Shopify no longer has this order");
+    } else {
+      for (const fulfillmentOrderId of open.ids) {
+        const created = await createFulfillment(shopDomain, token, fulfillmentOrderId, fetchImpl);
+        if (created.kind !== "ok") {
+          failures.push(text(created));
+          break;
+        }
+        fulfillments++;
       }
-      outcome.fulfillments++;
-    }
-    if (outcome.fulfillments > 0) {
-      outcome.done.push("marked fulfilled without emailing the customer");
+      if (fulfillments > 0) {
+        done.push("marked fulfilled without emailing the customer");
+      }
     }
   }
-  return outcome;
+  return outcome();
 }
 
 function outcomeText(outcome: PushOutcome): string {

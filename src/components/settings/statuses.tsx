@@ -5,6 +5,7 @@ import { ArrowDownIcon } from "@phosphor-icons/react/ArrowDown";
 import { ArrowUpIcon } from "@phosphor-icons/react/ArrowUp";
 import { PlusIcon } from "@phosphor-icons/react/Plus";
 import { TrashIcon } from "@phosphor-icons/react/Trash";
+import { STATUS_LABEL_MAX } from "@/lib/status-label";
 import type { StatusView } from "@/server/desk/shapes";
 import { ui } from "@/components/ui";
 import { InlineMessage, Panel, requestJson, SaveStatus, Select, SettingsSection, Switch } from "./kit";
@@ -128,7 +129,8 @@ export function StatusesSection({ workspaceId, initial }: { workspaceId: string;
         <p className="text-sm text-ink-2">
           A status linked to a Shopify state works both ways: moving an order into it updates Shopify (a status linked
           to Fulfilled creates the fulfillment without emailing the customer), and when Shopify reports the order
-          fulfilled or delivered, the order moves into that status here.
+          fulfilled or delivered, the order moves into that status here. Each status also shows on the Shopify order
+          as a tag, so names can be up to {STATUS_LABEL_MAX} characters.
         </p>
         <p className="sr-only" aria-live="polite">
           {announcement}
@@ -168,7 +170,7 @@ export function StatusesSection({ workspaceId, initial }: { workspaceId: string;
                   <input
                     id={`${id}-label`}
                     value={row.label}
-                    maxLength={40}
+                    maxLength={STATUS_LABEL_MAX}
                     placeholder="Status name"
                     onChange={(event) => update(row.uid, { label: event.target.value })}
                     className={`${ui.input} min-w-0 flex-1`}

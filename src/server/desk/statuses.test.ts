@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { asc, eq } from "drizzle-orm";
 import type { Db } from "@/db";
 import * as schema from "@/db/schema";
-import { STATUS_COLORS, STATUS_LIST_MAX, replaceStatuses } from "./statuses";
+import { STATUS_COLORS, STATUS_LABEL_MAX, STATUS_LIST_MAX, replaceStatuses } from "./statuses";
 import { openTestDb, seedOrder, seedWorkspace, withBatch } from "./test-helpers";
 
 const WS = "ws_impact";
@@ -267,7 +267,7 @@ describe("replaceStatuses", () => {
       [entry("Fine"), "not an object"],
       [entry("")],
       [entry("   ")],
-      [entry("x".repeat(41))],
+      [entry("x".repeat(26))],
       [entry("Bad color", { color: "#ff0000" })],
       [entry("Bad color", { color: "purple" })],
       [entry("Bad color", { color: "Lime" })],
@@ -333,12 +333,27 @@ describe("replaceStatuses", () => {
     expect(await statusRows(db)).toEqual(before);
   });
 
-  it("trims labels and accepts 40 characters", async () => {
+  // Each status is written to its Shopify order as the tag
+  // "Ordering Desk: <label>", and Shopify allows 40 characters per tag, so a
+  // label longer than 25 would be refused on every move into that status.
+  it("trims labels and accepts 25 characters, the most a Shopify status tag leaves room for", async () => {
     const { db } = await setup();
-    const forty = "y".repeat(40);
-    const result = await replaceStatuses(db, WS, [entry("  Ready  "), entry(forty)]);
+    expect(STATUS_LABEL_MAX).toBe(25);
+    const longest = "y".repeat(25);
+    const result = await replaceStatuses(db, WS, [entry("  Ready  "), entry(longest)]);
     expect(result.kind).toBe("ok");
     if (result.kind !== "ok") return;
-    expect(result.statuses.map((s) => s.label)).toEqual(["Ready", forty]);
+    expect(result.statuses.map((s) => s.label)).toEqual(["Ready", longest]);
+  });
+
+  it("refuses a label longer than 25 characters, saying why", async () => {
+    const { db } = await setup();
+    const before = await statusRows(db);
+    const result = await replaceStatuses(db, WS, [entry("Waiting on customer approval")]);
+    expect(result).toEqual({
+      kind: "invalid",
+      error: "Status 1: the label must be 1 to 25 characters (Shopify tags hold 40, and \"Ordering Desk: \" takes 15)",
+    });
+    expect(await statusRows(db)).toEqual(before);
   });
 });

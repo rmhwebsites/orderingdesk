@@ -8,6 +8,7 @@ import { and, asc, count, eq, inArray, notExists, sql } from "drizzle-orm";
 import type { Db } from "@/db";
 import { applyBatch } from "@/db/batch";
 import { orders, statuses } from "@/db/schema";
+import { SHOPIFY_TAG_MAX, STATUS_LABEL_MAX, STATUS_TAG_PREFIX } from "@/lib/status-label";
 import { isRecord, statusView, type StatusView } from "./shapes";
 
 // Design token names; Phase 5 defines a light and a dark value for each. The
@@ -25,7 +26,9 @@ export const STATUS_COLORS = [
   "pink",
 ] as const;
 export const STATUS_LIST_MAX = 20;
-const LABEL_MAX = 40;
+// 25: the label becomes the Shopify order tag "Ordering Desk: <label>",
+// which Shopify caps at 40 characters (src/lib/status-label.ts).
+export { STATUS_LABEL_MAX };
 // The Shopify states a status may mirror (platform amendment section 4).
 export const SHOPIFY_LINKS = ["fulfilled", "delivered"] as const;
 export type ShopifyLink = (typeof SHOPIFY_LINKS)[number];
@@ -62,8 +65,8 @@ function parseEntries(body: unknown): Entry[] | string {
       return `${position} must be an object`;
     }
     const label = typeof raw.label === "string" ? raw.label.trim() : "";
-    if (label.length === 0 || label.length > LABEL_MAX) {
-      return `${position}: the label must be 1 to ${LABEL_MAX} characters`;
+    if (label.length === 0 || label.length > STATUS_LABEL_MAX) {
+      return `${position}: the label must be 1 to ${STATUS_LABEL_MAX} characters (Shopify tags hold ${SHOPIFY_TAG_MAX}, and "${STATUS_TAG_PREFIX}" takes ${STATUS_TAG_PREFIX.length})`;
     }
     const color = raw.color;
     if (typeof color !== "string" || !(STATUS_COLORS as readonly string[]).includes(color)) {
