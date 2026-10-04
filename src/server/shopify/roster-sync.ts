@@ -17,11 +17,18 @@
 // Customer webhooks apply one customer as Shopify has it now
 // (applyRosterCustomer, after a re-fetch); the cron run reconciles the
 // whole roster (syncRoster) so missed webhooks heal. Emails are lowercased.
+//
+// - Disconnecting the store (deleteConnection) takes away every access a
+//   tag gave in the workspace (clearShopifyAccess): with the store
+//   disconnected nothing would ever revoke it again. Both writers check
+//   the connection again after writing and take back what they wrote when
+//   the store was disconnected meanwhile, so no tag-based access outlives
+//   a disconnect. A reconnect grants it again at the next roster sync.
 
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "../../db";
 import { applyBatch, rowsAffected } from "../../db/batch";
-import { shopifyRoster, user, workspaceMembers, workspaces, type RosterTags } from "../../db/schema";
+import { shopifyRoster, storeConnections, user, workspaceMembers, workspaces, type RosterTags } from "../../db/schema";
 import { resolveRosterTags } from "../roster";
 import { failureText, fetchTaggedCustomers, type RosterCustomer } from "./admin";
 import { getAccessToken } from "./token";
@@ -123,6 +130,41 @@ async function revoke(db: Db, workspaceId: string, email: string, userId: string
   return userId !== undefined && rowsAffected(results[1], "roster") > 0;
 }
 
+// Takes away every access a Shopify tag gave in this workspace: its roster
+// rows and every source = shopify membership (manual ones stay). Answers
+// the users whose membership went, for the caller to close their sockets.
+export async function clearShopifyAccess(db: Db, workspaceId: string): Promise<string[]> {
+  const results = await applyBatch(db, [
+    db.delete(shopifyRoster).where(eq(shopifyRoster.workspaceId, workspaceId)),
+    db
+      .delete(workspaceMembers)
+      .where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.source, "shopify")))
+      .returning({ userId: workspaceMembers.userId }),
+  ]);
+  const removed = Array.isArray(results[1]) ? (results[1] as Array<{ userId: string }>) : [];
+  return removed.map((row) => row.userId);
+}
+
+async function storeConnected(db: Db, workspaceId: string): Promise<boolean> {
+  const rows = await db
+    .select({ status: storeConnections.status })
+    .from(storeConnections)
+    .where(eq(storeConnections.workspaceId, workspaceId))
+    .limit(1);
+  return rows[0] !== undefined && rows[0].status !== "disabled";
+}
+
+// After a roster write: when the store is no longer connected (it was
+// disconnected while this ran), take back every tag-based access, this
+// write's included. The disconnect disables the store before it clears,
+// so whichever runs last leaves nothing behind.
+async function afterRosterWrite(db: Db, workspaceId: string, revoked: string[]): Promise<string[]> {
+  if (await storeConnected(db, workspaceId)) {
+    return revoked;
+  }
+  return [...new Set([...revoked, ...(await clearShopifyAccess(db, workspaceId))])];
+}
+
 // One customer as Shopify has it now (null: the customer no longer exists).
 // customerId is the numeric Shopify id the webhook named. Answers the users
 // whose shopify membership went.
@@ -153,7 +195,7 @@ export async function applyRosterCustomer(
   if (email && role) {
     await grant(db, workspaceId, email, role, customerId, now, users.get(email));
   }
-  return revoked;
+  return afterRosterWrite(db, workspaceId, revoked);
 }
 
 export type RosterSyncResult =
@@ -217,12 +259,13 @@ export async function syncRoster(
   for (const [email, entry] of desired) {
     await grant(db, workspaceId, email, entry.role, entry.customerId, now, users.get(email));
   }
-  const revokedUserIds: string[] = [];
+  const revoked: string[] = [];
   for (const email of stale) {
     const userId = users.get(email);
     if (await revoke(db, workspaceId, email, userId)) {
-      revokedUserIds.push(userId!);
+      revoked.push(userId!);
     }
   }
+  const revokedUserIds = await afterRosterWrite(db, workspaceId, revoked);
   return { kind: "ok", complete: fetched.complete, entries: desired.size, removed: stale.length, revokedUserIds };
 }

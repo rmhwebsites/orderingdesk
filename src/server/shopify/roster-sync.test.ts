@@ -5,6 +5,7 @@ import * as schema from "@/db/schema";
 import { encryptSecret } from "@/server/crypto";
 import { claimAccessOnSignIn } from "@/server/invites";
 import { openTestDb, seedMember, seedUser, seedWorkspace } from "@/server/desk/test-helpers";
+import { deleteConnection } from "@/server/desk/connection";
 import { applyRosterCustomer, rosterRoleFor, syncRoster } from "./roster-sync";
 
 // Tagged Shopify customers as workspace members (platform amendment
@@ -132,6 +133,14 @@ describe("applyRosterCustomer", () => {
 
   it("only touches its own workspace, and skips a customer without an email", async () => {
     const db = await setup();
+    // Roster writes only happen for a connected store (a webhook or the
+    // sync), and one that finds its store disconnected takes itself back.
+    await db.insert(schema.storeConnections).values({
+      workspaceId: OTHER,
+      shopDomain: "other-store.myshopify.com",
+      encryptedToken: await encryptSecret("shpat_other_token", KEY, OTHER),
+      status: "ok",
+    });
     await seedUser(db, "u_jo", "jo@impact.example");
     await applyRosterCustomer(db, OTHER, "9", customer("9", "jo@impact.example", ["Ordering Desk Staff"]), NOW);
     await applyRosterCustomer(db, WS, "501", customer("501", "jo@impact.example", ["Ordering Desk Staff"]), NOW);
@@ -140,6 +149,15 @@ describe("applyRosterCustomer", () => {
     expect(await membership(db, "u_jo", OTHER)).toEqual({ role: "staff", source: "shopify" });
     await applyRosterCustomer(db, WS, "777", customer("777", null, ["Ordering Desk Manager"]), NOW);
     expect(await roster(db)).toEqual([]);
+  });
+
+  it("takes back what it granted when the store is no longer connected", async () => {
+    const db = await setup({ connection: "disabled" });
+    await seedUser(db, "u_jo", "jo@impact.example");
+    const revoked = await applyRosterCustomer(db, WS, "501", customer("501", "jo@impact.example", ["Ordering Desk Staff"]), NOW);
+    expect(revoked).toEqual(["u_jo"]);
+    expect(await roster(db)).toEqual([]);
+    expect(await membership(db, "u_jo")).toBeUndefined();
   });
 
   it("uses the workspace's own tag names", async () => {
@@ -247,6 +265,23 @@ describe("syncRoster", () => {
     });
     expect(await roster(db)).toEqual([]);
     expect(await membership(db, "u_jo")).toEqual({ role: "manager", source: "manual" });
+  });
+
+  // The roster writes after a slow Shopify read; if the store was
+  // disconnected meanwhile (which clears every tag-based access), what the
+  // run wrote is taken back, so nothing tag-based survives a disconnect.
+  it("takes back what it granted when the store was disconnected while it read Shopify", async () => {
+    const db = await setup();
+    await seedUser(db, "u_jo", "jo@impact.example");
+    const shop = customerPages([[node(501, "jo@impact.example", ["Ordering Desk Staff"])]]);
+    const racing = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      await deleteConnection(db, WS);
+      return shop.impl(input, init);
+    }) as typeof fetch;
+    const result = await syncRoster(db, env, WS, { fetchImpl: racing, now: () => NOW });
+    expect(result).toMatchObject({ kind: "ok", revokedUserIds: ["u_jo"] });
+    expect(await roster(db)).toEqual([]);
+    expect(await membership(db, "u_jo")).toBeUndefined();
   });
 
   it("skips a workspace without a connected store", async () => {

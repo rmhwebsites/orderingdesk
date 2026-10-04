@@ -10,7 +10,8 @@ import {
   normalizeToken,
   saveConnection,
 } from "./connection";
-import { openTestDb, seedOrder, seedWorkspace } from "./test-helpers";
+import { canCreateAccount } from "@/server/access";
+import { openTestDb, seedMember, seedOrder, seedUser, seedWorkspace } from "./test-helpers";
 
 const WS = "ws_impact";
 const OTHER = "ws_other";
@@ -568,8 +569,8 @@ describe("deleteConnection", () => {
     expect(orders.map((o) => o.id)).toEqual(["o1"]);
 
     // Idempotent, and a no-op without a connection.
-    await expect(deleteConnection(db, WS)).resolves.toBeUndefined();
-    await expect(deleteConnection(db, OTHER)).resolves.toBeUndefined();
+    await expect(deleteConnection(db, WS)).resolves.toEqual({ revokedUserIds: [] });
+    await expect(deleteConnection(db, OTHER)).resolves.toEqual({ revokedUserIds: [] });
     expect(await connectionRow(db, OTHER)).toBeUndefined();
   });
 
@@ -578,6 +579,47 @@ describe("deleteConnection", () => {
     await seedConnection(db);
     await deleteConnection(db, OTHER);
     expect((await connectionRow(db)).status).toBe("error");
+  });
+
+  // Once disconnected, neither the roster sync nor the customer webhooks run
+  // for the store, so a tag removed in Shopify could never revoke anything:
+  // the disconnect itself takes away every access a tag gave here. A
+  // reconnect grants it again at the next roster sync.
+  it("takes away every access a Shopify tag gave in this workspace, and answers whose membership went", async () => {
+    const db = await setup();
+    await seedConnection(db, { status: "ok" });
+    await seedUser(db, "u_tagged", "tagged@example.com");
+    await seedUser(db, "u_manual", "manual@example.com");
+    await seedUser(db, "u_elsewhere", "elsewhere@example.com");
+    await seedMember(db, WS, "u_tagged", "manager", "shopify");
+    await seedMember(db, WS, "u_manual", "staff", "manual");
+    await seedMember(db, OTHER, "u_elsewhere", "staff", "shopify");
+    const rosterRow = (id: string, workspaceId: string, email: string) => ({
+      id,
+      workspaceId,
+      email,
+      role: "staff" as const,
+      shopifyCustomerId: id,
+      updatedAt: 1,
+    });
+    await db.insert(schema.shopifyRoster).values([
+      rosterRow("r1", WS, "tagged@example.com"),
+      rosterRow("r2", WS, "newhire@example.com"),
+      rosterRow("r3", OTHER, "elsewhere@example.com"),
+    ]);
+
+    expect(await deleteConnection(db, WS)).toEqual({ revokedUserIds: ["u_tagged"] });
+    const members = await db
+      .select({ userId: schema.workspaceMembers.userId, workspaceId: schema.workspaceMembers.workspaceId })
+      .from(schema.workspaceMembers);
+    expect(members.sort((a, b) => a.userId.localeCompare(b.userId))).toEqual([
+      { userId: "u_elsewhere", workspaceId: OTHER },
+      { userId: "u_manual", workspaceId: WS },
+    ]);
+    const rosterLeft = await db.select({ email: schema.shopifyRoster.email }).from(schema.shopifyRoster);
+    expect(rosterLeft).toEqual([{ email: "elsewhere@example.com" }]);
+    // A roster email of this workspace can no longer create an account.
+    expect(await canCreateAccount(db, {}, "newhire@example.com")).toBe(false);
   });
 
   it("lets the same store reconnect and re-enables it with sync progress kept", async () => {

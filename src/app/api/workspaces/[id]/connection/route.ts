@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { kickUsers } from "@/server/broadcast";
 import { deleteConnection, saveConnection } from "@/server/desk/connection";
 import { guardResponse, requireMember } from "@/server/guard";
 
@@ -56,12 +57,14 @@ export async function PUT(request: Request, context: RouteContext) {
 
 // Disconnects the store: the connection row stays, disabled, with every
 // stored secret cleared, so the one-store-per-workspace rule survives (see
-// deleteConnection). Orders stay.
+// deleteConnection). Orders stay. Every access a Shopify tag gave here goes
+// too, and those people's open sockets are closed.
 export async function DELETE(_request: Request, context: RouteContext) {
   try {
     const { id } = await context.params;
-    const { db } = await requireMember(id, "platform");
-    await deleteConnection(db, id);
+    const { db, env } = await requireMember(id, "platform");
+    const { revokedUserIds } = await deleteConnection(db, id);
+    await kickUsers(env, id, revokedUserIds);
     return NextResponse.json({ ok: true });
   } catch (e) {
     return guardResponse(e);

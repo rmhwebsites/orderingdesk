@@ -16,6 +16,7 @@ import type { Db } from "@/db";
 import { orders, storeConnections } from "@/db/schema";
 import { encryptSecret } from "@/server/crypto";
 import { failureText, replaceWebhookSubscriptions, webhookCallbackUrl } from "@/server/shopify/admin";
+import { clearShopifyAccess } from "@/server/shopify/roster-sync";
 import { isValidShopDomain, mintAccessToken, testShopConnection } from "@/server/shopify/client";
 import { isRecord } from "./shapes";
 
@@ -466,7 +467,16 @@ export async function saveConnection(
 // progress (lastSyncAt, cursor) stays, so reconnecting the same store
 // resumes where it left off. Orders and their history stay. A no-op for a
 // workspace with no connection.
-export async function deleteConnection(db: Db, workspaceId: string): Promise<void> {
+//
+// It also takes away every access a Shopify tag gave in the workspace
+// (clearShopifyAccess): with the store disconnected, neither the roster
+// sync nor the customer webhooks run, so a removed tag could otherwise
+// never revoke anything again. Manual members stay; tagged customers get
+// their access back at the first roster sync after a reconnect. Answers
+// the users whose membership went, for the caller to close their sockets.
+// The store is disabled first: a roster write running at the same time
+// then sees it disabled and takes back what it wrote (roster-sync.ts).
+export async function deleteConnection(db: Db, workspaceId: string): Promise<{ revokedUserIds: string[] }> {
   await db
     .update(storeConnections)
     .set({
@@ -482,4 +492,5 @@ export async function deleteConnection(db: Db, workspaceId: string): Promise<voi
       runningUntil: 0,
     })
     .where(eq(storeConnections.workspaceId, workspaceId));
+  return { revokedUserIds: await clearShopifyAccess(db, workspaceId) };
 }
