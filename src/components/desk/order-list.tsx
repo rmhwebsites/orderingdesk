@@ -11,6 +11,8 @@ type ListProps = {
   statuses: StatusView[];
   flashing: Set<string>;
   rowErrors: Record<string, string>;
+  // Orders whose status change is saving.
+  savingIds: ReadonlySet<string>;
   onOpen: (orderId: string) => void;
   onChangeStatus: (orderId: string, statusKey: string) => void;
 };
@@ -50,7 +52,7 @@ function Total({ order }: { order: OrderSummary }) {
 }
 
 // Table at 880px and up.
-export function OrderTable({ orders, statuses, flashing, rowErrors, onOpen, onChangeStatus }: ListProps) {
+export function OrderTable({ orders, statuses, flashing, rowErrors, savingIds, onOpen, onChangeStatus }: ListProps) {
   return (
     <div className="hidden overflow-hidden rounded-panel border border-line bg-surface shadow-panel desk:block">
       <table className="w-full table-fixed border-collapse text-left">
@@ -114,6 +116,7 @@ export function OrderTable({ orders, statuses, flashing, rowErrors, onOpen, onCh
                     value={order.statusKey}
                     onChange={(key) => onChangeStatus(order.id, key)}
                     label={`Status for order ${order.name}`}
+                    busy={savingIds.has(order.id)}
                   />
                   <RowError message={rowErrors[order.id]} />
                 </td>
@@ -128,7 +131,7 @@ export function OrderTable({ orders, statuses, flashing, rowErrors, onOpen, onCh
 
 // Cards below 880px. The order number is a stretched button over the card;
 // the status control sits above it so both stay usable.
-export function OrderCards({ orders, statuses, flashing, rowErrors, onOpen, onChangeStatus }: ListProps) {
+export function OrderCards({ orders, statuses, flashing, rowErrors, savingIds, onOpen, onChangeStatus }: ListProps) {
   return (
     <ul className="flex flex-col gap-2 desk:hidden">
       {orders.map((order) => (
@@ -164,6 +167,7 @@ export function OrderCards({ orders, statuses, flashing, rowErrors, onOpen, onCh
                 value={order.statusKey}
                 onChange={(key) => onChangeStatus(order.id, key)}
                 label={`Status for order ${order.name}`}
+                busy={savingIds.has(order.id)}
               />
               <RowError message={rowErrors[order.id]} />
             </div>

@@ -8,7 +8,8 @@ export default function NotFound() {
       <p className="text-sm font-medium text-ink-2">{APP_NAME}</p>
       <h1 className="font-display text-2xl font-semibold tracking-tight">This page is not here</h1>
       <p className="text-sm text-ink-2">
-        The link may be old, or this workspace is not shared with your account. Ask your manager to invite you.
+        The link may be old or mistyped. If it is for a workspace you expected to open, ask your manager to invite
+        you.
       </p>
       <Link href="/" className={`${ui.buttonSecondary} self-start`}>
         Go to your workspaces

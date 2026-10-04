@@ -91,6 +91,9 @@ export function Desk() {
   const deskRef = useRef(desk);
   const [filter, setFilter] = useState<DeskFilter>({ query: "", statusKey: null, sort: "newest" });
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
+  // Orders whose status change is saving: their status control saves
+  // nothing else meanwhile (src/lib/status-commit.ts).
+  const [savingIds, setSavingIds] = useState<ReadonlySet<string>>(() => new Set());
   const [flashing, setFlashing] = useState<Set<string>>(() => new Set());
 
   // Drawer state. drawerOrderId outlives openOrderId through the closing
@@ -351,6 +354,7 @@ export function Desk() {
         commit(optimistic.state);
       }
       pendingStatus.current.set(orderId, nextKey);
+      setSavingIds((current) => new Set(current).add(orderId));
       try {
         const response = await fetch(`/api/orders/${encodeURIComponent(orderId)}/status`, {
           method: "POST",
@@ -387,6 +391,12 @@ export function Desk() {
           commit(rollbackStatus(deskRef.current, orderId, nextKey, optimistic.previousKey));
         }
         setRowErrors((current) => ({ ...current, [orderId]: "Not saved. Try again." }));
+      } finally {
+        setSavingIds((current) => {
+          const next = new Set(current);
+          next.delete(orderId);
+          return next;
+        });
       }
     },
     [commit, applyEvent, statuses, toast],
@@ -490,6 +500,7 @@ export function Desk() {
                   statuses={statuses}
                   flashing={flashing}
                   rowErrors={rowErrors}
+                  savingIds={savingIds}
                   onOpen={openOrder}
                   onChangeStatus={changeStatus}
                 />
@@ -498,6 +509,7 @@ export function Desk() {
                   statuses={statuses}
                   flashing={flashing}
                   rowErrors={rowErrors}
+                  savingIds={savingIds}
                   onOpen={openOrder}
                   onChangeStatus={changeStatus}
                 />
@@ -522,6 +534,7 @@ export function Desk() {
             timelineStatus={timelineStatus}
             statuses={statuses}
             rowError={rowErrors[drawerOrderId]}
+            statusBusy={savingIds.has(drawerOrderId)}
             members={members}
             selfUserId={userId}
             shopDomain={connection?.shopDomain ?? null}

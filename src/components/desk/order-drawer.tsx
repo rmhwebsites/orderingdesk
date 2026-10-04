@@ -431,6 +431,7 @@ export function OrderDrawerContent({
   timelineStatus,
   statuses,
   rowError,
+  statusBusy = false,
   members,
   selfUserId,
   shopDomain,
@@ -446,6 +447,8 @@ export function OrderDrawerContent({
   timelineStatus: "loading" | "error" | "ready";
   statuses: StatusView[];
   rowError?: string;
+  // A status change for this order is saving.
+  statusBusy?: boolean;
   members: Map<string, MemberView>;
   selfUserId: string;
   shopDomain: string | null;
@@ -521,6 +524,7 @@ export function OrderDrawerContent({
               onChange={onChangeStatus}
               label={`Status for order ${name}`}
               size="md"
+              busy={statusBusy}
             />
             {shopifyUrl ? (
               <a href={shopifyUrl} target="_blank" rel="noopener noreferrer" className={`${ui.buttonSecondary} h-9`}>
