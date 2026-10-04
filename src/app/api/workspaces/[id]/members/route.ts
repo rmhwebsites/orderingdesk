@@ -10,9 +10,11 @@ type RouteContext = { params: Promise<{ id: string }> };
 
 // Any member: {members: [{userId, role, source, email, name}]}. Managers and
 // platform admins also get {invites: [{email, role, createdAt}]} and the
-// Shopify tag requests {requests: {waiting, denied}}, each entry {id,
-// email, role (asked for by the tag), currentRole (granted now, or null),
-// since, deniedAt} (approve or deny them at .../roster/<id>/approve|deny).
+// Shopify tag requests {requests: {waiting, denied, approved}} (approved:
+// nobody with the email belongs here yet; they join at their next sign-in),
+// each entry {id, email, role (asked for by the tag), currentRole (granted
+// now, or null), since, deniedAt} (approve or deny them at
+// .../roster/<id>/approve|deny; denying an approved one revokes it).
 export async function GET(_request: Request, context: RouteContext) {
   try {
     const { id } = await context.params;

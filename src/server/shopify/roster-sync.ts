@@ -8,11 +8,13 @@
 // this into the custom worker entrypoint.
 //
 // - Requesting: the customer's email goes on shopify_roster with the role,
-//   unapproved. An approved row grants its approved role: a user who
-//   already has an account holds it as a source = shopify membership, a new
-//   email gets it at first sign-in (claimAccessOnSignIn). Each write here
-//   brings that membership in line with the row: a lowered tag lowers it at
-//   once, a raised tag leaves it until the raise is approved.
+//   unapproved. An approved row grants its approved role, claimed by the
+//   person at their next sign-in or "/" load (claimAccessOnSignIn), account
+//   or not: nothing here ever adds a membership, so neither approving nor a
+//   sync shows a manager which emails have an account. Each write here
+//   brings an EXISTING shopify membership in line with the row: a lowered
+//   tag lowers it at once, a raised tag leaves it until the raise is
+//   approved.
 // - The same email on another customer means the old customer was deleted
 //   (a missed customers/delete): the row starts over, unapproved, and the
 //   membership goes.
@@ -39,7 +41,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "../../db";
 import { applyBatch, rowsAffected } from "../../db/batch";
 import { shopifyRoster, storeConnections, user, workspaceMembers, workspaces, type RosterTags } from "../../db/schema";
-import { grantMembershipFromRoster, resolveRosterTags, revokeUngrantedMembership } from "../roster";
+import { alignMembershipWithRoster, resolveRosterTags, revokeUngrantedMembership } from "../roster";
 import { failureText, fetchTaggedCustomers, type RosterCustomer } from "./admin";
 import { getAccessToken } from "./token";
 
@@ -80,8 +82,9 @@ async function userIdsByEmail(db: Db, emails: string[]): Promise<Map<string, str
 }
 
 // The roster row for this email with this role and customer, then the
-// existing user's shopify membership brought in line with what the row
-// grants (a manual one is left as it is). A new row waits for approval. On
+// existing user's shopify membership, if they have one, brought in line
+// with what the row grants (never added here; a manual one is left as it
+// is). A new row waits for approval. On
 // an existing row:
 // - the same customer with another role: a lowered role lowers the
 //   approved role (manager approval covers staff); a raised one keeps it,
@@ -120,7 +123,7 @@ async function grant(
   ];
   if (userId) {
     statements.push(
-      grantMembershipFromRoster(db, workspaceId, email, userId),
+      alignMembershipWithRoster(db, workspaceId, email, userId),
       revokeUngrantedMembership(db, workspaceId, email, userId),
     );
   }

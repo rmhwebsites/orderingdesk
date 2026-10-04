@@ -63,6 +63,7 @@ describe("loadSettingsPage", () => {
     expect(page.team?.requests).toEqual({
       waiting: [{ id: "r_asks", email: "asks@example.com", role: "manager", currentRole: null, since: 1, deniedAt: null }],
       denied: [],
+      approved: [],
     });
     expect(page.statuses?.map((status) => status.key)).toEqual(["new", "processing", "approved", "shipped"]);
     expect(page.notifications).toEqual({ notificationEmails: [], poPrefix: "PO", replyTo: null, fromName: null });

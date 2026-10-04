@@ -4,6 +4,7 @@ import type { Db } from "@/db";
 import * as schema from "@/db/schema";
 import { encryptSecret } from "@/server/crypto";
 import { openTestDb, seedUser, seedWorkspace } from "@/server/desk/test-helpers";
+import { claimAccessOnSignIn } from "@/server/invites";
 import { approveRosterEntry } from "@/server/roster";
 import type { LiveEvent } from "@/lib/live-events";
 import { normalizeOrders } from "./normalize";
@@ -441,7 +442,10 @@ describe("receiveShopifyWebhook: customers", () => {
     expect(await rosterEmails(db)).toEqual([["jo@impact.example", "manager"]]);
     expect(await db.select().from(schema.workspaceMembers).where(eq(schema.workspaceMembers.userId, "u_jo"))).toEqual([]);
 
+    // Approving adds nobody: Jo joins at the next sign-in or "/" load.
     await approveAll(db);
+    expect(await db.select().from(schema.workspaceMembers).where(eq(schema.workspaceMembers.userId, "u_jo"))).toEqual([]);
+    await claimAccessOnSignIn(db, "u_jo", "jo@impact.example");
     const members = await db.select().from(schema.workspaceMembers).where(eq(schema.workspaceMembers.userId, "u_jo"));
     expect(members).toMatchObject([{ workspaceId: WS, role: "manager", source: "shopify" }]);
 
@@ -463,6 +467,7 @@ describe("receiveShopifyWebhook: customers", () => {
     await (await deliver(db, env, { topic: "customers/create", payload: { id: 501 }, webhookId: "c1" }, shop.impl)).work?.();
     expect(await rosterEmails(db)).toHaveLength(1);
     await approveAll(db);
+    await claimAccessOnSignIn(db, "u_jo", "jo@impact.example");
     expect(kicks).toEqual([]);
     await (await deliver(db, env, { topic: "customers/delete", payload: { id: 501 }, webhookId: "c2" })).work?.();
     expect(kicks).toEqual([{ room: WS, userId: "u_jo" }]);

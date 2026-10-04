@@ -7,8 +7,11 @@ type RouteContext = { params: Promise<{ id: string; rosterId: string }> };
 // Managers and platform admins of the workspace (404 for anyone else, 401
 // signed out). Approves a Shopify tag request of THIS workspace (an entry of
 // another workspace is a 404, like a missing one), a denied one included:
-// the tag then grants its role, and an existing user gets the membership at
-// once. Optional body {role}: the role the manager saw; when the tag now
+// the tag then grants its role, which the person claims at their next
+// sign-in or "/" load. Nobody is added here, so the answer and the Team list
+// are the same whether or not the email has an account (someone already a
+// shopify member here takes an approved raise at once). Optional body
+// {role}: the role the manager saw; when the tag now
 // asks for another one the answer is 409 and nothing is approved. 200 {ok,
 // role}; 400 {error}; 404; 409 {error}.
 export async function POST(request: Request, context: RouteContext) {

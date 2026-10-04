@@ -28,7 +28,9 @@ import {
 
 type TeamData = { members: MemberView[]; invites: PendingInviteView[]; requests: RosterRequests; rosterTags: RosterTags };
 
-const NO_REQUESTS: RosterRequests = { waiting: [], denied: [] };
+const NO_REQUESTS: RosterRequests = { waiting: [], denied: [], approved: [] };
+
+type RequestList = "waiting" | "denied" | "approved";
 
 // Why a tag needs approving, said once where the tags are explained.
 const TAG_APPROVAL =
@@ -144,18 +146,20 @@ function MemberRow({
 }
 
 // One Shopify tag request: the email, the role its tag asks for (and what
-// they keep meanwhile when it raises an approved role), since when, and
-// Approve. Waiting requests also offer Deny, behind the confirmation step.
+// they keep meanwhile when it raises an approved role), since when, and its
+// controls. Waiting: Approve, and Deny behind the confirmation step. Denied:
+// Approve. Approved but nobody has signed in for it yet: Revoke, behind the
+// confirmation step, which denies it.
 function RequestRow({
   request,
-  denied,
+  list,
   busy,
   showDates,
   onApprove,
   onDeny,
 }: {
   request: RosterRequestView;
-  denied: boolean;
+  list: RequestList;
   // The decision running for this request, if any.
   busy: "approve" | "deny" | null;
   showDates: boolean;
@@ -164,8 +168,10 @@ function RequestRow({
 }) {
   const [confirming, setConfirming] = useState(false);
   const denyRef = useRef<HTMLButtonElement>(null);
-  const raise = request.currentRole !== null && request.currentRole !== request.role;
-  const when = denied ? request.deniedAt : request.since;
+  const raise = list === "waiting" && request.currentRole !== null && request.currentRole !== request.role;
+  const when = list === "denied" ? request.deniedAt : request.since;
+  const whenLabel = list === "denied" ? "denied" : list === "approved" ? "approved" : "since";
+  const revoke = list === "approved";
   return (
     <li data-request={request.id} className="flex flex-col gap-3 py-3 first:pt-0 last:pb-0">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
@@ -174,29 +180,31 @@ function RequestRow({
           <p className="text-sm text-ink-2">
             {roleLabel(request.role)} tag
             {raise && request.currentRole ? `, ${roleLabel(request.currentRole).toLowerCase()} until approved` : ""}
-            {showDates && when !== null ? `, ${denied ? "denied" : "since"} ${formatDate(when)}` : ""}
+            {showDates && when !== null ? `, ${whenLabel} ${formatDate(when)}` : ""}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <button
-            type="button"
-            disabled={busy !== null}
-            onClick={onApprove}
-            className={ui.buttonSecondary}
-            aria-label={`Approve ${request.email} as ${request.role}`}
-          >
-            {busy === "approve" ? "Approving" : "Approve"}
-          </button>
-          {denied ? null : (
+          {revoke ? null : (
+            <button
+              type="button"
+              disabled={busy !== null}
+              onClick={onApprove}
+              className={ui.buttonSecondary}
+              aria-label={`Approve ${request.email} as ${request.role}`}
+            >
+              {busy === "approve" ? "Approving" : "Approve"}
+            </button>
+          )}
+          {list === "denied" ? null : (
             <button
               ref={denyRef}
               type="button"
               disabled={busy !== null}
               onClick={() => setConfirming(true)}
               className={ui.buttonQuiet}
-              aria-label={`Deny ${request.email}`}
+              aria-label={revoke ? `Revoke the approval for ${request.email}` : `Deny ${request.email}`}
             >
-              Deny
+              {revoke ? "Revoke" : "Deny"}
             </button>
           )}
         </div>
@@ -204,12 +212,14 @@ function RequestRow({
       {confirming ? (
         <ConfirmStep
           message={
-            raise && request.currentRole
-              ? `Deny ${request.email}? They also lose the ${roleLabel(request.currentRole).toLowerCase()} access they have now, including any open tabs, until the tag is removed in Shopify and added again.`
-              : `Deny ${request.email}? Their tag gives no access here until it is removed in Shopify and added again.`
+            revoke
+              ? `Revoke the approval for ${request.email}? Their tag gives no access here until it is removed in Shopify and added again.`
+              : raise && request.currentRole
+                ? `Deny ${request.email}? They also lose the ${roleLabel(request.currentRole).toLowerCase()} access they have now, including any open tabs, until the tag is removed in Shopify and added again.`
+                : `Deny ${request.email}? Their tag gives no access here until it is removed in Shopify and added again.`
           }
-          confirmLabel="Deny"
-          busyLabel="Denying"
+          confirmLabel={revoke ? "Revoke" : "Deny"}
+          busyLabel={revoke ? "Revoking" : "Denying"}
           busy={busy === "deny"}
           onConfirm={() => {
             onDeny();
@@ -353,12 +363,18 @@ export function TeamSection({
     return next;
   }
 
-  // Approve or deny a Shopify tag request. Approve names the role the
-  // manager saw, so a tag changed meanwhile is refused (409), not approved.
+  // Approve or deny a Shopify tag request (Revoke on an approved one is a
+  // deny). Approve names the role the manager saw, so a tag changed
+  // meanwhile is refused (409), not approved.
   async function decide(target: RosterRequestView, action: "approve" | "deny") {
     setRequestBusy({ id: target.id, action });
     setRequestError(null);
-    const index = team.requests.waiting.findIndex((entry) => entry.id === target.id);
+    const from: RequestList = team.requests.waiting.some((entry) => entry.id === target.id)
+      ? "waiting"
+      : team.requests.approved.some((entry) => entry.id === target.id)
+        ? "approved"
+        : "denied";
+    const index = from === "denied" ? -1 : team.requests[from].findIndex((entry) => entry.id === target.id);
     const result = await requestJson<{ ok: true }>(
       `/api/workspaces/${encodeURIComponent(workspaceId)}/roster/${encodeURIComponent(target.id)}/${action}`,
       { method: "POST", json: action === "approve" ? { role: target.role } : {} },
@@ -370,7 +386,7 @@ export function TeamSection({
     setRequestBusy(null);
     if (!result.ok) {
       // Back to the control that was used (Deny's step has closed).
-      const label = action === "approve" ? "Approve" : "Deny";
+      const label = action === "approve" ? "Approve" : from === "approved" ? "Revoke" : "Deny";
       focusSoon(() =>
         document
           .querySelector(`[data-request="${CSS.escape(target.id)}"]`)
@@ -378,9 +394,9 @@ export function TeamSection({
       );
       return;
     }
-    // The request left the waiting list (or the denied one): the request
-    // that took its place, else the list's heading.
-    const ids = (next ?? team).requests.waiting.map((entry) => entry.id);
+    // The request left its list: the request that took its place there,
+    // else the panel's heading.
+    const ids = from === "denied" ? [] : (next ?? team).requests[from].map((entry) => entry.id);
     focusSoon(
       () =>
         (index !== -1 ? rowControl("request", ids, index) : null) ??
@@ -491,7 +507,7 @@ export function TeamSection({
         ) : null}
       </Panel>
 
-      {team.requests.waiting.length > 0 || team.requests.denied.length > 0 ? (
+      {team.requests.waiting.length > 0 || team.requests.denied.length > 0 || team.requests.approved.length > 0 ? (
         <Panel className="flex flex-col gap-3">
           <div>
             <h3
@@ -503,7 +519,8 @@ export function TeamSection({
               {team.requests.waiting.length > 0 ? <ToneChip tone="amber">{team.requests.waiting.length}</ToneChip> : null}
             </h3>
             <p className="mt-1 text-sm text-ink-2">
-              From Shopify customer tags. Approve and the tag gives that role here; deny and it gives nothing.
+              From Shopify customer tags. Approve and the tag gives that role here from the person&apos;s next sign-in;
+              deny and it gives nothing.
             </p>
           </div>
           {team.requests.waiting.length === 0 ? (
@@ -514,7 +531,7 @@ export function TeamSection({
                 <RequestRow
                   key={entry.id}
                   request={entry}
-                  denied={false}
+                  list="waiting"
                   busy={requestBusy?.id === entry.id ? requestBusy.action : null}
                   showDates={now > 0}
                   onApprove={() => void decide(entry, "approve")}
@@ -523,6 +540,25 @@ export function TeamSection({
               ))}
             </ul>
           )}
+          {team.requests.approved.length > 0 ? (
+            <div className="flex flex-col gap-2 border-t border-line pt-3">
+              <h4 className="text-sm font-semibold text-ink">Approved, waiting to sign in</h4>
+              <p className="text-sm text-ink-2">They join the team the next time they sign in.</p>
+              <ul className="flex flex-col divide-y divide-line">
+                {team.requests.approved.map((entry) => (
+                  <RequestRow
+                    key={entry.id}
+                    request={entry}
+                    list="approved"
+                    busy={requestBusy?.id === entry.id ? requestBusy.action : null}
+                    showDates={now > 0}
+                    onApprove={() => {}}
+                    onDeny={() => void decide(entry, "deny")}
+                  />
+                ))}
+              </ul>
+            </div>
+          ) : null}
           {requestError ? <InlineMessage tone="bad">{requestError}</InlineMessage> : null}
           {team.requests.denied.length > 0 ? (
             <details className="border-t border-line pt-3">
@@ -532,7 +568,7 @@ export function TeamSection({
                   <RequestRow
                     key={entry.id}
                     request={entry}
-                    denied
+                    list="denied"
                     busy={requestBusy?.id === entry.id ? requestBusy.action : null}
                     showDates={now > 0}
                     onApprove={() => void decide(entry, "approve")}

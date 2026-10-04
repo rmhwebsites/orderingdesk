@@ -13,8 +13,14 @@
 // - A new roster row waits (approved_role null) and grants nothing: no
 //   sign-in email, no account, no membership.
 // - Approving sets approved_role to the row's role; the row then grants
-//   that role (an existing user gets the membership at once, a new email
-//   at first sign-in).
+//   that role the way an invite does: the person claims the membership at
+//   their next sign-in or "/" load (claimAccessOnSignIn), whether or not
+//   they already have an account. Approving never adds anyone itself: that
+//   would show the manager which emails have an account (and their names,
+//   in the Team list), and add a person who did nothing. Until it is
+//   claimed, Settings > Team lists the request as approved, the same either
+//   way. Only someone already a shopify member here sees an approval at
+//   once (an approved raise takes their membership up).
 // - A raised tag (staff to manager) keeps the staff approval, so the
 //   membership stays staff while the raise waits for its own approval. A
 //   lowered tag lowers approved_role and the membership at once.
@@ -27,7 +33,7 @@
 // Relative imports on purpose: the cron roster sync
 // (src/server/shopify/roster-sync.ts) bundles this into the custom worker.
 
-import { and, asc, eq, isNotNull, isNull, notExists, or, ne, sql } from "drizzle-orm";
+import { and, asc, eq, exists, isNotNull, isNull, not, notExists, or, ne, sql } from "drizzle-orm";
 import type { Db } from "../db";
 import { applyBatch, rowsAffected } from "../db/batch";
 import { shopifyRoster, user, workspaceMembers, workspaces, type RosterTags } from "../db/schema";
@@ -111,7 +117,8 @@ export function rosterGrants() {
 // manager's invite outranks a tag), and nothing is written when the
 // membership already has that role. Conflict safe: concurrent runs end with
 // one membership. Reading the row inside the statement means a denial or a
-// removed tag that lands first leaves nothing to grant.
+// removed tag that lands first leaves nothing to grant. Only for the
+// person's own sign-in (materializeRoster): it adds a membership.
 export function grantMembershipFromRoster(db: Db, workspaceId: string, email: string, userId: string) {
   return db
     .insert(workspaceMembers)
@@ -135,6 +142,28 @@ export function grantMembershipFromRoster(db: Db, workspaceId: string, email: st
     });
 }
 
+// One statement: userId's EXISTING source = shopify membership in the
+// workspace takes the role the roster row for email grants. Never adds a
+// membership (only claimAccessOnSignIn does, through materializeRoster),
+// never touches a manual one, and writes nothing when the row grants
+// nothing (the comparison with no row is null) or the role already matches.
+// For approvals and roster writes: a lowered tag lowers the membership at
+// once, an approved raise takes it up.
+export function alignMembershipWithRoster(db: Db, workspaceId: string, email: string, userId: string) {
+  const granted = sql`(select ${shopifyRoster.approvedRole} from ${shopifyRoster} where ${shopifyRoster.workspaceId} = ${workspaceId} and ${shopifyRoster.email} = ${email} and ${shopifyRoster.approvedRole} is not null and ${shopifyRoster.deniedAt} is null)`;
+  return db
+    .update(workspaceMembers)
+    .set({ role: sql`${granted}` })
+    .where(
+      and(
+        eq(workspaceMembers.workspaceId, workspaceId),
+        eq(workspaceMembers.userId, userId),
+        eq(workspaceMembers.source, "shopify"),
+        sql`${workspaceMembers.role} <> ${granted}`,
+      ),
+    );
+}
+
 // One statement: removes userId's shopify membership in the workspace
 // unless the roster row for email still grants. For a row that stopped
 // granting (it started over on another customer).
@@ -156,7 +185,9 @@ export function revokeUngrantedMembership(db: Db, workspaceId: string, email: st
     );
 }
 
-// Grants every APPROVED roster entry for this email as a source = shopify
+// The one place a roster entry becomes a membership (claimAccessOnSignIn:
+// every sign-in and "/" load, so the person is the one who acts). Grants
+// every APPROVED roster entry for this email as a source = shopify
 // membership with its approved role (an entry waiting for approval, or
 // denied, grants nothing). A manual membership in the same workspace is
 // never touched; an existing shopify membership takes the approved role.
@@ -178,7 +209,8 @@ export async function materializeRoster(db: Db, userId: string, email: string): 
 
 // A request in Settings > Team: the role the tag asks for, the role it
 // grants now (a raise waiting for approval keeps the earlier one; null when
-// nothing was approved yet) and since when it has looked like this.
+// nothing was approved yet) and since when it has looked like this (for an
+// approved request, since the approval).
 export type RosterRequestView = {
   id: string;
   email: string;
@@ -188,18 +220,30 @@ export type RosterRequestView = {
   deniedAt: number | null;
 };
 
-export type RosterRequests = { waiting: RosterRequestView[]; denied: RosterRequestView[] };
+// waiting: nothing approved yet, or a raise. denied. approved: approved for
+// the role the tag asks for, and nobody with the email belongs to the
+// workspace yet (they join at their next sign-in or "/" load). An approved
+// request reads the same whether or not the email has an account.
+export type RosterRequests = { waiting: RosterRequestView[]; denied: RosterRequestView[]; approved: RosterRequestView[] };
 
-// This workspace's requests that need a manager: waiting for approval
-// (nothing approved yet, or a raise) and denied. Oldest first.
+// This workspace's requests for Settings > Team (see RosterRequests).
+// Oldest first. A request someone has claimed is not listed: the member is.
 export async function listRosterRequests(db: Db, workspaceId: string): Promise<RosterRequests> {
+  const claimed = exists(
+    db
+      .select({ id: workspaceMembers.id })
+      .from(workspaceMembers)
+      .innerJoin(user, eq(workspaceMembers.userId, user.id))
+      .where(and(eq(workspaceMembers.workspaceId, shopifyRoster.workspaceId), eq(user.email, shopifyRoster.email))),
+  );
   const rows = await db
     .select({
       id: shopifyRoster.id,
       email: shopifyRoster.email,
       role: shopifyRoster.role,
       currentRole: shopifyRoster.approvedRole,
-      since: shopifyRoster.updatedAt,
+      updatedAt: shopifyRoster.updatedAt,
+      approvedAt: shopifyRoster.approvedAt,
       deniedAt: shopifyRoster.deniedAt,
     })
     .from(shopifyRoster)
@@ -210,14 +254,30 @@ export async function listRosterRequests(db: Db, workspaceId: string): Promise<R
           isNotNull(shopifyRoster.deniedAt),
           isNull(shopifyRoster.approvedRole),
           ne(shopifyRoster.approvedRole, shopifyRoster.role),
+          not(claimed),
         ),
       ),
     )
     .orderBy(asc(shopifyRoster.updatedAt), asc(shopifyRoster.email));
-  return {
-    waiting: rows.filter((row) => row.deniedAt === null),
-    denied: rows.filter((row) => row.deniedAt !== null),
-  };
+  const view = (row: (typeof rows)[number], since: number): RosterRequestView => ({
+    id: row.id,
+    email: row.email,
+    role: row.role,
+    currentRole: row.currentRole,
+    since,
+    deniedAt: row.deniedAt,
+  });
+  const requests: RosterRequests = { waiting: [], denied: [], approved: [] };
+  for (const row of rows) {
+    if (row.deniedAt !== null) {
+      requests.denied.push(view(row, row.updatedAt));
+    } else if (row.currentRole === null || row.currentRole !== row.role) {
+      requests.waiting.push(view(row, row.updatedAt));
+    } else {
+      requests.approved.push(view(row, row.approvedAt ?? row.updatedAt));
+    }
+  }
+  return requests;
 }
 
 export type RosterDecisionResult =
@@ -251,8 +311,10 @@ const changedError = (role: WorkspaceRole) =>
 // the entry for the role its tag asks for now; body {role} optionally names
 // the role the manager saw, and a different one answers "changed" instead
 // of approving more than they saw. A denied entry is approved the same way.
-// An existing user gets the membership at once (nobody is kicked: access
-// only grows).
+// Adds nobody: the person claims the membership at their next sign-in or
+// "/" load, so the answer and the Team list are the same whether or not the
+// email has an account. Someone already a shopify member here takes the
+// approved role at once (nobody is kicked: access only grows).
 export async function approveRosterEntry(
   db: Db,
   ctx: { workspaceId: string; rosterId: string; approverId: string },
@@ -285,7 +347,7 @@ export async function approveRosterEntry(
       ),
   ];
   if (userId) {
-    statements.push(grantMembershipFromRoster(db, ctx.workspaceId, entry.email, userId));
+    statements.push(alignMembershipWithRoster(db, ctx.workspaceId, entry.email, userId));
   }
   const results = await applyBatch(db, statements);
   if (rowsAffected(results[0], "roster") === 0) {

@@ -95,8 +95,28 @@ describe("listMembers", () => {
         { id: "r_raise", email: "raise@example.com", role: "manager", currentRole: "staff", since: 4, deniedAt: null },
       ],
       denied: [{ id: "r_no", email: "no@example.com", role: "staff", currentRole: null, since: 1, deniedAt: 3 }],
+      // Approved, and nobody with the email belongs here yet.
+      approved: [{ id: "r_ok", email: "ok@example.com", role: "staff", currentRole: "staff", since: 2, deniedAt: null }],
     });
     expect((await listMembers(db, WS, { includeInvites: false })).requests).toBeUndefined();
+  });
+
+  // Approving adds nobody (src/server/roster.ts): until the person signs in
+  // or opens "/", the request is listed as approved, the same whether or
+  // not the email has an account, and no name comes with it.
+  it("lists approved requests nobody has claimed yet, the same with or without an account", async () => {
+    const db = await setup();
+    await seedRosterEntry(db, { id: "r_free", workspaceId: WS, email: "free@example.com", role: "manager", state: "approved" });
+    await seedRosterEntry(db, { id: "r_ghost", workspaceId: WS, email: "ghost@example.com", role: "manager", state: "approved" });
+    // Claimed: the membership is listed instead.
+    await seedRosterEntry(db, { id: "r_tagged", workspaceId: WS, email: "tagged@example.com", role: "staff", state: "approved" });
+    const view = await listMembers(db, WS, { includeInvites: true });
+    expect(view.members.map((member) => member.userId)).toEqual(["u_crew", "u_lead", "u_tagged"]);
+    expect(view.requests?.approved).toEqual([
+      { id: "r_free", email: "free@example.com", role: "manager", currentRole: "manager", since: 2, deniedAt: null },
+      { id: "r_ghost", email: "ghost@example.com", role: "manager", currentRole: "manager", since: 2, deniedAt: null },
+    ]);
+    expect(JSON.stringify(view)).not.toContain("Free Person");
   });
 });
 

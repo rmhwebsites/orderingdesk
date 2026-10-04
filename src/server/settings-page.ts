@@ -83,7 +83,7 @@ export async function loadSettingsPage(
       ? {
           members: team.members,
           invites: team.invites ?? [],
-          requests: team.requests ?? { waiting: [], denied: [] },
+          requests: team.requests ?? { waiting: [], denied: [], approved: [] },
           rosterTags: resolveRosterTags(workspace.rosterTags),
         }
       : null,
