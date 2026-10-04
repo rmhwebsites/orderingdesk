@@ -2,7 +2,8 @@
 // without a request.
 
 import { DEFAULT_ACCENT } from "@/lib/accent";
-import { brandAssetPath, brandHex } from "@/lib/branding";
+import { brandImages, type BrandImagePaths } from "@/lib/brand-assets";
+import { brandHex, type WorkspaceBranding } from "@/lib/branding";
 import type { HostResolution } from "./host";
 
 export type SignInView =
@@ -10,17 +11,23 @@ export type SignInView =
   | { kind: "not-found" }
   | {
       kind: "workspace";
+      workspaceId: string;
       name: string;
       heading: string;
-      // #rrggbb for the sign-in button (the shell derives contrast-safe
-      // tokens from it, src/lib/accent.ts).
+      // #rrggbb primary color (the brand scope derives contrast-safe
+      // tokens from it, src/lib/brand-theme.ts).
       accent: string;
-      // Paths of the full logo (light, and the dark-mode version if any).
-      logo: { light: string; dark: string | null } | null;
+      // The whole theme: palette, fonts and radius (validated again when
+      // rendered).
+      branding: WorkspaceBranding | null;
+      // Paths of the full logo and the symbol (light, and the dark-mode
+      // version if any).
+      logo: BrandImagePaths | null;
+      symbol: BrandImagePaths | null;
     };
 
 // The sign-in page by host: the hub keeps the Ordering Desk page; a client
-// host shows the workspace's logo and name (branding JSON) and "Sign in to
+// host shows the workspace's theme, logo and name and "Sign in to
 // <workspace name> orders"; an unknown host shows nothing.
 export function signInView(resolution: HostResolution): SignInView {
   if (resolution.kind === "hub") {
@@ -31,17 +38,15 @@ export function signInView(resolution: HostResolution): SignInView {
   }
   const { workspace } = resolution;
   const branding = workspace.branding ?? null;
-  const logo = branding?.logo ?? null;
+  const images = brandImages(workspace.id, branding);
   return {
     kind: "workspace",
+    workspaceId: workspace.id,
     name: workspace.name,
     heading: `Sign in to ${workspace.name} orders`,
     accent: brandHex(branding?.colors?.primary) ?? brandHex(workspace.accentColor) ?? DEFAULT_ACCENT,
-    logo: logo
-      ? {
-          light: brandAssetPath(workspace.id, logo.light.key),
-          dark: logo.dark ? brandAssetPath(workspace.id, logo.dark.key) : null,
-        }
-      : null,
+    branding,
+    logo: images.logo,
+    symbol: images.symbol,
   };
 }

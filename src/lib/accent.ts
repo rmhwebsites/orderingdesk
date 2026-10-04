@@ -1,11 +1,12 @@
-// Per-workspace accent colors. A workspace stores one #rrggbb accent (the
-// settings API validates the shape); the shell derives the four CSS
-// variables below from it so every accent use stays AA in both themes:
-// - --accent: the fill (buttons, active underline, brand tile);
-// - --accent-ink: text on that fill (ink or paper, whichever contrasts more);
-// - --accent-strong-light / --accent-strong-dark: the accent pulled toward
-//   ink (light theme) or paper (dark theme) until it reads as text, focus
-//   ring or thin rule on every surface of that theme (4.5:1 or better).
+// Per-workspace accent colors and the WCAG contrast math shared with
+// src/lib/brand-theme.ts. A workspace stores one #rrggbb accent (the
+// settings API validates the shape, and saving branding colors sets it to
+// the primary); these tokens keep every accent use AA in both themes:
+// - accent: the fill (buttons, active underline, brand tile);
+// - accentInk: text on that fill (ink or paper, whichever contrasts more);
+// - accentStrongLight / accentStrongDark: the accent pulled toward ink
+//   (light theme) or paper (dark theme) until it reads as text, focus ring
+//   or thin rule on every surface of that theme (4.5:1 or better).
 //
 // The surface lists mirror the bg, surface and surface-2 tokens in
 // src/app/globals.css; change them together.
@@ -91,14 +92,19 @@ export function accentTokens(input: string): AccentTokens {
   };
 }
 
-// Inline style for the workspace shell element (globals.css maps the
-// strong pair onto --accent-strong per theme under [data-accent-scope]).
+// Inline style for an element carrying data-brand-scope that only needs a
+// workspace's accent as its primary color (the hub's workspace tiles).
+// globals.css maps the -light and -dark values onto --primary,
+// --primary-ink and --primary-strong per theme. Workspace screens use the
+// full branding instead (brandStyle in src/lib/brand-theme.ts).
 export function accentStyle(input: string): Record<string, string> {
   const tokens = accentTokens(input);
   return {
-    "--accent": tokens.accent,
-    "--accent-ink": tokens.accentInk,
-    "--accent-strong-light": tokens.accentStrongLight,
-    "--accent-strong-dark": tokens.accentStrongDark,
+    "--primary-light": tokens.accent,
+    "--primary-dark": tokens.accent,
+    "--primary-ink-light": tokens.accentInk,
+    "--primary-ink-dark": tokens.accentInk,
+    "--primary-strong-light": tokens.accentStrongLight,
+    "--primary-strong-dark": tokens.accentStrongDark,
   };
 }

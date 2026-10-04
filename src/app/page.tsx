@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { accentStyle } from "@/lib/accent";
 import { APP_NAME } from "@/lib/brand";
+import { workspaceIcons } from "@/lib/brand-assets";
 import { roleLabel } from "@/lib/roles";
 import { AuthError, requireMemberBySlug, requireSession } from "@/server/guard";
 import type { HostWorkspace } from "@/server/host";
@@ -22,7 +23,12 @@ export const dynamic = "force-dynamic";
 
 export async function generateMetadata(): Promise<Metadata> {
   const host = await requestHost();
-  return host.kind === "workspace" ? { title: { absolute: `${host.workspace.name} orders` } } : {};
+  return host.kind === "workspace"
+    ? {
+        title: { absolute: `${host.workspace.name} orders` },
+        icons: workspaceIcons(host.workspace.id, host.workspace.branding),
+      }
+    : {};
 }
 
 // "/" on a workspace's own client host is that workspace's desk, behind the
@@ -124,14 +130,14 @@ export default async function Home() {
         ) : (
           <ul className="flex flex-col gap-2">
             {view.workspaces.map((workspace) => (
-              <li key={workspace.id} style={accentStyle(workspace.accentColor)} data-accent-scope>
+              <li key={workspace.id} style={accentStyle(workspace.accentColor)} data-brand-scope="">
                 <Link
                   href={`/w/${encodeURIComponent(workspace.slug)}`}
-                  className={`${ui.panel} flex items-center gap-3 px-4 py-3 transition-colors hover:border-accent-strong`}
+                  className={`${ui.panel} flex items-center gap-3 px-4 py-3 transition-colors hover:border-primary-strong`}
                 >
                   <span
                     aria-hidden
-                    className="grid size-9 shrink-0 place-items-center rounded-full bg-accent font-display text-sm font-semibold text-accent-ink"
+                    className="grid size-9 shrink-0 place-items-center rounded-control bg-primary font-display text-sm font-semibold text-primary-ink"
                   >
                     {workspace.name.trim().charAt(0).toUpperCase()}
                   </span>

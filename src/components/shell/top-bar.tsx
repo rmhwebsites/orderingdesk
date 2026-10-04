@@ -9,6 +9,7 @@ import { PauseIcon } from "@phosphor-icons/react/Pause";
 import { WarningIcon } from "@phosphor-icons/react/Warning";
 import { WarningCircleIcon } from "@phosphor-icons/react/WarningCircle";
 import { APP_NAME } from "@/lib/brand";
+import type { BrandImages } from "@/lib/brand-assets";
 import { CHIP_TONE_COLOR, syncChipState, type ChipTone } from "@/lib/sync-status";
 import { useNow } from "@/lib/use-now";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -54,7 +55,7 @@ function SyncChip() {
     <span
       data-tone={CHIP_TONE_COLOR[state.tone]}
       title={LIVE_TEXT[liveStatus]}
-      className="inline-flex h-8 min-w-0 items-center gap-1.5 rounded-full bg-tone-fill px-3 text-xs font-semibold text-tone-text"
+      className="inline-flex h-8 min-w-0 items-center gap-1.5 rounded-control bg-tone-fill px-3 text-xs font-semibold text-tone-text"
     >
       {chipIcon(state.tone, state.label)}
       <span className="truncate">{state.label}</span>
@@ -84,7 +85,7 @@ function SyncButton() {
   );
 }
 
-export function TopBar({ name, logoUrl }: { name: string; logoUrl: string | null }) {
+export function TopBar({ name, images }: { name: string; images: BrandImages }) {
   const { workspace } = useWorkspace();
   return (
     // z-30: the top layer of the page itself; the drawer (z-40) and toasts
@@ -96,9 +97,9 @@ export function TopBar({ name, logoUrl }: { name: string; logoUrl: string | null
         <Link
           href="/"
           title={workspace.basePath === "" ? "Orders" : "All workspaces"}
-          className="order-1 -m-1 flex min-w-0 flex-1 items-center gap-3 rounded-full p-1 sm:flex-none"
+          className="order-1 -m-1 flex min-w-0 flex-1 items-center gap-3 rounded-control p-1 sm:flex-none"
         >
-          <WorkspaceBrandSlot name={name} logoUrl={logoUrl} />
+          <WorkspaceBrandSlot name={name} images={images} />
           <span className="min-w-0">
             <span className="block truncate font-display text-[15px] font-semibold leading-tight text-ink">
               {name}

@@ -1,4 +1,6 @@
+import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
+import { workspaceIcons } from "@/lib/brand-assets";
 import { AuthError, requireMemberBySlug } from "@/server/guard";
 import { slugRouteForHost } from "@/server/host";
 import { requestHost } from "@/server/request-host";
@@ -6,6 +8,18 @@ import { WorkspaceShell } from "@/components/shell/workspace-shell";
 
 // Per-viewer: reads the session.
 export const dynamic = "force-dynamic";
+
+// The browser tab icon is the workspace's symbol, for viewers who may see
+// the workspace (the same guard as the page; anyone else gets the default).
+export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
+  const { slug } = await params;
+  try {
+    const { workspace } = await requireMemberBySlug(slug, "staff");
+    return { icons: workspaceIcons(workspace.id, workspace.branding) };
+  } catch {
+    return {};
+  }
+}
 
 // The workspace shell on the hub.
 //

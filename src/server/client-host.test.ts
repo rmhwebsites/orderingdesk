@@ -45,19 +45,22 @@ describe("signInView", () => {
     });
     expect(view).toEqual({
       kind: "workspace",
+      workspaceId: "ws_impact",
       name: "Impact Rentals",
       heading: "Sign in to Impact Rentals orders",
       accent: "#0a7cff",
+      branding: expect.objectContaining({ colors: { primary: "#0a7cff", ink: "#101820", background: "#ffffff" } }),
       logo: {
         light: "/api/branding/ws_impact/logo-light.svg",
         dark: "/api/branding/ws_impact/logo-dark.svg",
       },
+      symbol: null,
     });
   });
 
   it("falls back to the accent color and no logo when the workspace has no branding", () => {
     const view = signInView({ kind: "workspace", workspace: workspace() });
-    expect(view).toMatchObject({ kind: "workspace", accent: "#91d500", logo: null });
+    expect(view).toMatchObject({ kind: "workspace", accent: "#91d500", logo: null, symbol: null, branding: null });
   });
 
   it("ignores a stored primary color that is not #rrggbb", () => {

@@ -45,7 +45,7 @@ export type MemberView = { userId: string; role: string; email: string | null; n
 const FOCUSABLE =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-// The drawer frame: a portal into #workspace-overlays (inside the accent
+// The drawer frame: a portal into #workspace-overlays (inside the brand
 // scope), a scrim, a right-side panel that is full screen on phones. While
 // open the rest of the workspace is inert, focus is trapped in the panel,
 // Esc and the scrim close it, and focus returns where it was on close.
@@ -185,7 +185,7 @@ function ToneChip({ tone, children }: { tone: string; children: React.ReactNode 
   return (
     <span
       data-tone={tone}
-      className="inline-flex h-7 items-center rounded-full bg-tone-fill px-2.5 text-xs font-semibold text-tone-text"
+      className="inline-flex h-7 items-center rounded-control bg-tone-fill px-2.5 text-xs font-semibold text-tone-text"
     >
       {children}
     </span>
@@ -307,7 +307,7 @@ function Timeline({
         const Icon = eventIcon(event);
         return (
           <li key={event.id} className="flex gap-3">
-            <span className="grid size-8 shrink-0 place-items-center rounded-full bg-surface-2 text-ink-2">
+            <span className="grid size-8 shrink-0 place-items-center rounded-control bg-surface-2 text-ink-2">
               <Icon size={16} aria-hidden />
             </span>
             <div className="min-w-0 flex-1 pt-1">

@@ -88,7 +88,7 @@ export function OrderTable({ orders, statuses, flashing, rowErrors, onOpen, onCh
                       event.stopPropagation();
                       onOpen(order.id);
                     }}
-                    className="-mx-1 rounded-full px-1 font-mono text-sm font-semibold tabular-nums text-ink underline-offset-4 hover:underline"
+                    className="-mx-1 rounded-control px-1 font-mono text-sm font-semibold tabular-nums text-ink underline-offset-4 hover:underline"
                   >
                     <span className="sr-only">Open order </span>
                     {order.name}

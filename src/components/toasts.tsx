@@ -67,7 +67,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number)
       <button
         type="button"
         onClick={() => onDismiss(toast.id)}
-        className="grid size-8 shrink-0 place-items-center rounded-full text-ink-2 hover:bg-surface-2 hover:text-ink"
+        className="grid size-8 shrink-0 place-items-center rounded-control text-ink-2 hover:bg-surface-2 hover:text-ink"
       >
         <XIcon size={16} aria-hidden />
         <span className="sr-only">Dismiss</span>

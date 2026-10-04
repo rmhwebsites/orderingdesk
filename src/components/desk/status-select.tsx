@@ -34,7 +34,7 @@ export function StatusSelect({
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
         onClick={(event) => event.stopPropagation()}
-        className={`${height} max-w-full cursor-pointer appearance-none truncate rounded-full border border-transparent bg-tone-fill font-semibold text-tone-text transition-colors hover:border-line-strong disabled:cursor-not-allowed disabled:opacity-60`}
+        className={`${height} max-w-full cursor-pointer appearance-none truncate rounded-control border border-transparent bg-tone-fill font-semibold text-tone-text transition-colors hover:border-line-strong disabled:cursor-not-allowed disabled:opacity-60`}
       >
         {current ? null : (
           <option value={value} disabled>

@@ -22,18 +22,18 @@ function FilterChip({
       type="button"
       aria-pressed={active}
       onClick={onClick}
-      className={`relative inline-flex h-9 shrink-0 snap-start items-center gap-2 rounded-full border px-3.5 text-sm transition-colors motion-safe:active:scale-[0.98] ${
+      className={`relative inline-flex h-9 shrink-0 snap-start items-center gap-2 rounded-control border px-3.5 text-sm transition-colors motion-safe:active:scale-[0.98] ${
         active
           ? "border-line-strong bg-surface font-semibold text-ink shadow-panel"
           : "border-line text-ink-2 hover:bg-surface hover:text-ink"
       }`}
     >
-      {tone ? <span data-tone={tone} aria-hidden className="size-2 shrink-0 rounded-full bg-tone-text" /> : null}
+      {tone ? <span data-tone={tone} aria-hidden className="size-2 shrink-0 rounded-control bg-tone-text" /> : null}
       <span className="whitespace-nowrap">{label}</span>
       {rawKey ? <span className="font-mono text-xs text-ink-2">{rawKey}</span> : null}
       <span className="font-mono text-xs tabular-nums text-ink-2">{count.toLocaleString("en-US")}</span>
-      {/* The workspace accent marks the active filter. */}
-      {active ? <span aria-hidden className="absolute inset-x-3 -bottom-px h-[3px] rounded-full bg-accent" /> : null}
+      {/* The workspace primary color marks the active filter. */}
+      {active ? <span aria-hidden className="absolute inset-x-3 -bottom-px h-[3px] rounded-control bg-primary" /> : null}
     </button>
   );
 }

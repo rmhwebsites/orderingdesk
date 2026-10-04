@@ -28,9 +28,15 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   // suppressHydrationWarning: theme-init.js may set data-theme on <html>
-  // before React hydrates.
+  // before React hydrates. The next/font variables sit on <html> so the
+  // :root font defaults in globals.css (--font-heading, --font-body) can
+  // reference them.
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html
+      lang="en"
+      suppressHydrationWarning
+      className={`${sora.variable} ${redHatDisplay.variable} ${redHatMono.variable}`}
+    >
       <head>
         {/*
           A plain blocking script on purpose, so the stored theme lands before
@@ -41,9 +47,7 @@ export default function RootLayout({
         */}
         <script src="/theme-init.js" />
       </head>
-      <body
-        className={`${sora.variable} ${redHatDisplay.variable} ${redHatMono.variable} min-h-dvh bg-bg font-sans text-ink`}
-      >
+      <body className="min-h-dvh bg-bg font-sans text-ink">
         {children}
       </body>
     </html>

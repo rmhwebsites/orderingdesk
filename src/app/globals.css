@@ -13,13 +13,22 @@
  * Contrast (WCAG 2): ink 7:1 or better on every surface; ink-2, ink-3
  * (placeholders included), good, warn, bad and every status text 4.5:1 or
  * better on bg, surface, surface-2 and on their own status fill; line-strong
- * (control borders) 3:1. src/lib/accent.ts mirrors the three surface values
- * of each theme; change them together.
+ * (control borders) 3:1. src/lib/brand-theme.ts mirrors the neutral palette
+ * of each theme (brand-theme.test.ts pins them); change them together.
+ *
+ * Per-workspace branding (src/lib/brand-theme.ts, platform amendment
+ * section 6) flows through variables set inline on the workspace scope
+ * (src/components/shell/brand-scope.tsx): the primary color, an optional
+ * palette (bg, ink and the neutrals derived from them, light and dark), the
+ * heading and body fonts and the radius scale. The hub sets none of them
+ * and keeps the Ordering Desk look.
  */
 
 @theme inline {
-  --font-sans: var(--font-red-hat-display), ui-sans-serif, system-ui, sans-serif;
-  --font-display: var(--font-sora), ui-sans-serif, system-ui, sans-serif;
+  /* Font families come from variables so a workspace can choose its own;
+     the defaults are Sora (headings) and Red Hat Display (body). */
+  --font-sans: var(--font-body);
+  --font-display: var(--font-heading);
   --font-mono: var(--font-red-hat-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
 
   --color-bg: var(--bg);
@@ -30,9 +39,9 @@
   --color-ink-3: var(--ink-3);
   --color-line: var(--line);
   --color-line-strong: var(--line-strong);
-  --color-accent: var(--accent);
-  --color-accent-ink: var(--accent-ink);
-  --color-accent-strong: var(--accent-strong);
+  --color-primary: var(--primary);
+  --color-primary-ink: var(--primary-ink);
+  --color-primary-strong: var(--primary-strong);
   --color-focus: var(--focus);
   --color-good: var(--good);
   --color-warn: var(--warn);
@@ -40,12 +49,16 @@
   --color-tone-fill: var(--tone-fill);
   --color-tone-text: var(--tone-text);
   --color-scrim: var(--scrim);
+
+  /* One radius system: rounded-control for every interactive control,
+     rounded-panel for panels and cards. A workspace's radius choice moves
+     both together (Sharp, Subtle, Soft, Rounded, Pill); the default is
+     pill controls on 12px panels. */
+  --radius-control: var(--control-radius);
+  --radius-panel: var(--panel-radius);
 }
 
 @theme {
-  /* One radius system: interactive controls are pills (rounded-full),
-     panels and cards are 12px. */
-  --radius-panel: 12px;
   /* The desk switches from cards to a table at 880px. */
   --breakpoint-desk: 55rem;
   --ease-out-soft: cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -63,12 +76,21 @@
   --line: #dadfd6;
   --line-strong: #7d868f;
 
-  /* Workspace accent. These defaults are IMPACT's; the workspace shell sets
-     its own four values inline (src/lib/accent.ts). */
-  --accent: #91d500;
-  --accent-ink: #101820;
-  --accent-strong-light: #4a6d12;
-  --accent-strong-dark: #91d500;
+  /* Primary color per theme. These defaults are IMPACT's lime; a workspace
+     scope sets its own values inline (src/lib/brand-theme.ts). */
+  --primary-light: #91d500;
+  --primary-dark: #91d500;
+  --primary-ink-light: #101820;
+  --primary-ink-dark: #101820;
+  --primary-strong-light: #4a6d12;
+  --primary-strong-dark: #91d500;
+
+  /* Fonts (next/font variables live on <html>, src/app/layout.tsx) and
+     the radius scale. */
+  --font-heading: var(--font-sora), ui-sans-serif, system-ui, sans-serif;
+  --font-body: var(--font-red-hat-display), ui-sans-serif, system-ui, sans-serif;
+  --control-radius: 999px;
+  --panel-radius: 12px;
 
   --good: #1d6b35;
   --warn: #7f5200;
@@ -181,27 +203,112 @@
 }
 
 /*
- * Accent strength per theme. Declared on :root and again on the workspace
- * shell ([data-accent-scope], which sets its own --accent-strong-light and
- * --accent-strong-dark inline): a custom property that references another
- * resolves where it is declared, so the scope has to re-declare it.
+ * Primary color per theme. Declared on :root and again on every brand scope
+ * ([data-brand-scope], which sets its own -light and -dark values inline):
+ * a custom property that references another resolves where it is
+ * declared, so the scope has to re-declare it.
  */
 :root,
-[data-accent-scope] {
-  --accent-strong: var(--accent-strong-light);
-  --focus: var(--accent-strong);
+[data-brand-scope] {
+  --primary: var(--primary-light);
+  --primary-ink: var(--primary-ink-light);
+  --primary-strong: var(--primary-strong-light);
+  --focus: var(--primary-strong);
 }
 
 :root[data-theme="dark"],
-:root[data-theme="dark"] [data-accent-scope] {
-  --accent-strong: var(--accent-strong-dark);
+:root[data-theme="dark"] [data-brand-scope] {
+  --primary: var(--primary-dark);
+  --primary-ink: var(--primary-ink-dark);
+  --primary-strong: var(--primary-strong-dark);
 }
 
 @media (prefers-color-scheme: dark) {
   :root[data-theme="system"],
-  :root[data-theme="system"] [data-accent-scope] {
-    --accent-strong: var(--accent-strong-dark);
+  :root[data-theme="system"] [data-brand-scope] {
+    --primary: var(--primary-dark);
+    --primary-ink: var(--primary-ink-dark);
+    --primary-strong: var(--primary-strong-dark);
   }
+}
+
+/*
+ * A workspace palette ([data-brand-palette], set with its --brand-*-light
+ * and --brand-*-dark values inline): the neutral tokens follow the brand,
+ * per theme. Status and good / warn / bad colors stay semantic.
+ */
+[data-brand-palette] {
+  color-scheme: light;
+  --bg: var(--brand-bg-light);
+  --surface: var(--brand-surface-light);
+  --surface-2: var(--brand-surface-2-light);
+  --ink: var(--brand-ink-light);
+  --ink-2: var(--brand-ink-2-light);
+  --ink-3: var(--brand-ink-3-light);
+  --line: var(--brand-line-light);
+  --line-strong: var(--brand-line-strong-light);
+}
+
+:root[data-theme="dark"] [data-brand-palette] {
+  color-scheme: dark;
+  --bg: var(--brand-bg-dark);
+  --surface: var(--brand-surface-dark);
+  --surface-2: var(--brand-surface-2-dark);
+  --ink: var(--brand-ink-dark);
+  --ink-2: var(--brand-ink-2-dark);
+  --ink-3: var(--brand-ink-3-dark);
+  --line: var(--brand-line-dark);
+  --line-strong: var(--brand-line-strong-dark);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"] [data-brand-palette] {
+    color-scheme: dark;
+    --bg: var(--brand-bg-dark);
+    --surface: var(--brand-surface-dark);
+    --surface-2: var(--brand-surface-2-dark);
+    --ink: var(--brand-ink-dark);
+    --ink-2: var(--brand-ink-2-dark);
+    --ink-3: var(--brand-ink-3-dark);
+    --line: var(--brand-line-dark);
+    --line-strong: var(--brand-line-strong-dark);
+  }
+}
+
+/*
+ * The branding preview in Settings renders a light and a dark copy side by
+ * side whatever the app theme ([data-force-theme]); it always sets every
+ * variable inline (brandStyle complete). Declared after the theme rules
+ * above, at the same specificity, so these win.
+ */
+:root [data-brand-scope][data-force-theme="light"] {
+  color-scheme: light;
+  --primary: var(--primary-light);
+  --primary-ink: var(--primary-ink-light);
+  --primary-strong: var(--primary-strong-light);
+  --bg: var(--brand-bg-light);
+  --surface: var(--brand-surface-light);
+  --surface-2: var(--brand-surface-2-light);
+  --ink: var(--brand-ink-light);
+  --ink-2: var(--brand-ink-2-light);
+  --ink-3: var(--brand-ink-3-light);
+  --line: var(--brand-line-light);
+  --line-strong: var(--brand-line-strong-light);
+}
+
+:root [data-brand-scope][data-force-theme="dark"] {
+  color-scheme: dark;
+  --primary: var(--primary-dark);
+  --primary-ink: var(--primary-ink-dark);
+  --primary-strong: var(--primary-strong-dark);
+  --bg: var(--brand-bg-dark);
+  --surface: var(--brand-surface-dark);
+  --surface-2: var(--brand-surface-2-dark);
+  --ink: var(--brand-ink-dark);
+  --ink-2: var(--brand-ink-2-dark);
+  --ink-3: var(--brand-ink-3-dark);
+  --line: var(--brand-line-dark);
+  --line-strong: var(--brand-line-strong-dark);
 }
 
 /*
@@ -225,6 +332,16 @@
   :root[data-theme="system"] .od-logo-dark {
     display: block;
   }
+}
+/* The settings preview's forced light and dark copies pick their own
+   version whatever the app theme (same specificity, declared later). */
+:root [data-force-theme="light"] .od-logo-light,
+:root [data-force-theme="dark"] .od-logo-dark {
+  display: block;
+}
+:root [data-force-theme="light"] .od-logo-dark,
+:root [data-force-theme="dark"] .od-logo-light {
+  display: none;
 }
 
 /* Status tones: data-tone="<color name>" picks a fill and its text color.
@@ -276,14 +393,14 @@
   body {
     background: var(--bg);
     color: var(--ink);
-    font-family: var(--font-sans);
+    font-family: var(--font-body);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
   }
 
   ::selection {
-    background: color-mix(in srgb, var(--accent) 40%, transparent);
+    background: color-mix(in srgb, var(--primary) 40%, transparent);
     color: var(--ink);
   }
 
@@ -319,7 +436,7 @@
 
   .od-skeleton {
     background: var(--surface-2);
-    border-radius: 9999px;
+    border-radius: var(--control-radius);
   }
 }
 
@@ -357,7 +474,8 @@
   }
 }
 
-/* Live-change flash: an accent wash over a row cell or card that fades. */
+/* Live-change flash: a primary-color wash over a row cell or card that
+   fades. */
 .od-flash {
   position: relative;
 }
@@ -366,7 +484,7 @@
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  background: color-mix(in srgb, var(--primary) 22%, transparent);
   opacity: 0;
 }
 

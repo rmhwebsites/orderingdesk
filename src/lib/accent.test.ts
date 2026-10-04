@@ -64,13 +64,15 @@ describe("accentTokens", () => {
 });
 
 describe("accentStyle", () => {
-  it("maps the tokens onto the CSS variables the workspace shell sets", () => {
+  it("maps the tokens onto the primary variables of a brand scope", () => {
     const tokens = accentTokens("#91d500");
     expect(accentStyle("#91d500")).toEqual({
-      "--accent": tokens.accent,
-      "--accent-ink": tokens.accentInk,
-      "--accent-strong-light": tokens.accentStrongLight,
-      "--accent-strong-dark": tokens.accentStrongDark,
+      "--primary-light": tokens.accent,
+      "--primary-dark": tokens.accent,
+      "--primary-ink-light": tokens.accentInk,
+      "--primary-ink-dark": tokens.accentInk,
+      "--primary-strong-light": tokens.accentStrongLight,
+      "--primary-strong-dark": tokens.accentStrongDark,
     });
   });
 });

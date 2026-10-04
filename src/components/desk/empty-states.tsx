@@ -10,7 +10,7 @@ import { SETTINGS_PAGE_AVAILABLE } from "@/lib/features";
 function Frame({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col items-start gap-3 rounded-panel border border-line bg-surface px-6 py-10 shadow-panel sm:items-center sm:px-10 sm:py-14 sm:text-center">
-      <span className="grid size-12 place-items-center rounded-full bg-surface-2 text-ink-2">{icon}</span>
+      <span className="grid size-12 place-items-center rounded-control bg-surface-2 text-ink-2">{icon}</span>
       <h2 className="font-display text-lg font-semibold text-ink">{title}</h2>
       {children}
     </div>

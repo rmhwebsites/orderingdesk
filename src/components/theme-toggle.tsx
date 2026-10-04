@@ -30,7 +30,7 @@ export function ThemeToggle() {
   }
 
   return (
-    <fieldset className="flex shrink-0 items-center rounded-full border border-line bg-surface-2 p-0.5">
+    <fieldset className="flex shrink-0 items-center rounded-control border border-line bg-surface-2 p-0.5">
       <legend className="sr-only">Theme</legend>
       {THEMES.map((value) => {
         const { label, Icon } = OPTIONS[value];
@@ -39,7 +39,7 @@ export function ThemeToggle() {
           <label
             key={value}
             title={label}
-            className={`relative grid size-8 cursor-pointer place-items-center rounded-full transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-1 has-[:focus-visible]:outline-focus ${
+            className={`relative grid size-8 cursor-pointer place-items-center rounded-control transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-1 has-[:focus-visible]:outline-focus ${
               checked ? "bg-surface text-ink shadow-panel" : "text-ink-2 hover:text-ink"
             }`}
           >
