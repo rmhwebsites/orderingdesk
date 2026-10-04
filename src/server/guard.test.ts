@@ -103,6 +103,21 @@ describe("resolveWorkspaceRole", () => {
     const db = await setup();
     expectNotFound(await failureOf(resolveWorkspaceRole(db, admin, "ws_missing", "staff")));
   });
+
+  // On a client host requireSession sets platformAdmin false and
+  // platformAdminOnClientHost true: the host's workspace (the only one the
+  // host allows) as a manager, never as platform.
+  it("lets a platform admin on a client host in as a manager only", async () => {
+    const db = await setup();
+    const offHub: Viewer = { ...admin, platformAdmin: false, platformAdminOnClientHost: true };
+    const offHubMember: Viewer = { ...adminMember, platformAdmin: false, platformAdminOnClientHost: true };
+    expect(await resolveWorkspaceRole(db, offHub, "ws_impact", "staff")).toBe("manager");
+    expect(await resolveWorkspaceRole(db, offHub, "ws_impact", "manager")).toBe("manager");
+    // A staff membership is raised to manager, like a non-member admin.
+    expect(await resolveWorkspaceRole(db, offHubMember, "ws_impact", "manager")).toBe("manager");
+    expectNotFound(await failureOf(resolveWorkspaceRole(db, offHub, "ws_impact", "platform")));
+    expectNotFound(await failureOf(resolveWorkspaceRole(db, offHub, "ws_missing", "staff")));
+  });
 });
 
 // The db-taking core of requireMemberByOrder (which adds only the session).

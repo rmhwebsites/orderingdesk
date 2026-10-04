@@ -89,12 +89,14 @@ describe("/ on an active client host", () => {
     expect(element.props.role).toBe("staff");
   });
 
-  it("renders it for a platform admin who is not a member", async () => {
+  // Platform powers stay on the hub (src/server/guard.ts, Viewer): on a
+  // client host a platform admin works as a manager of that workspace.
+  it("renders it for a platform admin who is not a member, as a manager", async () => {
     state.host = CLIENT_HOST;
     state.session = { user: { id: "u_boss", email: "boss@example.com" } };
     const element = (await outcome()) as ReactElement<{ workspace: { id: string }; role: string }>;
     expect(element.type).toBe(WorkspaceShell);
-    expect(element.props.role).toBe("platform");
+    expect(element.props.role).toBe("manager");
   });
 
   it("answers a signed-in non-member with the not-found page", async () => {

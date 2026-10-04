@@ -42,8 +42,14 @@ export default async function ClientHostSettingsPage() {
     }
     throw e;
   }
-  const { db, env, workspace, role, userId } = guarded;
-  const data = await loadSettingsPage(db, env, { workspace, role, userId, basePath: "" });
+  const { db, env, workspace, role, userId, viewer } = guarded;
+  const data = await loadSettingsPage(db, env, {
+    workspace,
+    role,
+    userId,
+    basePath: "",
+    platformAdminOnClientHost: viewer.platformAdminOnClientHost === true,
+  });
   return (
     <WorkspaceShell workspace={workspace} role={role} userId={userId} clientHost>
       <SettingsPage data={data} />

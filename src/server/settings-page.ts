@@ -16,6 +16,7 @@ import { statusView, type SettingsView, type StatusView } from "./desk/shapes";
 import { listVendors, type VendorView } from "./desk/vendors";
 import type { DomainView } from "./domains";
 import { loadMailWorkspace } from "./email/workspace";
+import { appOrigin } from "./host";
 import { listMembers, type MemberView, type PendingInviteView } from "./members";
 import { resolveRosterTags } from "./roster";
 import { senderView, type SenderView } from "./sender";
@@ -34,6 +35,10 @@ export type SettingsPageData = {
   sender: SenderView | null;
   domain: DomainView | null;
   branding: { view: BrandingView; accentColor: string } | null;
+  // A platform admin on a client host works there as a manager (platform
+  // powers stay on the hub, see src/server/guard.ts): the hub's Settings
+  // for this workspace, where the rest is. Null for everyone else.
+  hubSettingsUrl: string | null;
 };
 
 type SettingsWorkspace = Pick<
@@ -44,7 +49,13 @@ type SettingsWorkspace = Pick<
 export async function loadSettingsPage(
   db: Db,
   env: CloudflareEnv,
-  input: { workspace: SettingsWorkspace; role: Role; userId: string; basePath: string },
+  input: {
+    workspace: SettingsWorkspace;
+    role: Role;
+    userId: string;
+    basePath: string;
+    platformAdminOnClientHost?: boolean;
+  },
 ): Promise<SettingsPageData> {
   const { workspace, role } = input;
   const access = settingsAccess(role);
@@ -77,6 +88,9 @@ export async function loadSettingsPage(
     domain: shows("domain") ? { domain: workspace.customDomain, status: workspace.customDomainStatus } : null,
     branding: shows("branding")
       ? { view: brandingView(workspace.id, workspace.branding), accentColor: workspace.accentColor }
+      : null,
+    hubSettingsUrl: input.platformAdminOnClientHost
+      ? `${appOrigin(env)}/w/${encodeURIComponent(workspace.slug)}/settings`
       : null,
   };
 }

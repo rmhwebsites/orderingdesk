@@ -8,7 +8,7 @@ import { openTestDb, seedUser, seedWorkspace } from "./desk/test-helpers";
 // authForHost (tested here) takes them as arguments.
 vi.mock("@opennextjs/cloudflare", () => ({ getCloudflareContext: () => ({ env: {}, ctx: {} }) }));
 
-const { authForHost } = await import("./auth");
+const { authForHost, createAuth } = await import("./auth");
 
 // Real better-auth (1.7.x) endpoints against the in-memory database: the
 // magic-link request, the link itself, user creation and its hooks. Only the
@@ -22,6 +22,15 @@ const ENV = {
 } as unknown as CloudflareEnv;
 
 type Sent = { email: string; url: string; workspaceId: string | null };
+
+// Sign-in links are delivered after the response (ctx.waitUntil in
+// production). The instances below hand that work to track, and
+// requestLink waits for it once the response is in, so the assertions see
+// what was sent.
+const pending: Promise<unknown>[] = [];
+const track = (promise: Promise<unknown>) => {
+  pending.push(promise);
+};
 
 async function setDomain(db: Db, id: string, domain: string, status: "pending" | "active" | "error") {
   await db
@@ -37,9 +46,15 @@ async function setup(host = "orderingdesk.test") {
   await setDomain(db, "ws_impact", "orders.impactrentals.store", "active");
   await setDomain(db, "ws_pending", "orders.pending.example", "pending");
   const sent: Sent[] = [];
-  const auth = await authForHost(db, ENV, host, async (message) => {
-    sent.push(message);
-  });
+  const auth = await authForHost(
+    db,
+    ENV,
+    host,
+    async (message) => {
+      sent.push(message);
+    },
+    track,
+  );
   if (!auth) {
     throw new Error(`expected ${host} to be served`);
   }
@@ -65,7 +80,9 @@ async function requestLink(
       body: JSON.stringify({ email, callbackURL: opts.callbackURL ?? "/" }),
     }),
   );
-  return { status: response.status, body: await response.json() };
+  const result = { status: response.status, body: await response.json() };
+  await Promise.all(pending.splice(0));
+  return result;
 }
 
 async function openLink(auth: Auth, url: string) {
@@ -134,6 +151,148 @@ describe("auth per host (baseURL and trusted origin from the routed host)", () =
   });
 });
 
+// The session cookie pairs of a response, as a Cookie request header.
+function cookieHeader(response: Response): string {
+  return response.headers
+    .getSetCookie()
+    .map((cookie) => cookie.split(";")[0])
+    .filter((pair) => !pair.endsWith("="))
+    .join("; ");
+}
+
+async function signInOn(host: string, origin: string, db: Db) {
+  const sent: Sent[] = [];
+  const auth = await authForHost(
+    db,
+    ENV,
+    host,
+    async (message) => {
+      sent.push(message);
+    },
+    track,
+  );
+  await requestLink(auth!, "boss@example.com", { origin });
+  const response = await openLink(auth!, sent[0].url);
+  expect(response.status).toBe(302);
+  return { auth: auth!, cookie: cookieHeader(response), link: sent[0].url };
+}
+
+// A tenant controls the DNS of their client host and can put their own TLS
+// proxy in front of it, so whatever a browser sends there (a session cookie,
+// a magic-link token) must be worthless on any other host.
+describe("sessions and sign-in links are bound to the host that issued them", () => {
+  it("refuses on the hub a session cookie minted on a client host, and the reverse", async () => {
+    const { db } = await setup();
+    const client = await signInOn("orders.impactrentals.store", CLIENT, db);
+    const hub = await signInOn("orderingdesk.test", BASE, db);
+
+    // Each cookie works where it was issued.
+    expect((await client.auth.api.getSession({ headers: new Headers({ cookie: client.cookie }) }))?.user.email).toBe(
+      "boss@example.com",
+    );
+    expect((await hub.auth.api.getSession({ headers: new Headers({ cookie: hub.cookie }) }))?.user.email).toBe(
+      "boss@example.com",
+    );
+    // And nowhere else.
+    expect(await hub.auth.api.getSession({ headers: new Headers({ cookie: client.cookie }) })).toBeNull();
+    expect(await client.auth.api.getSession({ headers: new Headers({ cookie: hub.cookie }) })).toBeNull();
+  });
+
+  it("keeps the hub's cookie signing key, so sessions from before this change stay valid there", async () => {
+    const { db } = await setup();
+    const hub = await signInOn("orderingdesk.test", BASE, db);
+    const plain = createAuth({
+      db,
+      env: ENV,
+      origin: BASE,
+      secret: ENV.BETTER_AUTH_SECRET,
+      deliverMagicLink: async () => {},
+    });
+    expect((await plain.api.getSession({ headers: new Headers({ cookie: hub.cookie }) }))?.user.email).toBe(
+      "boss@example.com",
+    );
+  });
+
+  it("refuses on the hub a sign-in link issued on a client host, which still works where it was issued", async () => {
+    const { db } = await setup();
+    const sent: Sent[] = [];
+    const client = await authForHost(
+      db,
+      ENV,
+      "orders.impactrentals.store",
+      async (message) => {
+        sent.push(message);
+      },
+      track,
+    );
+    const hub = await authForHost(db, ENV, "orderingdesk.test", async () => {}, track);
+    await requestLink(client!, "boss@example.com", { origin: CLIENT });
+    const replayed = new URL(sent[0].url);
+    const onHub = await openLink(hub!, `${BASE}${replayed.pathname}${replayed.search}`);
+    expect(onHub.status).toBe(302);
+    expect(onHub.headers.get("location") ?? "").toContain("error=INVALID_TOKEN");
+    expect(cookieHeader(onHub)).not.toContain("session_token");
+    expect(await db.select().from(schema.session)).toEqual([]);
+
+    const onClient = await openLink(client!, sent[0].url);
+    expect(onClient.status).toBe(302);
+    expect(cookieHeader(onClient)).toContain("session_token");
+  });
+
+  it("does not store the sign-in token itself", async () => {
+    const { db, auth, sent } = await setup();
+    await requestLink(auth, "boss@example.com");
+    const token = new URL(sent[0].url).searchParams.get("token") ?? "";
+    expect(token.length).toBeGreaterThan(20);
+    const rows = await db.select({ identifier: schema.verification.identifier }).from(schema.verification);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].identifier).not.toContain(token);
+  });
+});
+
+describe("sign-in link delivery never shapes the response (no account enumeration)", () => {
+  it("answers 200 at once while delivery runs after the response, and swallows a failed delivery", async () => {
+    const { db } = openTestDb();
+    const scheduled: Promise<unknown>[] = [];
+    let release: () => void = () => {};
+    const slow = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const attempts: string[] = [];
+    const auth = await authForHost(
+      db,
+      ENV,
+      "orderingdesk.test",
+      async (message) => {
+        attempts.push(message.email);
+        await slow;
+        throw new Error("sending domain offboarded");
+      },
+      (promise) => {
+        scheduled.push(promise);
+      },
+    );
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // Delivery for the known email has not finished (it never does until
+      // released), yet the request has answered, exactly like the stranger's.
+      const boss = await requestLink(auth!, "boss@example.com");
+      const stranger = await requestLink(auth!, "stranger@example.com");
+      expect(boss).toEqual({ status: 200, body: { status: true } });
+      expect(stranger).toEqual(boss);
+      expect(scheduled).toHaveLength(2);
+      release();
+      await Promise.all(scheduled);
+      expect(attempts).toEqual(["boss@example.com"]);
+      // Logged without the address.
+      expect(errors).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(errors.mock.calls)).not.toContain("boss@example.com");
+    } finally {
+      errors.mockRestore();
+    }
+  });
+});
+
 describe("sign-in email by host (the default deliverer, through the EMAIL binding)", () => {
   type Mail = { from: unknown; subject: string; html: string; text?: string };
 
@@ -157,7 +316,7 @@ describe("sign-in email by host (the default deliverer, through the EMAIL bindin
       .where(eq(schema.workspaces.id, "ws_impact"));
     const email = { send: vi.fn(async (_message: Mail) => ({ messageId: "m1" })) };
     const env = { ...ENV, EMAIL: email, EMAIL_FROM: "Ordering Desk <orders@orderingdesk.com>" } as unknown as CloudflareEnv;
-    const auth = await authForHost(db, env, host);
+    const auth = await authForHost(db, env, host, undefined, track);
     expect((await requestLink(auth!, "boss@example.com", { origin })).status).toBe(200);
     expect(email.send).toHaveBeenCalledTimes(1);
     return email.send.mock.calls[0][0];

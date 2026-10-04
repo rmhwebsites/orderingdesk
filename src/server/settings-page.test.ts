@@ -77,5 +77,23 @@ describe("loadSettingsPage", () => {
     });
     expect(page.workspace).toEqual({ id: WS, name: "Workspace ws_impact", slug: WS, basePath: "" });
     expect(page.viewerUserId).toBe("u_boss");
+    expect(page.hubSettingsUrl).toBeNull();
+  });
+
+  // Platform powers stay on the hub, so on a client host a platform admin
+  // works as a manager and is pointed at the hub for the rest.
+  it("points a platform admin on a client host at the hub's Settings", async () => {
+    const { db, workspace } = await setup();
+    const page = await loadSettingsPage(db, env, {
+      workspace,
+      role: "manager",
+      userId: "u_boss",
+      basePath: "",
+      platformAdminOnClientHost: true,
+    });
+    expect(page.access.sections).not.toContain("branding");
+    expect(page.hubSettingsUrl).toBe("https://orderingdesk.test/w/ws_impact/settings");
+    const member = await loadSettingsPage(db, env, { workspace, role: "manager", userId: "u_lead", basePath: "" });
+    expect(member.hubSettingsUrl).toBeNull();
   });
 });

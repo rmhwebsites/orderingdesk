@@ -23,9 +23,15 @@ export class AuthError extends Error {
   }
 }
 
-// Who is asking. platformAdmin is the effective flag (bootstrap list or
-// promoted, see src/server/access.ts).
-export type Viewer = { userId: string; email: string; platformAdmin: boolean };
+// Who is asking. platformAdmin is the effective flag: a platform admin
+// (bootstrap list or promoted, see src/server/access.ts) on the hub.
+// platformAdminOnClientHost: the same person on a client host, where they
+// get manager access to that host's workspace and no platform powers. A
+// tenant controls their client host's DNS and can proxy it, so whatever a
+// platform admin can do there, the tenant could do with a captured
+// session; platform-wide actions and platform-only settings therefore
+// answer only on the hub.
+export type Viewer = { userId: string; email: string; platformAdmin: boolean; platformAdminOnClientHost?: boolean };
 
 const notFound = () => new AuthError(404, "Not found");
 
@@ -45,10 +51,12 @@ export async function requireSession() {
   }
   const db = getDb();
   const { env } = getCloudflareContext();
+  const admin = await isPlatformAdmin(db, env, session.user.id, session.user.email);
   const viewer: Viewer = {
     userId: session.user.id,
     email: session.user.email,
-    platformAdmin: await isPlatformAdmin(db, env, session.user.id, session.user.email),
+    platformAdmin: admin && host.kind === "hub",
+    platformAdminOnClientHost: admin && host.kind === "workspace",
   };
   return { ...viewer, viewer, db, session, env, host };
 }
@@ -71,7 +79,8 @@ export function assertPlatformAdmin(viewer: Viewer): void {
 }
 
 // Platform-admin-only operations: workspace creation, store connection,
-// branding, custom domain, email sender, promoting platform admins.
+// branding, custom domain, email sender, promoting platform admins. On the
+// hub only (404 on a client host, see Viewer).
 export async function requirePlatformAdmin() {
   const guarded = await requireSession();
   assertPlatformAdmin(guarded.viewer);
@@ -81,6 +90,9 @@ export async function requirePlatformAdmin() {
 // The caller's effective role in the workspace, or a 404.
 // - A platform admin gets "platform" in every workspace that exists (ranked
 //   above manager, so every check passes), whether or not they are a member.
+// - A platform admin on a client host gets "manager" in the workspace (the
+//   host scope, assertHostAllows, keeps it to the host's own), so
+//   platform-only checks answer 404 there.
 // - Anyone else needs a membership whose role is at least `required`.
 // A missing workspace, a non-member and an under-ranked member all get the
 // same 404, so nobody can tell "exists but forbidden" from "does not exist".
@@ -92,7 +104,11 @@ export async function resolveWorkspaceRole(
   required: Role,
   knownToExist = false,
 ): Promise<Role> {
-  if (viewer.platformAdmin) {
+  if (viewer.platformAdmin || viewer.platformAdminOnClientHost) {
+    const role: Role = viewer.platformAdmin ? "platform" : "manager";
+    if (!roleAtLeast(role, required)) {
+      throw notFound();
+    }
     if (!knownToExist) {
       const rows = await db
         .select({ id: workspaces.id })
@@ -103,7 +119,7 @@ export async function resolveWorkspaceRole(
         throw notFound();
       }
     }
-    return "platform";
+    return role;
   }
   const rows = await db
     .select({ role: workspaceMembers.role })

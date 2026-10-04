@@ -1,11 +1,13 @@
 import Link from "next/link";
 import { ArrowLeftIcon } from "@phosphor-icons/react/dist/ssr/ArrowLeft";
+import { APP_NAME } from "@/lib/brand";
 import { roleLabel } from "@/lib/roles";
 import { SETTINGS_SECTION_LABELS } from "@/lib/settings-access";
 import type { SettingsPageData } from "@/server/settings-page";
 import { ui } from "@/components/ui";
 import { BrandingSection } from "./branding";
 import { CustomDomainSection } from "./custom-domain";
+import { InlineMessage } from "./kit";
 import { NotificationsSection } from "./notifications";
 import { StatusesSection } from "./statuses";
 import { StoreConnectionSection } from "./store-connection";
@@ -30,6 +32,17 @@ export function SettingsPage({ data }: { data: SettingsPageData }) {
           {workspace.name}. You are signed in as {roleLabel(data.role).toLowerCase()}
           {data.role === "staff" ? ", so you can see these settings but not change them." : "."}
         </p>
+        {data.hubSettingsUrl ? (
+          <div className="mt-2 w-full max-w-3xl">
+            <InlineMessage tone="info">
+              Platform admin settings (store connection, branding, custom domain and email sender) are only
+              available on {APP_NAME}.{" "}
+              <a href={data.hubSettingsUrl} className="font-semibold underline underline-offset-2">
+                Open these settings on {APP_NAME}
+              </a>
+            </InlineMessage>
+          </div>
+        ) : null}
       </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[13rem_minmax(0,1fr)] lg:gap-10">

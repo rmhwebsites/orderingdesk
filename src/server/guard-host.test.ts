@@ -25,9 +25,8 @@ vi.mock("./auth", () => ({
 }));
 vi.mock("@/db", () => ({ getDb: () => state.db, getDbFromEnv: () => state.db }));
 
-const { AuthError, requireMember, requireMemberByOrder, requireMemberBySlug, requireSession } = await import(
-  "./guard"
-);
+const { AuthError, requireMember, requireMemberByOrder, requireMemberBySlug, requirePlatformAdmin, requireSession } =
+  await import("./guard");
 
 const CLIENT_HOST = "orders.impactrentals.store";
 
@@ -86,11 +85,27 @@ describe("guards on a client host", () => {
     expect(await statusOf(requireMemberByOrder("o_other", "staff"))).toBe(404);
   });
 
-  it("scopes a platform admin to the host's workspace too", async () => {
+  // A tenant controls their client host's DNS and can proxy it, so nothing
+  // a platform admin does there may reach beyond what the workspace's own
+  // managers can do: platform powers live on the hub only.
+  it("gives a platform admin manager access to the host's workspace and no platform powers there", async () => {
     state.host = CLIENT_HOST;
     signIn("u_boss", "boss@example.com");
-    expect(await statusOf(requireMember("ws_impact", "platform"))).toBe("ok");
-    expect(await statusOf(requireMember("ws_other", "platform"))).toBe(404);
+    const guarded = await requireMember("ws_impact", "manager");
+    expect(guarded.role).toBe("manager");
+    expect(guarded.viewer.platformAdmin).toBe(false);
+    expect((await requireMemberBySlug("ws_impact", "staff")).role).toBe("manager");
+    expect((await requireMemberByOrder("o_impact", "staff")).role).toBe("manager");
+    expect(await statusOf(requireMember("ws_impact", "platform"))).toBe(404);
+    expect(await statusOf(requireMember("ws_other", "staff"))).toBe(404);
+    expect(await statusOf(requirePlatformAdmin())).toBe(404);
+  });
+
+  it("keeps a platform admin's powers on the hub", async () => {
+    signIn("u_boss", "boss@example.com");
+    expect((await requireMember("ws_impact", "platform")).role).toBe("platform");
+    expect((await requireMember("ws_other", "platform")).role).toBe("platform");
+    expect(await statusOf(requirePlatformAdmin())).toBe("ok");
   });
 
   it("answers a signed-in non-member of the host's workspace with 404", async () => {
