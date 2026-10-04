@@ -33,7 +33,8 @@ type AuthEnv = {
 //   false) unless canCreateAccount allows the email at the moment the link
 //   is opened, so a link requested while an invite existed cannot create an
 //   account after the invite was withdrawn. The magic-link verify endpoint
-//   then redirects with an error and creates no session.
+//   then redirects with an error and creates no session. An allowed account
+//   is named by the server (accountName), never by the request.
 // - Every sign-in (user.create.after for the first, session.create.after
 //   for each) claims pending invites and the Shopify roster for the email.
 //
@@ -161,6 +162,12 @@ export function createAuth(opts: {
             if (!(await canCreateAccount(db, env, user.email))) {
               return false;
             }
+            // The magic-link request body may carry a name for the new
+            // account, chosen by whoever asked for the link (anyone who
+            // knows an invited address). Never keep it: the name comes from
+            // the email itself. better-auth merges the returned data over
+            // the user it is about to create.
+            return { data: { ...user, name: accountName(user.email) } };
           },
           after: async (user) => {
             await claimAccessOnSignIn(db, user.id, user.email);
@@ -176,6 +183,14 @@ export function createAuth(opts: {
       },
     },
   });
+}
+
+// A new account's display name, picked on the server: the email's local
+// part (better-auth lowercases the email), at most 64 characters (the
+// longest local part an address may have).
+export function accountName(email: string): string {
+  const at = email.lastIndexOf("@");
+  return (at > 0 ? email.slice(0, at) : email).trim().toLowerCase().slice(0, 64);
 }
 
 export type MagicLinkMessage = { email: string; url: string; workspaceId: string | null };

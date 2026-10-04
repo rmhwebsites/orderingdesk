@@ -67,7 +67,7 @@ type Auth = Awaited<ReturnType<typeof setup>>["auth"];
 async function requestLink(
   auth: Auth,
   email: string,
-  opts: { origin?: string; callbackURL?: string; cookie?: string } = {},
+  opts: { origin?: string; callbackURL?: string; cookie?: string; name?: string } = {},
 ) {
   const origin = opts.origin ?? BASE;
   const response = await auth.handler(
@@ -78,7 +78,7 @@ async function requestLink(
         origin,
         ...(opts.cookie ? { cookie: opts.cookie } : {}),
       },
-      body: JSON.stringify({ email, callbackURL: opts.callbackURL ?? "/" }),
+      body: JSON.stringify({ email, callbackURL: opts.callbackURL ?? "/", ...(opts.name !== undefined ? { name: opts.name } : {}) }),
     }),
   );
   const result = { status: response.status, body: await response.json() };
@@ -441,6 +441,27 @@ describe("account creation", () => {
       .select({ role: schema.workspaceMembers.role, source: schema.workspaceMembers.source })
       .from(schema.workspaceMembers);
     expect(memberships).toEqual([{ role: "manager", source: "shopify" }]);
+  });
+
+  // The magic-link request body accepts a name for a new account, so whoever
+  // asks for the link (anyone who knows an invited address) could pre-name
+  // that person's account. The server picks the name instead.
+  it("names a new account after its email's local part, ignoring any name the request sent", async () => {
+    const { db, auth, sent } = await setup();
+    await db.insert(schema.pendingInvites).values([
+      { id: "i1", email: "crew.member@example.com", workspaceId: "ws_impact", role: "staff", invitedBy: "u_x", createdAt: 1 },
+      { id: "i2", email: "plain@example.com", workspaceId: "ws_impact", role: "staff", invitedBy: "u_x", createdAt: 1 },
+    ]);
+    await requestLink(auth, "Crew.Member@example.com", { name: "Pat Smith (CEO)" });
+    await requestLink(auth, "plain@example.com");
+    for (const message of sent) {
+      expect((await openLink(auth, message.url)).status).toBe(302);
+    }
+    const created = await db.select({ email: schema.user.email, name: schema.user.name }).from(schema.user).orderBy(asc(schema.user.email));
+    expect(created).toEqual([
+      { email: "crew.member@example.com", name: "crew.member" },
+      { email: "plain@example.com", name: "plain" },
+    ]);
   });
 
   it("refuses to create the account when the route to it is gone by the time the link is opened", async () => {
