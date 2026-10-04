@@ -115,7 +115,12 @@ export default async function Home() {
             <p className="mt-1 text-xs font-semibold text-ink-2">{roleLabel("platform")}</p>
           ) : null}
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+          {viewer.platformAdmin ? (
+            <Link href="/admin" className={ui.buttonQuiet}>
+              Platform admin
+            </Link>
+          ) : null}
           <ThemeToggle />
           <SignOutButton />
         </div>
