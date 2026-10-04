@@ -59,6 +59,14 @@
 }
 
 @theme {
+  /* Fixed light and dark tiles (the default light and dark surfaces and
+     placeholder ink) for showing an uploaded image the way it will be
+     used, whatever the app theme: Settings > Branding. */
+  --color-tile-light: #fcfdfb;
+  --color-tile-light-ink: #58626c;
+  --color-tile-dark: #121920;
+  --color-tile-dark-ink: #8e98a2;
+
   /* The desk switches from cards to a table at 880px. */
   --breakpoint-desk: 55rem;
   --ease-out-soft: cubic-bezier(0.2, 0.8, 0.2, 1);

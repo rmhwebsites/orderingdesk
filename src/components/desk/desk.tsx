@@ -14,6 +14,7 @@ import {
   type LiveEffects,
 } from "@/lib/desk-state";
 import { formatMoney } from "@/lib/format";
+import { roleAtLeast } from "@/lib/roles";
 import type { LiveEvent, LiveOrderStatus } from "@/lib/live-events";
 import type { OrderSummary } from "@/server/desk/read";
 import type { EventView, StatusView } from "@/server/desk/shapes";
@@ -78,7 +79,7 @@ function withDetailStatus(detail: DrawerDetail, change: LiveOrderStatus): Drawer
 }
 
 export function Desk() {
-  const { workspace, userId, connection, subscribe } = useWorkspace();
+  const { workspace, userId, role, connection, subscribe } = useWorkspace();
   const toast = useToast();
   const searchParams = useSearchParams();
   const openOrderId = searchParams.get("order");
@@ -460,7 +461,7 @@ export function Desk() {
 
       {load.status === "ready" ? (
         total === 0 && desk.orders.length === 0 ? (
-          <EmptyDesk basePath={workspace.basePath} />
+          <EmptyDesk basePath={workspace.basePath} canConnect={roleAtLeast(role, "platform")} />
         ) : (
           <>
             <StatusStrip

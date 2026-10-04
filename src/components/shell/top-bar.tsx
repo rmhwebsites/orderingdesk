@@ -16,7 +16,6 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { ui } from "@/components/ui";
 import { useWorkspace } from "./workspace-provider";
 import { WorkspaceBrandSlot } from "./workspace-brand-slot";
-import { SETTINGS_PAGE_AVAILABLE } from "@/lib/features";
 
 const LIVE_TEXT = {
   live: "Live updates on",
@@ -115,15 +114,11 @@ export function TopBar({ name, images }: { name: string; images: BrandImages }) 
 
         <div className="order-2 flex items-center gap-1 sm:order-3">
           <ThemeToggle />
-          {/* Hidden for everyone until the settings page exists. SETTINGS
-              STAGE: restore it through SETTINGS_PAGE_AVAILABLE in
-              src/lib/features.ts. */}
-          {SETTINGS_PAGE_AVAILABLE ? (
-            <Link href={`${workspace.basePath}/settings`} className={`${ui.buttonQuiet} h-10`}>
-              <GearSixIcon size={18} aria-hidden />
-              <span className="sr-only sm:not-sr-only">Settings</span>
-            </Link>
-          ) : null}
+          {/* Every member: each role sees its own Settings sections. */}
+          <Link href={`${workspace.basePath}/settings`} className={`${ui.buttonQuiet} h-10`}>
+            <GearSixIcon size={18} aria-hidden />
+            <span className="sr-only sm:not-sr-only">Settings</span>
+          </Link>
         </div>
       </div>
     </header>

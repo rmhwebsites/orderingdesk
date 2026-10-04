@@ -5,7 +5,6 @@ import { WarningIcon } from "@phosphor-icons/react/Warning";
 import { roleAtLeast } from "@/lib/roles";
 import { syncChipState } from "@/lib/sync-status";
 import { useWorkspace } from "./workspace-provider";
-import { SETTINGS_PAGE_AVAILABLE } from "@/lib/features";
 
 function landed(added: number, updated: number): string {
   const parts = [];
@@ -41,9 +40,9 @@ export function SyncBanner() {
           {failure ? landed(failure.added, failure.updated) : null}
         </p>
         {/* The store connection is a platform-admin setting. */}
-        {SETTINGS_PAGE_AVAILABLE && roleAtLeast(role, "platform") ? (
+        {roleAtLeast(role, "platform") ? (
           <Link
-            href={`${workspace.basePath}/settings`}
+            href={`${workspace.basePath}/settings#store`}
             className="shrink-0 font-semibold underline decoration-1 underline-offset-2 hover:decoration-2"
           >
             Check the store connection

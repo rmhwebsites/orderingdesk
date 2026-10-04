@@ -5,7 +5,6 @@ import { ListMagnifyingGlassIcon } from "@phosphor-icons/react/ListMagnifyingGla
 import { StorefrontIcon } from "@phosphor-icons/react/Storefront";
 import { WarningCircleIcon } from "@phosphor-icons/react/WarningCircle";
 import { ui } from "@/components/ui";
-import { SETTINGS_PAGE_AVAILABLE } from "@/lib/features";
 
 function Frame({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
   return (
@@ -17,19 +16,18 @@ function Frame({ icon, title, children }: { icon: React.ReactNode; title: string
   );
 }
 
-// No orders at all yet: say exactly how to get some.
-// The Settings link stays hidden until the settings page exists (see
-// SETTINGS_PAGE_AVAILABLE); the settings stage restores it, for platform
-// admins only, since connecting the store is theirs.
-export function EmptyDesk({ basePath }: { basePath: string }) {
+// No orders at all yet: say exactly how to get some. The link to the store
+// connection is for platform admins only, since connecting the store is
+// theirs.
+export function EmptyDesk({ basePath, canConnect }: { basePath: string; canConnect: boolean }) {
   return (
     <Frame icon={<StorefrontIcon size={24} aria-hidden />} title="No orders yet">
       <p className="max-w-[46ch] text-sm text-ink-2">
         Orders appear here once the Shopify store is connected. After that, press Sync or wait for the next automatic sync.
       </p>
-      {SETTINGS_PAGE_AVAILABLE ? (
-        <Link href={`${basePath}/settings`} className={`${ui.buttonSecondary} mt-1`}>
-          Open Settings
+      {canConnect ? (
+        <Link href={`${basePath}/settings#store`} className={`${ui.buttonSecondary} mt-1`}>
+          Connect the store
         </Link>
       ) : null}
     </Frame>
