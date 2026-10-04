@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  draftAfterColorsReset,
   draftColors,
   draftWorkspaceBranding,
   emailPreviewQuery,
@@ -45,6 +46,31 @@ describe("themeSaveBody", () => {
       colors: SAVED.colors,
       darkColors: { background: "#0b0b0b" },
     });
+  });
+});
+
+describe("draftAfterColorsReset", () => {
+  // "Use the Ordering Desk colors" saves only {colors: null}: unsaved font
+  // and corner edits must survive it, still waiting to be saved.
+  it("takes the colors from the reset branding and keeps unsaved font and corner edits", () => {
+    const draft: ThemeDraft = {
+      colors: { primary: "#ff0000", ink: "#101820", background: "#ffffff" },
+      darkColors: { background: "#000000" },
+      fonts: { heading: "playfair-display", body: "inter" },
+      radius: "sharp",
+    };
+    const reset: ThemeDraft = {
+      colors: { primary: "#91d500", ink: "#16181d", background: "#f6f7f2" },
+      darkColors: {},
+      fonts: SAVED.fonts,
+      radius: SAVED.radius,
+    };
+    const next = draftAfterColorsReset(draft, reset);
+    expect(next).toEqual({ ...reset, fonts: draft.fonts, radius: "sharp" });
+    // Still unsaved, so Save stays on for them.
+    expect(themeSaveBody(next, reset)).toEqual({ fonts: draft.fonts, radius: "sharp" });
+    // Nothing unsaved: the reset branding exactly.
+    expect(draftAfterColorsReset({ ...draft, fonts: SAVED.fonts, radius: SAVED.radius }, reset)).toEqual(reset);
   });
 });
 

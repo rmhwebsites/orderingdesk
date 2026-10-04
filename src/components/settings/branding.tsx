@@ -17,6 +17,7 @@ import {
 } from "@/lib/brand-theme";
 import { BRAND_RADII, type BrandColors, type BrandRadius, type WorkspaceBranding } from "@/lib/branding";
 import {
+  draftAfterColorsReset,
   draftColors,
   draftDark,
   draftWorkspaceBranding,
@@ -257,11 +258,21 @@ export function BrandingSection({
     setAccent(nextAccent);
     const next = draftOf(result.data.branding, nextAccent);
     setSaved(next);
-    setDraft(next);
-    setDone(kind === "reset" ? "Back to the Ordering Desk colors." : "Branding saved. The workspace now uses it.");
     if (kind === "reset") {
+      // Only the colors were reset: font and corner edits not saved yet
+      // stay in the form, still waiting for Save.
+      setDraft((current) => draftAfterColorsReset(current, next));
+      const keptEdits = themeSaveBody(draftAfterColorsReset(draft, next), next) !== null;
+      setDone(
+        keptEdits
+          ? "Back to the Ordering Desk colors. Your font and corner changes are not saved yet."
+          : "Back to the Ordering Desk colors.",
+      );
       // The reset button is gone: the first color field holds focus.
       focusSoon(() => document.getElementById("brand-primary"));
+    } else {
+      setDraft(next);
+      setDone("Branding saved. The workspace now uses it.");
     }
     // The workspace shell renders the theme on the server.
     router.refresh();
@@ -459,7 +470,7 @@ export function BrandingSection({
             </div>
             {confirmingReset && view.colors ? (
               <ConfirmStep
-                message="Remove the saved colors? Buttons go back to the Ordering Desk lime and the Ordering Desk neutrals return. Fonts, corners and images stay."
+                message="Remove the saved colors? Buttons go back to the Ordering Desk lime and the Ordering Desk neutrals return. Fonts, corners and images stay, and so do font and corner changes you have not saved yet."
                 confirmLabel="Remove colors"
                 busyLabel="Removing"
                 busy={busy === "reset"}

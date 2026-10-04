@@ -16,6 +16,7 @@ import {
   Field,
   focusSoon,
   InlineMessage,
+  nearestRowOrder,
   Panel,
   requestJson,
   SaveStatus,
@@ -55,7 +56,8 @@ function MemberRow({
   isYou: boolean;
   busy: boolean;
   onRole: (role: WorkspaceRole) => void;
-  onRemove: () => void;
+  // Resolves true once the member is gone, false when the removal failed.
+  onRemove: () => Promise<boolean>;
 }) {
   const [confirming, setConfirming] = useState(false);
   const removeRef = useRef<HTMLButtonElement>(null);
@@ -123,11 +125,15 @@ function MemberRow({
           busyLabel="Removing"
           busy={busy}
           onConfirm={() => {
-            onRemove();
             setConfirming(false);
-            // Stay on this row while the removal runs; the section moves
-            // focus on once the row is gone.
-            focusSoon(() => removeRef.current);
+            // Gone: the section moves focus to the nearest row (or the
+            // heading). Failed: back to this row's Remove button, enabled
+            // again by then, next to the error the section shows.
+            void onRemove().then((removed) => {
+              if (!removed) {
+                focusSoon(() => removeRef.current);
+              }
+            });
           }}
           onCancel={() => setConfirming(false)}
           returnFocus={() => removeRef.current}
@@ -150,7 +156,8 @@ function RequestRow({
 }: {
   request: RosterRequestView;
   denied: boolean;
-  busy: boolean;
+  // The decision running for this request, if any.
+  busy: "approve" | "deny" | null;
   showDates: boolean;
   onApprove: () => void;
   onDeny: () => void;
@@ -173,18 +180,18 @@ function RequestRow({
         <div className="flex shrink-0 items-center gap-2">
           <button
             type="button"
-            disabled={busy}
+            disabled={busy !== null}
             onClick={onApprove}
             className={ui.buttonSecondary}
             aria-label={`Approve ${request.email} as ${request.role}`}
           >
-            {busy ? "Saving" : "Approve"}
+            {busy === "approve" ? "Approving" : "Approve"}
           </button>
           {denied ? null : (
             <button
               ref={denyRef}
               type="button"
-              disabled={busy}
+              disabled={busy !== null}
               onClick={() => setConfirming(true)}
               className={ui.buttonQuiet}
               aria-label={`Deny ${request.email}`}
@@ -203,7 +210,7 @@ function RequestRow({
           }
           confirmLabel="Deny"
           busyLabel="Denying"
-          busy={busy}
+          busy={busy === "deny"}
           onConfirm={() => {
             onDeny();
             setConfirming(false);
@@ -326,7 +333,7 @@ export function TeamSection({
   const [inviteDone, setInviteDone] = useState<string | null>(null);
   const base = `/api/workspaces/${encodeURIComponent(workspaceId)}/members`;
 
-  const [requestBusy, setRequestBusy] = useState<string | null>(null);
+  const [requestBusy, setRequestBusy] = useState<{ id: string; action: "approve" | "deny" } | null>(null);
   const [requestError, setRequestError] = useState<string | null>(null);
 
   async function reload(): Promise<Omit<TeamData, "rosterTags"> | null> {
@@ -349,7 +356,7 @@ export function TeamSection({
   // Approve or deny a Shopify tag request. Approve names the role the
   // manager saw, so a tag changed meanwhile is refused (409), not approved.
   async function decide(target: RosterRequestView, action: "approve" | "deny") {
-    setRequestBusy(target.id);
+    setRequestBusy({ id: target.id, action });
     setRequestError(null);
     const index = team.requests.waiting.findIndex((entry) => entry.id === target.id);
     const result = await requestJson<{ ok: true }>(
@@ -382,18 +389,26 @@ export function TeamSection({
     );
   }
 
-  // The first control of the member or invite row now at index (or the
-  // last one), for focus after a row was removed.
+  // The first enabled control of a row of the list, for focus after the row
+  // at index was removed: the row that took its place, else the nearest one
+  // that has a control (your own row and Shopify-tagged rows have none).
   function rowControl(kind: "member" | "invite" | "request", ids: string[], index: number): HTMLElement | null {
-    const id = ids[Math.min(index, ids.length - 1)];
-    if (id === undefined) {
-      return null;
+    for (const i of nearestRowOrder(ids.length, index)) {
+      const row = document.querySelector(`[data-${kind}="${CSS.escape(ids[i])}"]`);
+      const control = row?.querySelector<HTMLElement>("select:not([disabled]), button:not([disabled])");
+      if (control) {
+        return control;
+      }
     }
-    const row = document.querySelector(`[data-${kind}="${CSS.escape(id)}"]`);
-    return row?.querySelector<HTMLElement>("select:not([disabled]), button:not([disabled])") ?? null;
+    return null;
   }
 
-  async function mutate(id: string, method: "PATCH" | "DELETE", json: unknown) {
+  // Answers whether the change went through. Focus: a role change keeps it
+  // on the role control (disabled while saving); a removed row's focus goes
+  // to the nearest row, else the list's heading (members) or the invite
+  // field (invites). A failed member removal is refocused by MemberRow; a
+  // failed invite revoke goes back to its Revoke button.
+  async function mutate(id: string, method: "PATCH" | "DELETE", json: unknown): Promise<boolean> {
     setBusyId(id);
     setListError(null);
     const memberIndex = team.members.findIndex((member) => member.userId === id);
@@ -402,13 +417,20 @@ export function TeamSection({
     if (!result.ok) {
       setListError(result.error);
     }
-    const next = await reload();
+    const next = (await reload()) ?? team;
     setBusyId(null);
-    if (method !== "DELETE" || !result.ok || !next) {
-      return;
+    if (method === "PATCH") {
+      focusSoon(() => document.getElementById(`role-${id}`));
+      return result.ok;
     }
-    // The removed row is gone: focus the row that took its place, else the
-    // list's heading (members) or the invite field (invites).
+    if (!result.ok) {
+      if (inviteIndex !== -1) {
+        focusSoon(() =>
+          document.querySelector(`[data-invite="${CSS.escape(id)}"]`)?.querySelector<HTMLElement>("button:not([disabled])"),
+        );
+      }
+      return false;
+    }
     if (memberIndex !== -1) {
       const ids = next.members.map((member) => member.userId);
       focusSoon(() => rowControl("member", ids, memberIndex) ?? sectionHeading("team"));
@@ -416,6 +438,7 @@ export function TeamSection({
       const ids = next.invites.map((pending) => pending.email);
       focusSoon(() => rowControl("invite", ids, inviteIndex) ?? document.getElementById("invite-email"));
     }
+    return true;
   }
 
   async function invite(event: React.FormEvent<HTMLFormElement>) {
@@ -456,7 +479,7 @@ export function TeamSection({
                 isYou={member.userId === viewerUserId}
                 busy={busyId === member.userId}
                 onRole={(next) => void mutate(member.userId, "PATCH", { userId: member.userId, role: next })}
-                onRemove={() => void mutate(member.userId, "DELETE", { userId: member.userId })}
+                onRemove={() => mutate(member.userId, "DELETE", { userId: member.userId })}
               />
             ))}
           </ul>
@@ -492,7 +515,7 @@ export function TeamSection({
                   key={entry.id}
                   request={entry}
                   denied={false}
-                  busy={requestBusy === entry.id}
+                  busy={requestBusy?.id === entry.id ? requestBusy.action : null}
                   showDates={now > 0}
                   onApprove={() => void decide(entry, "approve")}
                   onDeny={() => void decide(entry, "deny")}
@@ -510,7 +533,7 @@ export function TeamSection({
                     key={entry.id}
                     request={entry}
                     denied
-                    busy={requestBusy === entry.id}
+                    busy={requestBusy?.id === entry.id ? requestBusy.action : null}
                     showDates={now > 0}
                     onApprove={() => void decide(entry, "approve")}
                     onDeny={() => {}}

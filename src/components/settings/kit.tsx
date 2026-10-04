@@ -5,7 +5,7 @@
 // an in-page confirmation step, focus hand-off and a JSON request helper.
 // Tokens and the shared control shapes (src/components/ui.ts) only.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useRef } from "react";
 import { CaretDownIcon } from "@phosphor-icons/react/CaretDown";
 import { CheckCircleIcon } from "@phosphor-icons/react/CheckCircle";
 import { InfoIcon } from "@phosphor-icons/react/Info";
@@ -74,6 +74,17 @@ export function focusSoon(target: () => HTMLElement | null | undefined): void {
   setTimeout(run, 100);
 }
 
+// After the row at `index` of a list was removed (`length` rows are left):
+// the order in which to look for the row whose control takes focus. The
+// row that took its place first, then the rows after it, then the rows
+// before it, nearest first. The caller skips rows with nothing to focus.
+export function nearestRowOrder(length: number, index: number): number[] {
+  const start = Math.min(Math.max(index, 0), length);
+  const after = Array.from({ length: length - start }, (_, i) => start + i);
+  const before = Array.from({ length: start }, (_, i) => start - 1 - i);
+  return [...after, ...before];
+}
+
 // The heading of a Settings section, focusable from script (not by Tab):
 // where focus goes when what it was on disappears with nothing nearer.
 export function sectionHeading(id: string): HTMLElement | null {
@@ -92,7 +103,10 @@ export function SettingsSection({
   children: React.ReactNode;
 }) {
   return (
-    <section id={id} aria-labelledby={`${id}-heading`} className="flex scroll-mt-32 flex-col gap-4 sm:scroll-mt-24">
+    // scroll-mt clears the sticky workspace header when a section link
+    // opens the section: two rows (about 109px) up to lg, phones and
+    // tablets alike, one row (about 61px) from lg.
+    <section id={id} aria-labelledby={`${id}-heading`} className="flex scroll-mt-32 flex-col gap-4 lg:scroll-mt-24">
       <div>
         <h2 id={`${id}-heading`} tabIndex={-1} className="font-display text-lg font-semibold text-ink">
           {title}
@@ -215,7 +229,9 @@ export function ToneChip({ tone, children }: { tone: string; children: React.Rea
 }
 
 // The in-page confirmation step for a destructive action: says what will
-// happen and takes focus on its confirm button. Cancel and Esc call
+// happen and takes focus on its confirm button, which the question
+// describes (aria-describedby), so a screen reader announces what is being
+// confirmed along with the button. Cancel and Esc call
 // onCancel and give focus back to returnFocus (the control that opened the
 // step, as it is after the step closes). After a confirm, the caller moves
 // focus itself (focusSoon), since what should hold it depends on what the
@@ -238,6 +254,7 @@ export function ConfirmStep({
   returnFocus: () => HTMLElement | null | undefined;
 }) {
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const messageId = useId();
   const wasBusy = useRef(busy);
   useEffect(() => {
     confirmRef.current?.focus();
@@ -265,7 +282,9 @@ export function ConfirmStep({
         }
       }}
     >
-      <p className="min-w-0 flex-1 text-sm text-ink">{message}</p>
+      <p id={messageId} className="min-w-0 flex-1 text-sm text-ink">
+        {message}
+      </p>
       <div className="flex shrink-0 gap-2">
         <button type="button" onClick={cancel} disabled={busy} className={ui.buttonSecondary}>
           Cancel
@@ -275,6 +294,7 @@ export function ConfirmStep({
           type="button"
           onClick={onConfirm}
           disabled={busy}
+          aria-describedby={messageId}
           className={ui.buttonDanger}
         >
           {busy ? busyLabel : confirmLabel}

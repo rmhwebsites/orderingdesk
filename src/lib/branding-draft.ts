@@ -59,6 +59,14 @@ export function themeSaveBody(draft: ThemeDraft, saved: ThemeDraft): Record<stri
   return Object.keys(body).length > 0 ? body : null;
 }
 
+// The draft after "Use the Ordering Desk colors" saved {colors: null}:
+// the colors and dark overrides come from `reset` (the branding as saved
+// now), while font and corner edits that were not saved yet stay in the
+// draft, still waiting for Save.
+export function draftAfterColorsReset(draft: ThemeDraft, reset: ThemeDraft): ThemeDraft {
+  return { ...reset, fonts: draft.fonts, radius: draft.radius };
+}
+
 // The stored images with the draft theme on top: what the live preview
 // renders (brandStyle checks the colors again and keeps the Ordering Desk
 // neutrals while they fail).
