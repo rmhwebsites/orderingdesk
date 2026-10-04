@@ -165,6 +165,23 @@ describe("inviteMember", () => {
     expect(INVITE_SEND_WINDOW_MS).toBe(60 * 60 * 1000);
   });
 
+  // Two managers (or one fast script) inviting at once must not get past
+  // the limit: each send is reserved in one statement that counts and
+  // inserts together.
+  it("lets exactly the hourly allowance through when many invites arrive at once", async () => {
+    const db = await setup();
+    const ctx = { workspaceId: WS, inviterId: "u_lead" };
+    const results = await Promise.all(
+      Array.from({ length: 50 }, (_, i) =>
+        inviteMember(db, ctx, { email: `rush${i}@example.com`, role: "staff" }, { now: 2_000_000 + i }),
+      ),
+    );
+    expect(results.filter((result) => result.kind === "invited")).toHaveLength(INVITE_SEND_LIMIT);
+    expect(results.filter((result) => result.kind === "limited")).toHaveLength(50 - INVITE_SEND_LIMIT);
+    expect(await db.select().from(schema.inviteSends)).toHaveLength(INVITE_SEND_LIMIT);
+    expect(await invitesOf(db)).toHaveLength(INVITE_SEND_LIMIT);
+  });
+
   it("changes nothing for someone who is already a member", async () => {
     const db = await setup();
     const before = await membersOf(db);

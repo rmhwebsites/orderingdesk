@@ -132,6 +132,16 @@ describe("POST /api/workspaces/[id]/members", () => {
     expect(((await limited.json()) as { error: string }).error).toContain("Try again");
     expect(state.mail).toHaveLength(30);
   });
+
+  it("sends exactly 30 invite emails when 50 invites arrive at once", async () => {
+    as("u_manager", "manager@example.com");
+    const responses = await Promise.all(
+      Array.from({ length: 50 }, (_, i) => POST(request("POST", { email: `rush${i}@b.example`, role: "staff" }), context)),
+    );
+    expect(responses.filter((response) => response.status === 201)).toHaveLength(30);
+    expect(responses.filter((response) => response.status === 429)).toHaveLength(20);
+    expect(state.mail).toHaveLength(30);
+  });
 });
 
 describe("PATCH /api/workspaces/[id]/members", () => {

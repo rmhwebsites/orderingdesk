@@ -3,8 +3,9 @@
 // admins can do the same in any workspace (the route's guard decides who
 // gets here). Memberships that come from here are source = manual.
 
-import { and, asc, count, eq, gt, lte } from "drizzle-orm";
+import { and, asc, eq, lte, sql } from "drizzle-orm";
 import type { Db } from "@/db";
+import { rowsAffected } from "@/db/batch";
 import { inviteSends, pendingInvites, user, workspaceMembers, workspaces } from "@/db/schema";
 import { isWorkspaceRole, type WorkspaceRole } from "@/lib/roles";
 import { isRecord } from "./desk/shapes";
@@ -110,17 +111,18 @@ export async function inviteMember(
   const now = opts?.now ?? Date.now();
   const windowStart = now - INVITE_SEND_WINDOW_MS;
   await db.delete(inviteSends).where(and(eq(inviteSends.workspaceId, ctx.workspaceId), lte(inviteSends.sentAt, windowStart)));
-  const [recent] = await db
-    .select({ sends: count() })
-    .from(inviteSends)
-    .where(and(eq(inviteSends.workspaceId, ctx.workspaceId), gt(inviteSends.sentAt, windowStart)));
-  if ((recent?.sends ?? 0) >= INVITE_SEND_LIMIT) {
+  // Reserve the send in ONE statement that counts the window and inserts
+  // only below the limit. A count followed by a separate insert let
+  // concurrent invites all see room and all send.
+  const reserved = await db.insert(inviteSends).select(
+    sql`select ${crypto.randomUUID()}, ${ctx.workspaceId}, ${now} where (select count(*) from ${inviteSends} where ${inviteSends.workspaceId} = ${ctx.workspaceId} and ${inviteSends.sentAt} > ${windowStart}) < ${INVITE_SEND_LIMIT}`,
+  );
+  if (rowsAffected(reserved, "invites") === 0) {
     return {
       kind: "limited",
       error: `This workspace has sent ${INVITE_SEND_LIMIT} invites in the last hour. Try again later.`,
     };
   }
-  await db.insert(inviteSends).values({ id: crypto.randomUUID(), workspaceId: ctx.workspaceId, sentAt: now });
 
   await db
     .insert(pendingInvites)
