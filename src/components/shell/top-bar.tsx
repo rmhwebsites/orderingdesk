@@ -52,14 +52,15 @@ function SyncChip() {
   }
   return (
     // shrink-0: the chip never collapses below its icon and label (the
-    // top bar wraps first; see TopBar).
+    // top bar wraps first, and from lg the workspace name truncates
+    // instead; see TopBar).
     <span
       data-tone={CHIP_TONE_COLOR[state.tone]}
       title={LIVE_TEXT[liveStatus]}
-      className="inline-flex h-8 min-w-0 shrink-0 items-center gap-1.5 rounded-control bg-tone-fill px-3 text-xs font-semibold text-tone-text"
+      className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-control bg-tone-fill px-3 text-xs font-semibold text-tone-text"
     >
       {chipIcon(state.tone, state.label)}
-      <span className="truncate">{state.label}</span>
+      <span>{state.label}</span>
       <span className="sr-only">. {LIVE_TEXT[liveStatus]}.</span>
     </span>
   );
@@ -89,7 +90,9 @@ function SyncButton() {
 // Below lg the bar wraps: the workspace and its controls on the first row,
 // the sync state and the Sync button on a full-width second row, so the
 // sync state (including "Sync failing") is always readable next to a wide
-// logo. From lg everything shares one row.
+// logo. From lg everything shares one row: the sync row and the controls
+// keep their size and a long workspace name truncates (the brand link may
+// shrink, lg:flex-initial with min-w-0).
 export function TopBar({ name, images }: { name: string; images: BrandImages }) {
   const { workspace } = useWorkspace();
   return (
@@ -102,7 +105,7 @@ export function TopBar({ name, images }: { name: string; images: BrandImages }) 
         <Link
           href="/"
           title={workspace.basePath === "" ? "Orders" : "All workspaces"}
-          className="order-1 -m-1 flex min-w-0 flex-1 items-center gap-3 rounded-control p-1 lg:flex-none"
+          className="order-1 -m-1 flex min-w-0 flex-1 items-center gap-3 rounded-control p-1 lg:flex-initial"
         >
           <WorkspaceBrandSlot name={name} images={images} />
           <span className="min-w-0">
@@ -113,7 +116,7 @@ export function TopBar({ name, images }: { name: string; images: BrandImages }) 
           </span>
         </Link>
 
-        <div className="order-3 flex w-full min-w-0 items-center justify-between gap-2 lg:order-2 lg:ml-auto lg:w-auto lg:justify-end">
+        <div className="order-3 flex w-full min-w-0 items-center justify-between gap-2 lg:order-2 lg:ml-auto lg:w-auto lg:shrink-0 lg:justify-end">
           <SyncChip />
           <SyncButton />
         </div>
