@@ -13,6 +13,7 @@ import {
   brandStyle,
   brandTokens,
   checkBrandColors,
+  contrastReport,
   deriveDarkPalette,
   deriveLightPalette,
   fontFamilyCss,
@@ -138,6 +139,42 @@ describe("checkBrandColors", () => {
   });
 });
 
+// The Settings summary rows are built from contrastReport, and
+// checkBrandColors is built from the same report, so a row shows failing
+// exactly when saving is blocked for it.
+describe("contrastReport", () => {
+  const samples: Array<{ colors: { primary: string; ink: string; background: string }; dark?: Record<string, string> }> = [
+    { colors: IMPACT },
+    { colors: { primary: "#91d500", ink: "#101820", background: "#8a8f96" } },
+    { colors: { primary: "#91d500", ink: "#9aa0a6", background: "#ffffff" } },
+    { colors: { primary: "#c8c8c8", ink: "#101820", background: "#ffffff" } },
+    { colors: { primary: "#6b4f2a", ink: "#3b2a1a", background: "#f6efe3" } },
+    { colors: IMPACT, dark: { background: "#f0f0f0" } },
+    { colors: IMPACT, dark: { ink: "#333333", primary: "#777777" } },
+  ];
+
+  it("fails a row exactly when checkBrandColors reports an issue for it", () => {
+    for (const { colors, dark } of samples) {
+      const report = contrastReport(colors, dark ?? null);
+      expect(report).toHaveLength(6);
+      const issues = checkBrandColors(colors, dark ?? null);
+      for (const row of report) {
+        const blocked = issues.some((issue) => issue.mode === row.mode && issue.field === row.field);
+        expect(row.pass, `${JSON.stringify({ colors, dark })} ${row.mode} ${row.kind}`).toBe(!blocked);
+        expect(row.pass).toBe(row.ratio >= TEXT_MIN);
+      }
+    }
+  });
+
+  it("shows status text failing on a mid grey background even though plain text passes on it", () => {
+    const report = contrastReport({ primary: "#91d500", ink: "#101820", background: "#8a8f96" }, null);
+    const light = (kind: string) => report.find((row) => row.mode === "light" && row.kind === kind)!;
+    expect(light("text").pass).toBe(true);
+    expect(light("status").pass).toBe(false);
+    expect(light("status").ratio).toBeLessThan(2);
+  });
+});
+
 describe("nearestPassingShade", () => {
   it("returns the color itself when it passes, the nearest passing shade otherwise", () => {
     const passes = (color: string) => contrastRatio(color, "#ffffff") >= 4.5;
@@ -222,6 +259,20 @@ describe("brandTokens and brandStyle", () => {
     expect(style["--brand-bg-dark"]).toBe(DEFAULT_DARK_PALETTE.bg);
     expect(style["--control-radius"]).toBe(DEFAULT_RADIUS.control);
     expect(style["--font-heading"]).toContain("var(--font-sora)");
+  });
+
+  // Without a palette, text on the primary is picked from the Ordering Desk
+  // ink and paper; when neither reaches AA on the accent, black or white
+  // does (one of them always reaches 4.58:1 on any color).
+  it("keeps button text at AA on any accent when there is no palette", () => {
+    for (const accent of ["#757575", "#777777", "#7a7a7a", "#91d500", "#101820", "#ff0000", "#0057ff"]) {
+      const tokens = brandTokens(null, accent);
+      for (const mode of ["light", "dark"] as const) {
+        expect(contrastRatio(tokens.primary[mode].ink, accent), `${accent} ${mode}`).toBeGreaterThanOrEqual(TEXT_MIN);
+      }
+    }
+    // The Ordering Desk look is unchanged where it already passes.
+    expect(brandTokens(null, "#91d500").primary.light.ink).toBe(DEFAULT_LIGHT_PALETTE.ink);
   });
 
   it("uses dark overrides for the dark primary", () => {

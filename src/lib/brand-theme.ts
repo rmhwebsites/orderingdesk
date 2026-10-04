@@ -198,54 +198,64 @@ function ratioText(ratio: number): string {
   return `${(Math.floor(ratio * 10) / 10).toFixed(1)}:1`;
 }
 
-// Issues of one theme. The light palette comes from colors; the dark one
-// from colors plus overrides.
-function issuesOf(
+// One contrast check of a theme: text on every surface (the ink field),
+// the semantic warning and error text on every surface (the background
+// field), and the best button text on the primary (the primary field).
+// Each needs TEXT_MIN. The Settings summary shows these rows, and
+// checkBrandColors reports exactly the failing ones, so a row is shown as
+// failing exactly when saving is blocked for it.
+export type ContrastCheck = {
+  mode: "light" | "dark";
+  kind: "text" | "status" | "button";
+  field: BrandColorField;
+  ratio: number;
+  pass: boolean;
+};
+
+function checksOf(
   mode: "light" | "dark",
   palette: Palette,
   primary: string,
   onPrimary: readonly string[],
-): Array<Omit<BrandColorIssue, "suggestion">> {
-  const issues: Array<Omit<BrandColorIssue, "suggestion">> = [];
+): ContrastCheck[] {
   const surfaces = surfacesOf(palette);
-  const prefix = mode === "dark" ? "In dark mode, t" : "T";
-  const inkRatio = worst(palette.ink, surfaces);
-  if (inkRatio < TEXT_MIN) {
-    issues.push({
-      mode,
-      field: "ink",
-      message: `${prefix}ext on this background reads at ${ratioText(inkRatio)}. It needs at least 4.5:1.`,
-    });
-  }
   const semantic = mode === "light" ? SEMANTIC_LIGHT : SEMANTIC_DARK;
-  const semanticRatio = Math.min(...semantic.map((color) => worst(color, surfaces)));
-  if (semanticRatio < TEXT_MIN) {
-    issues.push({
-      mode,
-      field: "background",
-      message:
-        mode === "light"
-          ? `This background is too dark for light mode: warning and error text would read at ${ratioText(semanticRatio)}. Pick a lighter background.`
-          : `This background is too light for dark mode: warning and error text would read at ${ratioText(semanticRatio)}. Pick a darker background.`,
-    });
-  }
-  const buttonRatio = contrastRatio(bestOn(primary, onPrimary), primary);
-  if (buttonRatio < TEXT_MIN) {
-    issues.push({
-      mode,
-      field: "primary",
-      message: `${mode === "dark" ? "In dark mode, b" : "B"}utton text on this color reads at ${ratioText(buttonRatio)} at best. It needs at least 4.5:1.`,
-    });
-  }
-  return issues;
+  const rows: Array<Omit<ContrastCheck, "mode" | "pass">> = [
+    { kind: "text", field: "ink", ratio: worst(palette.ink, surfaces) },
+    { kind: "status", field: "background", ratio: Math.min(...semantic.map((color) => worst(color, surfaces))) },
+    { kind: "button", field: "primary", ratio: contrastRatio(bestOn(primary, onPrimary), primary) },
+  ];
+  return rows.map((row) => ({ mode, ...row, pass: row.ratio >= TEXT_MIN }));
 }
 
-function rawIssues(colors: BrandColors, dark?: Partial<BrandColors> | null) {
+// Every check of both themes, light first. The light palette comes from
+// colors; the dark one from colors plus overrides.
+export function contrastReport(colors: BrandColors, dark?: Partial<BrandColors> | null): ContrastCheck[] {
   const onPrimary = [colors.ink, WHITE];
   return [
-    ...issuesOf("light", deriveLightPalette(colors), colors.primary, onPrimary),
-    ...issuesOf("dark", deriveDarkPalette(colors, dark), brandHex(dark?.primary) ?? colors.primary, onPrimary),
+    ...checksOf("light", deriveLightPalette(colors), colors.primary, onPrimary),
+    ...checksOf("dark", deriveDarkPalette(colors, dark), brandHex(dark?.primary) ?? colors.primary, onPrimary),
   ];
+}
+
+function issueMessage(check: ContrastCheck): string {
+  const ratio = ratioText(check.ratio);
+  switch (check.kind) {
+    case "text":
+      return `${check.mode === "dark" ? "In dark mode, t" : "T"}ext on this background reads at ${ratio}. It needs at least 4.5:1.`;
+    case "status":
+      return check.mode === "light"
+        ? `This background is too dark for light mode: warning and error text would read at ${ratio}. Pick a lighter background.`
+        : `This background is too light for dark mode: warning and error text would read at ${ratio}. Pick a darker background.`;
+    case "button":
+      return `${check.mode === "dark" ? "In dark mode, b" : "B"}utton text on this color reads at ${ratio} at best. It needs at least 4.5:1.`;
+  }
+}
+
+function rawIssues(colors: BrandColors, dark?: Partial<BrandColors> | null): Array<Omit<BrandColorIssue, "suggestion">> {
+  return contrastReport(colors, dark)
+    .filter((check) => !check.pass)
+    .map((check) => ({ mode: check.mode, field: check.field, message: issueMessage(check) }));
 }
 
 // The nearest shade of color (mixed toward black or white in 1% steps)
@@ -379,7 +389,7 @@ function validDark(value: unknown): Partial<BrandColors> | null {
 // it is well formed and passes checkBrandColors (it was checked on save;
 // this is the reader's own check); otherwise the Ordering Desk neutrals
 // stay and only the primary color applies (branding primary, else the
-// workspace accent, else the default).
+// workspace accent, else the default), with button text kept at AA.
 export function brandTokens(branding: WorkspaceBranding | null | undefined, accentColor: unknown): BrandTokens {
   const colors = validColors(branding?.colors);
   const dark = colors ? validDark(branding?.darkColors) : null;
@@ -396,11 +406,16 @@ export function brandTokens(branding: WorkspaceBranding | null | undefined, acce
     };
   }
   const fill = brandHex(branding?.colors?.primary) ?? brandHex(accentColor) ?? DEFAULT_PRIMARY;
+  // Text on the fill: the Ordering Desk ink or paper, unless neither reaches
+  // AA on this fill (an accent is never contrast checked when it is set);
+  // then black or white, one of which always reaches 4.58:1.
+  const onFill =
+    contrastRatio(bestOn(fill, DEFAULT_ON_PRIMARY), fill) >= TEXT_MIN ? DEFAULT_ON_PRIMARY : [BLACK, WHITE];
   return {
     palette: null,
     primary: {
-      light: primaryTokens(fill, DEFAULT_LIGHT_PALETTE, DEFAULT_ON_PRIMARY),
-      dark: primaryTokens(fill, DEFAULT_DARK_PALETTE, DEFAULT_ON_PRIMARY),
+      light: primaryTokens(fill, DEFAULT_LIGHT_PALETTE, onFill),
+      dark: primaryTokens(fill, DEFAULT_DARK_PALETTE, onFill),
     },
   };
 }

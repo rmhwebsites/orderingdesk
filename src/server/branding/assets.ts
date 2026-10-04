@@ -19,7 +19,7 @@
 import { and, eq, isNull, sql } from "drizzle-orm";
 import type { Db } from "@/db";
 import { workspaces } from "@/db/schema";
-import { checkBrandColors, isBrandFontId, isBrandRadius, type BrandColorIssue } from "@/lib/brand-theme";
+import { checkBrandColors, DEFAULT_PRIMARY, isBrandFontId, isBrandRadius, type BrandColorIssue } from "@/lib/brand-theme";
 import {
   brandAssetPath,
   brandHex,
@@ -455,7 +455,12 @@ export async function saveBrandTheme(db: Db, workspaceId: string, body: unknown)
         return { error: contrast[0].message };
       }
     }
-    return { branding: next, ...(patch.colors ? { accentColor: patch.colors.primary } : {}) };
+    // The accent follows the palette: its primary when one is saved, and
+    // the Ordering Desk primary when the colors are cleared ("Use the
+    // Ordering Desk colors"), so buttons never keep a brand primary whose
+    // text color was only checked against the brand's own ink.
+    const accentColor = patch.colors ? patch.colors.primary : patch.colors === null ? DEFAULT_PRIMARY : null;
+    return { branding: next, ...(accentColor ? { accentColor } : {}) };
   });
   if (result.kind === "invalid" && contrast.length > 0) {
     return { kind: "contrast", error: result.error, issues: contrast };

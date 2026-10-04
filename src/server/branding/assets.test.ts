@@ -1,3 +1,4 @@
+import { DEFAULT_PRIMARY } from "@/lib/brand-theme";
 import { describe, it, expect, beforeEach } from "vitest";
 import { eq } from "drizzle-orm";
 import type { Db } from "@/db";
@@ -261,6 +262,22 @@ describe("saveBrandTheme", () => {
       expect(result.issues.some((issue) => issue.field === "ink" && issue.suggestion)).toBe(true);
     }
     expect(await branding()).toBeNull();
+  });
+
+  // "Use the Ordering Desk colors": no palette, and the buttons go back to
+  // the Ordering Desk primary instead of keeping the old brand primary,
+  // whose text color was only checked against the brand's own ink.
+  it("puts the accent back to the Ordering Desk primary when the colors are cleared", async () => {
+    await saveBrandTheme(db, WS, { colors: { primary: "#757575", ink: "#000000", background: "#ffffff" } });
+    const accent = async () =>
+      (await db.select({ accent: schema.workspaces.accentColor }).from(schema.workspaces).where(eq(schema.workspaces.id, WS)))[0]
+        .accent;
+    expect(await accent()).toBe("#757575");
+    await saveBrandTheme(db, WS, { colors: null });
+    expect(await accent()).toBe(DEFAULT_PRIMARY);
+    // Saving fonts alone leaves the accent as it is.
+    await saveBrandTheme(db, WS, { fonts: { heading: "inter", body: "inter" } });
+    expect(await accent()).toBe(DEFAULT_PRIMARY);
   });
 
   it("clears parts with null and drops dark overrides without light colors", async () => {

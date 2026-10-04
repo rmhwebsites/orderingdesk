@@ -1,18 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CheckCircleIcon } from "@phosphor-icons/react/CheckCircle";
 import { WarningIcon } from "@phosphor-icons/react/Warning";
-import { contrastRatio } from "@/lib/accent";
 import { BRAND_FONTS, SYSTEM_FONT_ID } from "@/lib/brand-fonts";
 import {
   checkBrandColors,
+  contrastReport,
   DEFAULT_LIGHT_PALETTE,
+  DEFAULT_PRIMARY,
   deriveDarkPalette,
   RADIUS_SCALE,
-  TEXT_MIN,
   type BrandColorIssue,
+  type ContrastCheck,
 } from "@/lib/brand-theme";
 import { BRAND_RADII, type BrandColors, type BrandRadius, type WorkspaceBranding } from "@/lib/branding";
 import {
@@ -27,7 +28,18 @@ import type { BrandAssetView, BrandingView } from "@/server/branding/assets";
 import { ui } from "@/components/ui";
 import { BrandImages } from "./brand-images";
 import { EmailPreview, LivePreview } from "./brand-preview";
-import { describedBy, Field, InlineMessage, Panel, requestJson, SaveStatus, Select, SettingsSection } from "./kit";
+import {
+  ConfirmStep,
+  describedBy,
+  Field,
+  focusSoon,
+  InlineMessage,
+  Panel,
+  requestJson,
+  SaveStatus,
+  Select,
+  SettingsSection,
+} from "./kit";
 
 const FIELD_LABEL: Record<keyof BrandColors, string> = { primary: "Primary", ink: "Text", background: "Background" };
 const FIELD_HELP: Record<keyof BrandColors, string> = {
@@ -115,34 +127,42 @@ function ratioText(ratio: number): string {
   return `${(Math.floor(ratio * 10) / 10).toFixed(1)}:1`;
 }
 
+const CHECK_LABEL: Record<ContrastCheck["kind"], string> = {
+  text: "Text on every surface",
+  status: "Warning and error text",
+  button: "Button text on the primary color",
+};
+
+// One row per check that decides whether the colors can be saved
+// (contrastReport, the same report checkBrandColors blocks on), so a row
+// shows failing exactly when saving is blocked for it. Each row shows the
+// worst ratio the check found.
 function ContrastSummary({ colors, dark }: { colors: BrandColors; dark: Partial<BrandColors> | null }) {
-  const darkPalette = deriveDarkPalette(colors, dark);
-  const darkPrimary = dark?.primary ?? colors.primary;
-  const onPrimary = (fill: string) => Math.max(contrastRatio(colors.ink, fill), contrastRatio("#ffffff", fill));
-  const rows = [
-    { label: "Text on the background", ratio: contrastRatio(colors.ink, colors.background) },
-    { label: "Button text on the primary color", ratio: onPrimary(colors.primary) },
-    { label: "Dark mode text", ratio: contrastRatio(darkPalette.ink, darkPalette.bg) },
-    { label: "Dark mode button text", ratio: onPrimary(darkPrimary) },
-  ];
+  const report = contrastReport(colors, dark);
   return (
-    <ul className="grid gap-1.5 sm:grid-cols-2">
-      {rows.map((row) => {
-        const pass = row.ratio >= TEXT_MIN;
-        return (
-          <li key={row.label} className="flex items-center gap-2 text-sm text-ink">
-            <span data-tone={pass ? "green" : "red"} className="text-tone-text">
-              {pass ? <CheckCircleIcon size={16} aria-hidden /> : <WarningIcon size={16} aria-hidden />}
-            </span>
-            <span className="min-w-0 flex-1">{row.label}</span>
-            <span className="font-mono text-xs tabular-nums text-ink-2">
-              {ratioText(row.ratio)}
-              <span className="sr-only">{pass ? ", passes" : ", fails"}</span>
-            </span>
-          </li>
-        );
-      })}
-    </ul>
+    <div className="grid gap-3 sm:grid-cols-2">
+      {(["light", "dark"] as const).map((mode) => (
+        <div key={mode} className="min-w-0">
+          <h4 className="text-xs font-semibold text-ink-2">{mode === "light" ? "Light mode" : "Dark mode"}</h4>
+          <ul className="mt-1.5 flex flex-col gap-1.5">
+            {report
+              .filter((check) => check.mode === mode)
+              .map((check) => (
+                <li key={check.kind} className="flex items-center gap-2 text-sm text-ink">
+                  <span data-tone={check.pass ? "green" : "red"} className="text-tone-text">
+                    {check.pass ? <CheckCircleIcon size={16} aria-hidden /> : <WarningIcon size={16} aria-hidden />}
+                  </span>
+                  <span className="min-w-0 flex-1">{CHECK_LABEL[check.kind]}</span>
+                  <span className="font-mono text-xs tabular-nums text-ink-2">
+                    {ratioText(check.ratio)}
+                    <span className="sr-only">{check.pass ? ", passes" : ", fails"}</span>
+                  </span>
+                </li>
+              ))}
+          </ul>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -167,6 +187,8 @@ export function BrandingSection({
   const [busy, setBusy] = useState<"save" | "reset" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
+  const [confirmingReset, setConfirmingReset] = useState(false);
+  const resetRef = useRef<HTMLButtonElement>(null);
 
   const colors = draftColors(draft.colors);
   const dark = draftDark(draft.darkColors);
@@ -200,11 +222,15 @@ export function BrandingSection({
     if (!issue.suggestion) {
       return;
     }
-    if (issue.mode === "dark" && dark?.[issue.field]) {
+    const darkField = issue.mode === "dark" && dark?.[issue.field];
+    if (darkField) {
       setDarkColor(issue.field, issue.suggestion);
     } else {
       setColor(issue.field, issue.suggestion);
     }
+    // The suggestion (and its button) goes once applied: focus the color
+    // field it changed.
+    focusSoon(() => document.getElementById(darkField ? `brand-dark-${issue.field}` : `brand-${issue.field}`));
   }
 
   async function put(json: Record<string, unknown>, kind: "save" | "reset") {
@@ -216,17 +242,27 @@ export function BrandingSection({
       { method: "PUT", json },
     );
     setBusy(null);
+    setConfirmingReset(false);
     if (!result.ok) {
       setError(result.error);
+      if (kind === "reset") {
+        focusSoon(() => resetRef.current);
+      }
       return;
     }
     setView(result.data.branding);
-    const nextAccent = result.data.branding.colors?.primary ?? accent;
+    // Clearing the colors also puts the accent back to the Ordering Desk
+    // primary on the server (saveBrandTheme).
+    const nextAccent = result.data.branding.colors?.primary ?? (kind === "reset" ? DEFAULT_PRIMARY : accent);
     setAccent(nextAccent);
     const next = draftOf(result.data.branding, nextAccent);
     setSaved(next);
     setDraft(next);
     setDone(kind === "reset" ? "Back to the Ordering Desk colors." : "Branding saved. The workspace now uses it.");
+    if (kind === "reset") {
+      // The reset button is gone: the first color field holds focus.
+      focusSoon(() => document.getElementById("brand-primary"));
+    }
     // The workspace shell renders the theme on the server.
     router.refresh();
   }
@@ -410,16 +446,28 @@ export function BrandingSection({
               ) : null}
               {view.colors ? (
                 <button
+                  ref={resetRef}
                   type="button"
-                  onClick={() => void put({ colors: null }, "reset")}
+                  onClick={() => setConfirmingReset(true)}
                   disabled={busy !== null}
                   className={ui.buttonQuiet}
                 >
-                  {busy === "reset" ? "Resetting" : "Use the Ordering Desk colors"}
+                  Use the Ordering Desk colors
                 </button>
               ) : null}
               <SaveStatus text={done} />
             </div>
+            {confirmingReset && view.colors ? (
+              <ConfirmStep
+                message="Remove the saved colors? Buttons go back to the Ordering Desk lime and the Ordering Desk neutrals return. Fonts, corners and images stay."
+                confirmLabel="Remove colors"
+                busyLabel="Removing"
+                busy={busy === "reset"}
+                onConfirm={() => void put({ colors: null }, "reset")}
+                onCancel={() => setConfirmingReset(false)}
+                returnFocus={() => resetRef.current}
+              />
+            ) : null}
           </div>
         </div>
 

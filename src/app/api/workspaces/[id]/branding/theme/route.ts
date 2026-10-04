@@ -9,7 +9,9 @@ type RouteContext = { params: Promise<{ id: string }> };
 // background?} | null, fonts: {heading, body} | null, radius: sharp |
 // subtle | soft | rounded | pill | null}. Every value is checked here
 // because it reaches CSS: hex colors only, fonts from the allowlist, radius
-// from the list. 200 {branding}; 400 {error} for a bad value; 400 {error,
+// from the list. Saved colors set the workspace accent to their primary;
+// colors null ("Use the Ordering Desk colors") puts it back to the
+// Ordering Desk primary. 200 {branding}; 400 {error} for a bad value; 400 {error,
 // issues} when colors fail WCAG AA (each issue names the field and a
 // passing shade); 409 {error} on a concurrent change.
 export async function PUT(request: Request, context: RouteContext) {
