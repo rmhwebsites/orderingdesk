@@ -10,6 +10,12 @@ import type { EventView } from "../server/desk/shapes";
 // reconnecting instead of retrying.
 export const LIVE_KICK_CLOSE_CODE = 4003;
 
+// The close code a workspace room uses when a socket has been open for
+// longer than it may go without a fresh check (src/realtime/room.ts): the
+// client reconnects at once with a new ticket, whose route checks access
+// again.
+export const LIVE_REFRESH_CLOSE_CODE = 4001;
+
 export type LiveOrderStatus = {
   id: string;
   statusKey: string;

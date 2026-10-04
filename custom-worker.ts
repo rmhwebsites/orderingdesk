@@ -13,7 +13,8 @@ export default {
     // Host gate first (src/server/host.ts): an unknown host, or a client
     // domain that is not active yet, gets a plain 404 and never reaches the
     // app; x-forwarded-host is pinned to the routed host.
-    const gated = await gateRequest(request, env, getDbFromEnv(env));
+    const db = getDbFromEnv(env);
+    const gated = await gateRequest(request, env, db);
     if (gated.kind === "respond") {
       return gated.response;
     }
@@ -21,7 +22,7 @@ export default {
     // handler cannot reliably hand back a WebSocket upgrade. Everything else
     // is the Next.js app.
     if (new URL(request.url).pathname === LIVE_PATH) {
-      return handleLiveRequest(request, env);
+      return handleLiveRequest(request, env, db);
     }
     return handler.fetch(gated.request, env, ctx);
   },

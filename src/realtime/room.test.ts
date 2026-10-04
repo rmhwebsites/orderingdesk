@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeAll, afterEach, vi } from "vitest";
-import { KICK_CLOSE_CODE, WorkspaceRoom } from "./room";
+import { LIVE_REFRESH_CLOSE_CODE } from "../lib/live-events";
+import { KICK_CLOSE_CODE, MAX_SOCKET_AGE_MS, WorkspaceRoom } from "./room";
+import { LIVE_TICKET_TTL_MS } from "./ticket";
 
 // workerd globals the room touches, played by minimal stand-ins (vitest runs
 // on Node; "cloudflare:workers" is aliased to src/test/cloudflare-workers-stub.ts).
@@ -17,15 +19,25 @@ beforeAll(() => {
 type FakeSocket = {
   tags: string[];
   sent: string[];
+  attachment: unknown;
   send(data: string): void;
   close(code?: number, reason?: string): void;
+  serializeAttachment(value: unknown): void;
+  deserializeAttachment(): unknown;
   closed?: [number?, string?];
 };
 
-function socket(opts?: { throws?: boolean; tags?: string[] }): FakeSocket {
+function socket(opts?: { throws?: boolean; tags?: string[]; attachment?: unknown }): FakeSocket {
   const s: FakeSocket = {
     tags: opts?.tags ?? [],
     sent: [],
+    attachment: opts?.attachment ?? null,
+    serializeAttachment(value: unknown) {
+      s.attachment = value;
+    },
+    deserializeAttachment() {
+      return s.attachment;
+    },
     send(data: string) {
       if (opts?.throws) {
         throw new Error("socket closing");
@@ -101,9 +113,15 @@ class UpgradeResponse {
   }
 }
 
+let lastServerSocket: FakeSocket | null = null;
+
 class FakeWebSocketPair {
   0 = { side: "client" };
-  1 = { side: "server" };
+  1: FakeSocket;
+  constructor() {
+    this[1] = socket();
+    lastServerSocket = this[1];
+  }
 }
 
 function connectRequest(headers: Record<string, string>) {
@@ -167,7 +185,7 @@ describe("WorkspaceRoom", () => {
     const first = (await instance.fetch(connectRequest(headers))) as unknown as UpgradeResponse;
     expect(first.status).toBe(101);
     expect(first.webSocket).toEqual({ side: "client" });
-    expect(accepted).toEqual([{ socket: { side: "server" }, tags: ["u_marta"] }]);
+    expect(accepted).toEqual([{ socket: lastServerSocket, tags: ["u_marta"] }]);
     expect(store.data.get("nonce:" + "a".repeat(32))).toBe(now + 60000);
     expect(store.alarm).toBe(now + 60000);
 
@@ -228,6 +246,93 @@ describe("WorkspaceRoom", () => {
       (await instance.fetch(new Request("https://workspace-room/kick", { method: "POST", body: "{}" }))).status,
     ).toBe(400);
     expect(marta.closed).toBeUndefined();
+  });
+
+  // A kick also remembers when it happened, so a ticket the person minted
+  // before it (kept in reserve) cannot open a socket afterwards.
+  it("refuses a ticket issued before its user was kicked, and admits one issued after", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: 5_000_000 });
+    try {
+      const kickedAt = Date.now();
+      const { instance, accepted, store } = room([]);
+      await instance.fetch(
+        new Request("https://workspace-room/kick", { method: "POST", body: JSON.stringify({ userId: "u_marta" }) }),
+      );
+      expect(store.data.get("kick:u_marta")).toBe(kickedAt);
+      expect(store.alarm).toBe(kickedAt + LIVE_TICKET_TTL_MS);
+
+      vi.stubGlobal("WebSocketPair", FakeWebSocketPair);
+      const realResponse = Response;
+      vi.stubGlobal("Response", Object.assign(UpgradeResponse, { json: realResponse.json.bind(realResponse) }));
+      const reserved = await instance.fetch(
+        connectRequest({
+          "x-live-user": "u_marta",
+          "x-live-nonce": "c".repeat(32),
+          "x-live-exp": String(kickedAt - 1000 + LIVE_TICKET_TTL_MS),
+        }),
+      );
+      expect(reserved.status).toBe(401);
+      const otherUser = (await instance.fetch(
+        connectRequest({
+          "x-live-user": "u_jo",
+          "x-live-nonce": "d".repeat(32),
+          "x-live-exp": String(kickedAt - 1000 + LIVE_TICKET_TTL_MS),
+        }),
+      )) as unknown as UpgradeResponse;
+      expect(otherUser.status).toBe(101);
+      const fresh = (await instance.fetch(
+        connectRequest({
+          "x-live-user": "u_marta",
+          "x-live-nonce": "e".repeat(32),
+          "x-live-exp": String(kickedAt + 1 + LIVE_TICKET_TTL_MS),
+        }),
+      )) as unknown as UpgradeResponse;
+      expect(fresh.status).toBe(101);
+      expect(accepted.map((entry) => entry.tags)).toEqual([["u_jo"], ["u_marta"]]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("forgets a kick once every ticket issued before it has expired", async () => {
+    const now = Date.now();
+    const { instance, store } = room([]);
+    store.data.set("kick:u_old", now - LIVE_TICKET_TTL_MS - 1);
+    store.data.set("kick:u_recent", now - 5);
+    await instance.alarm();
+    expect([...store.data.keys()]).toEqual(["kick:u_recent"]);
+    expect(store.alarm).toBe(now - 5 + LIVE_TICKET_TTL_MS);
+  });
+
+  // Sockets are re-authorized at least every MAX_SOCKET_AGE_MS: the room
+  // closes older ones with the refresh code, and the client reconnects
+  // with a new ticket, which the ticket route and /live check again.
+  it("attaches the user and connection time to each socket", async () => {
+    const now = Date.now();
+    const { instance } = room([]);
+    vi.stubGlobal("WebSocketPair", FakeWebSocketPair);
+    const realResponse = Response;
+    vi.stubGlobal("Response", Object.assign(UpgradeResponse, { json: realResponse.json.bind(realResponse) }));
+    await instance.fetch(
+      connectRequest({ "x-live-user": "u_marta", "x-live-nonce": "f".repeat(32), "x-live-exp": String(now + 60000) }),
+    );
+    const attachment = lastServerSocket?.deserializeAttachment() as { userId: string; connectedAt: number };
+    expect(attachment.userId).toBe("u_marta");
+    expect(attachment.connectedAt).toBeGreaterThanOrEqual(now);
+  });
+
+  it("closes sockets past the age cap with the refresh code on the alarm, and wakes again for the next", async () => {
+    const now = Date.now();
+    const old = socket({ tags: ["u_marta"], attachment: { userId: "u_marta", connectedAt: now - MAX_SOCKET_AGE_MS - 1 } });
+    const unknownAge = socket({ tags: ["u_jo"] });
+    const young = socket({ tags: ["u_jo"], attachment: { userId: "u_jo", connectedAt: now - 1000 } });
+    const { instance, store } = room([old, unknownAge, young]);
+    await instance.alarm();
+    expect(old.closed).toEqual([LIVE_REFRESH_CLOSE_CODE, "Refresh"]);
+    expect(unknownAge.closed).toEqual([LIVE_REFRESH_CLOSE_CODE, "Refresh"]);
+    expect(young.closed).toBeUndefined();
+    expect(store.alarm).toBe(now - 1000 + MAX_SOCKET_AGE_MS);
+    expect(MAX_SOCKET_AGE_MS).toBe(30 * 60 * 1000);
   });
 
   it("completes the close handshake, mapping reserved codes", async () => {

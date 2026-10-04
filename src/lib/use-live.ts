@@ -7,7 +7,7 @@
 // on each poll tick.
 
 import { useEffect, useRef, useState } from "react";
-import { LIVE_KICK_CLOSE_CODE, parseLiveEvent, type LiveEvent } from "./live-events";
+import { LIVE_KICK_CLOSE_CODE, LIVE_REFRESH_CLOSE_CODE, parseLiveEvent, type LiveEvent } from "./live-events";
 
 export type LiveStatus = "connecting" | "live" | "offline";
 
@@ -24,9 +24,24 @@ export function reconnectDelay(attempt: number, random: number = Math.random()):
 
 // Every close is retried except the room removing this person (their
 // access to the workspace went): then the page reloads instead, and the
-// server answers with whatever they may still see.
+// server answers with whatever they may still see. The room's refresh
+// close (LIVE_REFRESH_CLOSE_CODE, a socket past its age cap) reconnects at
+// once with a new ticket.
 export function shouldReconnect(closeCode: number): boolean {
   return closeCode !== LIVE_KICK_CLOSE_CODE;
+}
+
+// The ticket route answers 401 once the session is gone and 404 once the
+// person may no longer see the workspace. Retrying cannot change either,
+// so the client stops and reloads, like a kick.
+export function ticketRefusalIsFinal(status: number): boolean {
+  return status === 401 || status === 404;
+}
+
+class TicketRefused extends Error {
+  constructor(readonly status: number) {
+    super(`ticket ${status}`);
+  }
 }
 
 export function liveUrl(location: { protocol: string; host: string }, workspaceId: string, ticket: string): string {
@@ -40,7 +55,7 @@ async function fetchTicket(workspaceId: string): Promise<string> {
     cache: "no-store",
   });
   if (!response.ok) {
-    throw new Error(`ticket ${response.status}`);
+    throw new TicketRefused(response.status);
   }
   const body = (await response.json()) as { ticket?: unknown };
   if (typeof body.ticket !== "string") {
@@ -99,6 +114,16 @@ export function useLive(opts: {
       reconnectTimer = setTimeout(connect, reconnectDelay(attempt++));
     }
 
+    // Access is gone (a kick, or the ticket route refusing for good): stop
+    // and reload, so the server shows whatever this person may still see.
+    function accessEnded() {
+      disposed = true;
+      clearTimeout(reconnectTimer);
+      stopPolling();
+      setStatus("offline");
+      window.location.reload();
+    }
+
     async function connect() {
       if (disposed || connecting || socket) {
         return;
@@ -107,11 +132,16 @@ export function useLive(opts: {
       let ticket: string;
       try {
         ticket = await fetchTicket(workspaceId);
-      } catch {
+      } catch (e) {
         connecting = false;
-        if (!disposed) {
-          wentDown();
+        if (disposed) {
+          return;
         }
+        if (e instanceof TicketRefused && ticketRefusalIsFinal(e.status)) {
+          accessEnded();
+          return;
+        }
+        wentDown();
         return;
       }
       if (disposed) {
@@ -159,10 +189,15 @@ export function useLive(opts: {
           return;
         }
         if (!shouldReconnect(event.code)) {
-          disposed = true;
-          stopPolling();
-          setStatus("offline");
-          window.location.reload();
+          accessEnded();
+          return;
+        }
+        if (event.code === LIVE_REFRESH_CLOSE_CODE) {
+          // A planned refresh, not an outage: reconnect now and refetch
+          // what the moment between the sockets may have missed.
+          hadGap = true;
+          attempt = 0;
+          void connect();
           return;
         }
         wentDown();

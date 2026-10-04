@@ -6,10 +6,13 @@
 //   2. anyone with a pending workspace invite;
 //   3. tagged Shopify customers on a workspace roster (shopify_roster).
 // Existing users may always sign in.
+//
+// Relative imports on purpose: the realtime socket check (src/realtime/
+// live.ts) bundles this into the custom worker.
 
-import { eq } from "drizzle-orm";
-import type { Db } from "@/db";
-import { pendingInvites, platformAdmins, shopifyRoster, user } from "@/db/schema";
+import { and, eq } from "drizzle-orm";
+import type { Db } from "../db";
+import { pendingInvites, platformAdmins, shopifyRoster, user, workspaceMembers } from "../db/schema";
 
 type AdminEnv = { PLATFORM_ADMIN_EMAILS?: string };
 
@@ -46,6 +49,22 @@ export async function isPlatformAdmin(
     .where(eq(platformAdmins.userId, userId))
     .limit(1);
   return rows.length > 0;
+}
+
+// Whether this user may see the workspace at all right now: a member, or a
+// platform admin (by user id, for callers that hold no session, such as
+// the realtime socket endpoint checking a ticket when it is used).
+export async function canSeeWorkspace(db: Db, env: AdminEnv, userId: string, workspaceId: string): Promise<boolean> {
+  const membership = await db
+    .select({ id: workspaceMembers.id })
+    .from(workspaceMembers)
+    .where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, userId)))
+    .limit(1);
+  if (membership.length > 0) {
+    return true;
+  }
+  const rows = await db.select({ email: user.email }).from(user).where(eq(user.id, userId)).limit(1);
+  return rows[0] ? isPlatformAdmin(db, env, userId, rows[0].email) : false;
 }
 
 // Whether a NEW account may be created for this email: the closed sign-up

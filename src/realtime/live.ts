@@ -11,13 +11,20 @@
 // /connect path (whatever the client sent under those names is replaced):
 // it tags the socket with the user, so a kick can close it, and spends the
 // nonce, so the ticket works once.
+//
+// Access is checked again when the ticket is used, not only when it was
+// issued: a genuine ticket whose user is no longer a member (and not a
+// platform admin) gets the same 401, so a ticket kept in reserve is
+// worthless once the person's access goes.
 
+import type { Db } from "../db";
+import { canSeeWorkspace } from "../server/access";
 import { verifyLiveTicket } from "./ticket";
 
 export const LIVE_PATH = "/live";
 const ROOM_CONNECT_URL = "https://workspace-room/connect";
 
-export async function handleLiveRequest(request: Request, env: CloudflareEnv): Promise<Response> {
+export async function handleLiveRequest(request: Request, env: CloudflareEnv, db: Db): Promise<Response> {
   const url = new URL(request.url);
   const workspaceId = url.searchParams.get("workspace") ?? "";
   const ticket = url.searchParams.get("ticket") ?? "";
@@ -30,6 +37,9 @@ export async function handleLiveRequest(request: Request, env: CloudflareEnv): P
   }
   if (request.method !== "GET" || request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
     return new Response("Expected a WebSocket upgrade", { status: 426 });
+  }
+  if (!(await canSeeWorkspace(db, env, claims.userId, claims.workspaceId))) {
+    return new Response("Unauthorized", { status: 401 });
   }
   // The room routes by path: this always lands on /connect, so its
   // /broadcast and /kick paths are reachable through the binding alone.

@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { LIVE_KICK_CLOSE_CODE } from "./live-events";
-import { MAX_RECONNECT_DELAY_MS, POLL_INTERVAL_MS, liveUrl, reconnectDelay, shouldReconnect } from "./use-live";
+import { LIVE_KICK_CLOSE_CODE, LIVE_REFRESH_CLOSE_CODE } from "./live-events";
+import {
+  MAX_RECONNECT_DELAY_MS,
+  POLL_INTERVAL_MS,
+  liveUrl,
+  reconnectDelay,
+  shouldReconnect,
+  ticketRefusalIsFinal,
+} from "./use-live";
 
 describe("reconnectDelay", () => {
   it("doubles from one second with up to 20% jitter", () => {
@@ -40,5 +47,24 @@ describe("shouldReconnect", () => {
     }
     expect(shouldReconnect(LIVE_KICK_CLOSE_CODE)).toBe(false);
     expect(LIVE_KICK_CLOSE_CODE).toBe(4003);
+  });
+
+  it("reconnects when the room asks for a fresh ticket", () => {
+    expect(shouldReconnect(LIVE_REFRESH_CLOSE_CODE)).toBe(true);
+    expect(LIVE_REFRESH_CLOSE_CODE).toBe(4001);
+  });
+});
+
+// The ticket route answers 401 once signed out and 404 once the person no
+// longer has access: retrying cannot help, so the client stops and reloads
+// (the server then shows whatever they may still see) instead of retrying
+// and polling forever.
+describe("ticketRefusalIsFinal", () => {
+  it("is final for 401 and 404 only", () => {
+    expect(ticketRefusalIsFinal(401)).toBe(true);
+    expect(ticketRefusalIsFinal(404)).toBe(true);
+    for (const status of [0, 429, 500, 502, 503]) {
+      expect(ticketRefusalIsFinal(status)).toBe(false);
+    }
   });
 });
