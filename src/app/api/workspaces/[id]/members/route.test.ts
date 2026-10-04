@@ -7,10 +7,24 @@ import { openTestDb, seedMember, seedUser, seedWorkspace } from "@/server/desk/t
 // The team routes for real against an in-memory database, on the hub; the
 // session, routed host and env are stood in. The ROOM binding records the
 // kicks a removal sends.
-const state: { db: Db | null; session: { user: { id: string; email: string } } | null; kicks: string[] } = {
+const state: {
+  db: Db | null;
+  session: { user: { id: string; email: string } } | null;
+  kicks: string[];
+  mail: string[];
+} = {
   db: null,
   session: null,
   kicks: [],
+  mail: [],
+};
+
+// The EMAIL binding, recording each recipient.
+const email = {
+  async send(message: { to: string | string[] }) {
+    state.mail.push(...(Array.isArray(message.to) ? message.to : [message.to]));
+    return { messageId: "m1" };
+  },
 };
 
 const room = {
@@ -28,7 +42,13 @@ const room = {
 vi.mock("next/headers", () => ({ headers: async () => new Headers({ host: "orderingdesk.test" }) }));
 vi.mock("@opennextjs/cloudflare", () => ({
   getCloudflareContext: () => ({
-    env: { APP_URL: "https://orderingdesk.test", PLATFORM_ADMIN_EMAILS: "boss@example.com", ROOM: room },
+    env: {
+      APP_URL: "https://orderingdesk.test",
+      PLATFORM_ADMIN_EMAILS: "boss@example.com",
+      EMAIL_FROM: "Ordering Desk <orders@orderingdesk.test>",
+      ROOM: room,
+      EMAIL: email,
+    },
     ctx: {},
   }),
 }));
@@ -37,7 +57,7 @@ vi.mock("@/server/auth", () => ({
 }));
 vi.mock("@/db", () => ({ getDb: () => state.db, getDbFromEnv: () => state.db }));
 
-const { PATCH, DELETE } = await import("./route");
+const { GET, POST, PATCH, DELETE } = await import("./route");
 
 const context = { params: Promise.resolve({ id: "ws_impact" }) };
 
@@ -45,7 +65,7 @@ function request(method: string, body: unknown) {
   return new Request("https://orderingdesk.test/api/workspaces/ws_impact/members", {
     method,
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    ...(method === "GET" ? {} : { body: JSON.stringify(body) }),
   });
 }
 
@@ -66,6 +86,7 @@ beforeEach(async () => {
   state.db = db;
   state.session = null;
   state.kicks = [];
+  state.mail = [];
   await seedWorkspace(db, "ws_impact");
   await seedUser(db, "u_manager", "manager@example.com");
   await seedUser(db, "u_staff", "staff@example.com");
@@ -73,6 +94,44 @@ beforeEach(async () => {
   await seedMember(db, "ws_impact", "u_manager", "manager");
   await seedMember(db, "ws_impact", "u_staff", "staff");
   await seedMember(db, "ws_impact", "u_tagged", "staff", "shopify");
+  // Someone with an account who belongs to another workspace only.
+  await seedWorkspace(db, "ws_beta");
+  await seedUser(db, "u_buyer", "buyer@b.example", "Pat Buyer");
+  await seedMember(db, "ws_beta", "u_buyer", "manager");
+});
+
+describe("POST /api/workspaces/[id]/members", () => {
+  // The answer, and what the team list shows afterwards, must not tell a
+  // manager whether the email has an account somewhere on the platform.
+  it("answers an existing account and an unknown email the same way, and lists both as pending invites", async () => {
+    as("u_manager", "manager@example.com");
+    const existing = await POST(request("POST", { email: "buyer@b.example", role: "staff" }), context);
+    const unknown = await POST(request("POST", { email: "nobody@b.example", role: "staff" }), context);
+    expect(existing.status).toBe(201);
+    expect(unknown.status).toBe(201);
+    expect(await existing.json()).toEqual(await unknown.json());
+    expect(state.mail).toEqual(["buyer@b.example", "nobody@b.example"]);
+
+    const list = (await (await GET(request("GET", undefined), context)).json()) as {
+      members: Array<{ email: string; name: string | null }>;
+      invites: Array<{ email: string }>;
+    };
+    expect(list.invites.map((invite) => invite.email)).toEqual(["buyer@b.example", "nobody@b.example"]);
+    expect(list.members.map((member) => member.email)).not.toContain("buyer@b.example");
+    expect(JSON.stringify(list)).not.toContain("Pat Buyer");
+    expect(await roleOf("u_buyer")).toBeNull();
+  });
+
+  it("answers 429 once the workspace has sent its hourly allowance of invites", async () => {
+    as("u_manager", "manager@example.com");
+    for (let i = 0; i < 30; i++) {
+      expect((await POST(request("POST", { email: `p${i}@b.example`, role: "staff" }), context)).status).toBe(201);
+    }
+    const limited = await POST(request("POST", { email: "one.more@b.example", role: "staff" }), context);
+    expect(limited.status).toBe(429);
+    expect(((await limited.json()) as { error: string }).error).toContain("Try again");
+    expect(state.mail).toHaveLength(30);
+  });
 });
 
 describe("PATCH /api/workspaces/[id]/members", () => {

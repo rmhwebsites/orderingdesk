@@ -8,6 +8,7 @@ import { roleLabel } from "@/lib/roles";
 import { AuthError, requireMemberBySlug, requireSession } from "@/server/guard";
 import type { HostWorkspace } from "@/server/host";
 import { hubView } from "@/server/hub";
+import { claimAccessOnSignIn } from "@/server/invites";
 import { requestHost } from "@/server/request-host";
 import { listWorkspacesForViewer } from "@/server/workspaces";
 import { Desk } from "@/components/desk/desk";
@@ -31,6 +32,14 @@ export async function generateMetadata(): Promise<Metadata> {
     : {};
 }
 
+// Invites are always pending invites (src/server/members.ts), and the invite
+// email's button opens "/" on the workspace's host. Someone who already has
+// an account and is signed in claims them here, as a sign-in would.
+async function claimPendingAccess() {
+  const { db, userId, email } = await requireSession();
+  await claimAccessOnSignIn(db, userId, email);
+}
+
 // "/" on a workspace's own client host is that workspace's desk, behind the
 // same guards as /w/[slug]: signed out goes to this host's sign-in page; a
 // signed-in person who is neither a member nor a platform admin gets the
@@ -38,6 +47,7 @@ export async function generateMetadata(): Promise<Metadata> {
 async function clientHostDesk(workspace: HostWorkspace) {
   let guarded: Awaited<ReturnType<typeof requireMemberBySlug>>;
   try {
+    await claimPendingAccess();
     guarded = await requireMemberBySlug(workspace.slug, "staff");
   } catch (e) {
     if (e instanceof AuthError) {
@@ -83,6 +93,7 @@ export default async function Home() {
     throw e;
   }
   const { db, viewer } = guarded;
+  await claimAccessOnSignIn(db, viewer.userId, viewer.email);
   const view = hubView(viewer, await listWorkspacesForViewer(db, viewer));
 
   if (view.kind === "redirect") {

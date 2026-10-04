@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { eq } from "drizzle-orm";
 import type { Db } from "@/db";
 import * as schema from "@/db/schema";
 import { openTestDb, seedMember, seedUser, seedWorkspace } from "@/server/desk/test-helpers";
@@ -7,12 +8,13 @@ import { openTestDb, seedMember, seedUser, seedWorkspace } from "@/server/desk/t
 // request context is stood in: the session (better-auth), the request
 // headers (the routed hub host) and the Cloudflare env (APP_URL,
 // PLATFORM_ADMIN_EMAILS).
-const state: { db: Db | null; session: { user: { id: string; email: string } } | null } = {
+const state: { db: Db | null; host: string; session: { user: { id: string; email: string } } | null } = {
   db: null,
+  host: "orderingdesk.com",
   session: null,
 };
 
-vi.mock("next/headers", () => ({ headers: async () => new Headers({ host: "orderingdesk.com" }) }));
+vi.mock("next/headers", () => ({ headers: async () => new Headers({ host: state.host }) }));
 vi.mock("@opennextjs/cloudflare", () => ({
   getCloudflareContext: () => ({
     env: { APP_URL: "https://orderingdesk.com", PLATFORM_ADMIN_EMAILS: "boss@example.com" },
@@ -40,6 +42,7 @@ function postRequest(body: unknown) {
 beforeEach(async () => {
   const { db } = openTestDb();
   state.db = db;
+  state.host = "orderingdesk.com";
   state.session = null;
   await seedWorkspace(db, "ws_impact");
   await seedWorkspace(db, "ws_other");
@@ -71,6 +74,20 @@ describe("POST /api/workspaces", () => {
       workspace: { name: "New Client", slug: "new-client", role: "platform" },
     });
     expect(await state.db!.select().from(schema.workspaces)).toHaveLength(3);
+  });
+
+  // A tenant controls their client host's DNS, so platform powers answer
+  // only on the hub (src/server/guard.ts).
+  it("answers a platform admin on a client host with 404 and creates nothing", async () => {
+    await state
+      .db!.update(schema.workspaces)
+      .set({ customDomain: "orders.impactrentals.store", customDomainStatus: "active" })
+      .where(eq(schema.workspaces.id, "ws_impact"));
+    state.host = "orders.impactrentals.store";
+    state.session = { user: { id: "u_boss", email: "boss@example.com" } };
+    const response = await POST(postRequest({ name: "Through the client host" }));
+    expect(response.status).toBe(404);
+    expect(await state.db!.select().from(schema.workspaces)).toHaveLength(2);
   });
 });
 

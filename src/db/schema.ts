@@ -248,3 +248,13 @@ export const webhookDeliveries = sqliteTable("webhook_deliveries", {
   topic: text("topic").notNull(),
   receivedAt: integer("received_at").notNull(),
 }, (t) => [index("webhook_received").on(t.receivedAt)]);
+
+// Team invite emails a workspace has sent, for the hourly limit in
+// src/server/members.ts (a withdrawn invite keeps its row, so inviting and
+// withdrawing cannot send without limit). Rows older than the window are
+// pruned as new ones arrive. No recipient is stored.
+export const inviteSends = sqliteTable("invite_sends", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id),
+  sentAt: integer("sent_at").notNull(),
+}, (t) => [index("invite_sends_window").on(t.workspaceId, t.sentAt)]);

@@ -83,7 +83,10 @@ describe("team invite email", () => {
     const [message] = sent();
     expect(message.to).toEqual(["crew@example.com"]);
     expect(message.from).toEqual({ name: "Impact Rentals", email: "accounts@orders.impactrentals.store" });
-    expect(message.subject).toBe("You have been added to Impact Rentals orders");
+    // Always an invitation: the person joins when they sign in or open the
+    // link (src/server/members.ts never adds an account directly).
+    expect(message.subject).toBe("You are invited to Impact Rentals orders");
+    expect(message.html).toContain("You are invited to Impact Rentals");
     expect(message.html).toContain('href="https://orders.impactrentals.store/"');
     expect(message.html).toContain("logo.png");
   });

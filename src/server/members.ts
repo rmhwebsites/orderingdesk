@@ -1,11 +1,11 @@
 // Workspace team management behind /api/workspaces/[id]/members. Managers
 // invite and remove staff and managers in their own workspace; platform
 // admins can do the same in any workspace (the route's guard decides who
-// gets here). Memberships added here are source = manual.
+// gets here). Memberships that come from here are source = manual.
 
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, count, eq, gt, lte } from "drizzle-orm";
 import type { Db } from "@/db";
-import { pendingInvites, user, workspaceMembers, workspaces } from "@/db/schema";
+import { inviteSends, pendingInvites, user, workspaceMembers, workspaces } from "@/db/schema";
 import { isWorkspaceRole, type WorkspaceRole } from "@/lib/roles";
 import { isRecord } from "./desk/shapes";
 import { normalizeEmail } from "./desk/validate";
@@ -53,17 +53,30 @@ export async function listMembers(
 
 export type InviteMemberResult =
   | { kind: "invalid"; error: string }
-  // Already a member: nothing changed, nothing to send.
+  // Already a member of this workspace: nothing changed, nothing to send.
   | { kind: "already-member" }
-  // An existing user, added at once.
-  | { kind: "added"; email: string; workspaceName: string }
-  // No account yet: a pending invite, claimed at their first sign-in.
+  // The workspace sent INVITE_SEND_LIMIT invites in the last window.
+  | { kind: "limited"; error: string }
+  // A pending invite (new or refreshed), claimed when the person next
+  // signs in or opens the app (src/server/invites.ts).
   | { kind: "invited"; email: string; workspaceName: string };
 
+// Invite emails per workspace per rolling window.
+export const INVITE_SEND_LIMIT = 30;
+export const INVITE_SEND_WINDOW_MS = 60 * 60 * 1000;
+
+// Every invite is a pending invite, whether or not the email already has an
+// account somewhere on the platform: adding an existing account directly
+// would tell any manager which emails have one (and their name, through
+// the team list), and would add the person without them doing anything.
+// The answer is the same either way. Each invite counts toward the
+// workspace's INVITE_SEND_LIMIT (the route sends one email per invite);
+// someone who is already a member here is answered without a send.
 export async function inviteMember(
   db: Db,
   ctx: { workspaceId: string; inviterId: string },
   body: unknown,
+  opts?: { now?: number },
 ): Promise<InviteMemberResult> {
   const fields = isRecord(body) ? body : {};
   const email = normalizeEmail(fields.email);
@@ -82,23 +95,31 @@ export async function inviteMember(
     .limit(1);
   const workspaceName = workspaceRows[0]?.name ?? "a workspace";
 
-  const existingUser = await db.select({ id: user.id }).from(user).where(eq(user.email, email)).limit(1);
-  if (existingUser[0]) {
-    const inserted = await db
-      .insert(workspaceMembers)
-      .values({
-        id: crypto.randomUUID(),
-        workspaceId: ctx.workspaceId,
-        userId: existingUser[0].id,
-        role,
-        source: "manual",
-      })
-      .onConflictDoNothing()
-      .returning({ id: workspaceMembers.id });
-    return inserted.length > 0 ? { kind: "added", email, workspaceName } : { kind: "already-member" };
+  const memberRows = await db
+    .select({ id: workspaceMembers.id })
+    .from(workspaceMembers)
+    .innerJoin(user, eq(workspaceMembers.userId, user.id))
+    .where(and(eq(workspaceMembers.workspaceId, ctx.workspaceId), eq(user.email, email)))
+    .limit(1);
+  if (memberRows.length > 0) {
+    return { kind: "already-member" };
   }
 
-  const now = Date.now();
+  const now = opts?.now ?? Date.now();
+  const windowStart = now - INVITE_SEND_WINDOW_MS;
+  await db.delete(inviteSends).where(and(eq(inviteSends.workspaceId, ctx.workspaceId), lte(inviteSends.sentAt, windowStart)));
+  const [recent] = await db
+    .select({ sends: count() })
+    .from(inviteSends)
+    .where(and(eq(inviteSends.workspaceId, ctx.workspaceId), gt(inviteSends.sentAt, windowStart)));
+  if ((recent?.sends ?? 0) >= INVITE_SEND_LIMIT) {
+    return {
+      kind: "limited",
+      error: `This workspace has sent ${INVITE_SEND_LIMIT} invites in the last hour. Try again later.`,
+    };
+  }
+  await db.insert(inviteSends).values({ id: crypto.randomUUID(), workspaceId: ctx.workspaceId, sentAt: now });
+
   await db
     .insert(pendingInvites)
     .values({

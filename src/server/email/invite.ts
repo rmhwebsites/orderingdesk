@@ -5,10 +5,12 @@ import { emailParagraph, renderEmail } from "./layout";
 import { sendEmail, senderFor } from "./send";
 import type { MailWorkspace } from "./workspace";
 
-// Sent when a manager or platform admin adds someone to a workspace (an
-// existing user, or a pending invite). Always the workspace's branding and
-// sender; the button opens the workspace's client host when it has an
-// active one, else the hub. Workspace names are user input: escaped in the
+// Sent when a manager or platform admin invites someone to a workspace.
+// Always a pending invite, whether or not the email has an account: the
+// person joins when they sign in, or open the button's link while signed
+// in (src/server/members.ts, src/app/page.tsx). Always the workspace's
+// branding and sender; the button opens the workspace's client host when
+// it has an active one, else the hub. Workspace names are user input: escaped in the
 // HTML by renderEmail and here, control-stripped in the subject.
 export async function sendWorkspaceInviteEmail(
   env: CloudflareEnv,
@@ -18,10 +20,10 @@ export async function sendWorkspaceInviteEmail(
   const { html, text } = renderEmail({
     workspace,
     hubOrigin: appOrigin(env),
-    preheader: `You can now manage ${workspace.name} orders.`,
-    heading: `You have been added to ${workspace.name}`,
+    preheader: `Join ${workspace.name} to manage its orders.`,
+    heading: `You are invited to ${workspace.name}`,
     bodyHtml: emailParagraph(
-      `Sign in with this email address to start managing ${escapeHtml(workspace.name)} orders.`,
+      `Sign in with this email address to join and start managing ${escapeHtml(workspace.name)} orders.`,
     ),
     cta: { label: `Open ${workspace.name} orders`, url: `${workspaceOrigin(env, workspace)}/` },
   });
@@ -30,7 +32,7 @@ export async function sendWorkspaceInviteEmail(
     from: sender.from,
     ...(sender.replyTo ? { replyTo: sender.replyTo } : {}),
     to: [to],
-    subject: sanitizeSubject(`You have been added to ${workspace.name} orders`),
+    subject: sanitizeSubject(`You are invited to ${workspace.name} orders`),
     html,
     text,
   });

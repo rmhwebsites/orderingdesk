@@ -181,8 +181,9 @@ describe("schema migrations", () => {
     const tables = (Object.values(schema) as unknown[]).filter(
       (value): value is SQLiteTable => is(value, SQLiteTable),
     );
-    // 15 app tables + user/session/account/verification + rate_limit.
-    expect(tables.length).toBe(20);
+    // 16 app tables (invite_sends since 0005) + user/session/account/
+    // verification + rate_limit.
+    expect(tables.length).toBe(21);
     const orm = drizzle(db);
     for (const table of tables) {
       expect(() => orm.select().from(table).all()).not.toThrow();

@@ -2,7 +2,14 @@ import { describe, it, expect } from "vitest";
 import { and, asc, eq } from "drizzle-orm";
 import type { Db } from "@/db";
 import * as schema from "@/db/schema";
-import { changeMemberRole, inviteMember, listMembers, removeMember } from "./members";
+import {
+  INVITE_SEND_LIMIT,
+  INVITE_SEND_WINDOW_MS,
+  changeMemberRole,
+  inviteMember,
+  listMembers,
+  removeMember,
+} from "./members";
 import { openTestDb, seedMember, seedUser, seedWorkspace } from "./desk/test-helpers";
 
 const WS = "ws_impact";
@@ -87,14 +94,51 @@ describe("inviteMember", () => {
     expect(await invitesOf(db)).toEqual([]);
   });
 
-  it("adds an existing user straight away as a manual membership", async () => {
+  // An existing account is never added directly: that would tell any
+  // manager which emails have an account anywhere on the platform (and
+  // their name), and add the person without them doing anything. Everyone
+  // gets the same pending invite, claimed when they next sign in or open
+  // the app.
+  it("treats an existing user exactly like a new email: a pending invite, no membership, the same answer", async () => {
     const db = await setup();
-    const result = await inviteMember(db, { workspaceId: WS, inviterId: "u_lead" }, {
-      email: " FREE@example.com ",
-      role: "manager",
+    const ctx = { workspaceId: WS, inviterId: "u_lead" };
+    const before = await membersOf(db);
+    const existing = await inviteMember(db, ctx, { email: " FREE@example.com ", role: "manager" });
+    const unknown = await inviteMember(db, ctx, { email: "nobody@example.com", role: "manager" });
+    expect(existing).toEqual({ kind: "invited", email: "free@example.com", workspaceName: "Workspace ws_impact" });
+    expect(unknown).toEqual({ kind: "invited", email: "nobody@example.com", workspaceName: "Workspace ws_impact" });
+    expect(await membersOf(db)).toEqual(before);
+    expect(await invitesOf(db)).toEqual([
+      { email: "free@example.com", workspaceId: WS, role: "manager", platformAdmin: false, invitedBy: "u_lead" },
+      { email: "nobody@example.com", workspaceId: WS, role: "manager", platformAdmin: false, invitedBy: "u_lead" },
+    ]);
+  });
+
+  it("limits how many invite emails a workspace sends in an hour, withdrawn ones included", async () => {
+    const db = await setup();
+    const ctx = { workspaceId: WS, inviterId: "u_lead" };
+    const start = 1_000_000;
+    for (let i = 0; i < INVITE_SEND_LIMIT; i++) {
+      const result = await inviteMember(db, ctx, { email: `person${i}@example.com`, role: "staff" }, { now: start + i });
+      expect(result.kind).toBe("invited");
+    }
+    // Withdrawing an invite does not give its send back.
+    await removeMember(db, { workspaceId: WS, actorUserId: "u_lead" }, { email: "person0@example.com" });
+    const limited = await inviteMember(db, ctx, { email: "person0@example.com", role: "staff" }, { now: start + 100 });
+    expect(limited).toEqual({ kind: "limited", error: expect.stringContaining("Try again") });
+    expect((await invitesOf(db)).map((row) => row.email)).not.toContain("person0@example.com");
+    // Someone already here is answered without a send, limit or not.
+    expect(await inviteMember(db, ctx, { email: "crew@example.com", role: "staff" }, { now: start + 100 })).toEqual({
+      kind: "already-member",
     });
-    expect(result).toEqual({ kind: "added", email: "free@example.com", workspaceName: "Workspace ws_impact" });
-    expect(await membersOf(db)).toContainEqual({ userId: "u_free", role: "manager", source: "manual" });
+    // Another workspace has its own allowance.
+    const other = await inviteMember(db, { workspaceId: "ws_other", inviterId: "u_x" }, { email: "a@example.com", role: "staff" }, { now: start + 100 });
+    expect(other.kind).toBe("invited");
+    // An hour after the first sends, there is room again.
+    const later = await inviteMember(db, ctx, { email: "person0@example.com", role: "staff" }, { now: start + INVITE_SEND_WINDOW_MS + 1 });
+    expect(later.kind).toBe("invited");
+    expect(INVITE_SEND_LIMIT).toBe(30);
+    expect(INVITE_SEND_WINDOW_MS).toBe(60 * 60 * 1000);
   });
 
   it("changes nothing for someone who is already a member", async () => {

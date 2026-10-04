@@ -255,7 +255,7 @@ export function TeamSection({
       return;
     }
     setEmail("");
-    setInviteDone(result.data.alreadyMember ? `${sent} already belongs to this workspace.` : `Invite sent to ${sent}.`);
+    setInviteDone(result.data.alreadyMember ? `${sent} already belongs to this workspace.` : `Invite sent to ${sent}. They join when they sign in.`);
     await reload();
   }
 

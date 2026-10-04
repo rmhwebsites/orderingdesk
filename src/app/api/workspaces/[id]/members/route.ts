@@ -21,9 +21,11 @@ export async function GET(_request: Request, context: RouteContext) {
 }
 
 // Managers and platform admins. Body {email, role: manager | staff}. 201
-// {ok} when someone was added or invited (an email goes out); 200 {ok,
-// alreadyMember} when they already belong (nothing changes, nothing is
-// sent); 400 {error}.
+// {ok} when the invite is stored (an email goes out; the same answer
+// whether or not the email has an account, see inviteMember); 200 {ok,
+// alreadyMember} when they already belong here (nothing changes, nothing
+// is sent); 429 {error} when the workspace has used its hourly invite
+// allowance; 400 {error}.
 export async function POST(request: Request, context: RouteContext) {
   try {
     const { id } = await context.params;
@@ -35,7 +37,8 @@ export async function POST(request: Request, context: RouteContext) {
         return NextResponse.json({ error: result.error }, { status: 400 });
       case "already-member":
         return NextResponse.json({ ok: true, alreadyMember: true });
-      case "added":
+      case "limited":
+        return NextResponse.json({ error: result.error }, { status: 429 });
       case "invited": {
         // The invite carries the workspace's branding and sender.
         const workspace = await loadMailWorkspace(db, id);

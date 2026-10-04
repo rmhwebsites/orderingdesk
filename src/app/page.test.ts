@@ -118,3 +118,37 @@ describe("/ on other hosts", () => {
     expect(await outcome()).toBe("NOT_FOUND");
   });
 });
+
+// An invite is always a pending invite (src/server/members.ts), and the
+// invite email's button opens "/". Someone who already has an account and
+// is signed in claims it there, without signing in again.
+describe("/ claims a signed-in person's pending invites", () => {
+  async function invite(email: string, workspaceId: string) {
+    await state.db!.insert(schema.pendingInvites).values({
+      id: `i_${workspaceId}`,
+      email,
+      workspaceId,
+      role: "staff",
+      invitedBy: "u_staff",
+      createdAt: 1,
+    });
+  }
+
+  it("on the hub", async () => {
+    await seedUser(state.db!, "u_new", "new@example.com");
+    await invite("new@example.com", "ws_other");
+    state.session = { user: { id: "u_new", email: "new@example.com" } };
+    expect(await outcome()).toBe("REDIRECT /w/ws_other");
+    expect(await state.db!.select().from(schema.pendingInvites)).toEqual([]);
+  });
+
+  it("on the workspace's client host", async () => {
+    await seedUser(state.db!, "u_new", "new@example.com");
+    await invite("new@example.com", "ws_impact");
+    state.host = CLIENT_HOST;
+    state.session = { user: { id: "u_new", email: "new@example.com" } };
+    const element = (await outcome()) as ReactElement<{ role: string }>;
+    expect(element.type).toBe(WorkspaceShell);
+    expect(element.props.role).toBe("staff");
+  });
+});
