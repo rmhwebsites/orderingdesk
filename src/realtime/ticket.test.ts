@@ -31,7 +31,35 @@ describe("verifyLiveTicket", () => {
       workspaceId: WS,
       userId: USER,
       exp: NOW + LIVE_TICKET_TTL_MS,
+      nonce: expect.stringMatching(/^[0-9a-f]{32}$/),
     });
+  });
+
+  // The nonce makes each ticket single use: the room remembers it until
+  // the ticket expires (src/realtime/room.ts).
+  it("gives every ticket its own nonce", async () => {
+    const a = await signLiveTicket({ workspaceId: WS, userId: USER }, SECRET, NOW);
+    const b = await signLiveTicket({ workspaceId: WS, userId: USER }, SECRET, NOW);
+    const claimsA = await verifyLiveTicket(a.ticket, { secret: SECRET, workspaceId: WS, now: NOW });
+    const claimsB = await verifyLiveTicket(b.ticket, { secret: SECRET, workspaceId: WS, now: NOW });
+    expect(claimsA?.nonce).toBeTruthy();
+    expect(claimsA?.nonce).not.toBe(claimsB?.nonce);
+  });
+
+  it("rejects a genuine ticket without a nonce (the format before single use)", async () => {
+    const payload = btoa(JSON.stringify({ workspaceId: WS, userId: USER, exp: NOW + 60000 }))
+      .replace(/=+$/, "")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_");
+    const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const signature = new Uint8Array(
+      await crypto.subtle.sign("HMAC", key, new TextEncoder().encode("ordering-desk.live-ticket.v1." + payload)),
+    );
+    const signatureSegment = btoa(String.fromCharCode(...signature))
+      .replace(/=+$/, "")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_");
+    expect(await verifyLiveTicket(`${payload}.${signatureSegment}`, { secret: SECRET, workspaceId: WS, now: NOW })).toBeNull();
   });
 
   it("rejects a tampered payload", async () => {

@@ -49,6 +49,28 @@ describe("handleLiveRequest", () => {
     expect(forwarded[0].headers.get("Upgrade")).toBe("websocket");
   });
 
+  // The room tags the socket with the user (so a kick can find it) and
+  // spends the ticket's nonce; both come from the verified ticket, never
+  // from the client, and the room's internal paths stay unreachable.
+  it("hands the room the verified user, nonce and expiry on its connect path", async () => {
+    const { env, forwarded } = fakeEnv();
+    const { ticket, expiresAt } = await signLiveTicket({ workspaceId: WS, userId: "u1" }, SECRET);
+    await handleLiveRequest(
+      liveRequest(`workspace=${WS}&ticket=${ticket}`, {
+        Upgrade: "websocket",
+        "x-live-user": "u_mallory",
+        "x-live-nonce": "reused",
+      }),
+      env,
+    );
+    const request = forwarded[0];
+    expect(new URL(request.url).pathname).toBe("/connect");
+    expect(request.headers.get("x-live-user")).toBe("u1");
+    expect(request.headers.get("x-live-nonce")).toMatch(/^[0-9a-f]{32}$/);
+    expect(request.headers.get("x-live-exp")).toBe(String(expiresAt));
+    expect(request.headers.get("Upgrade")).toBe("websocket");
+  });
+
   it("answers 401 without a ticket", async () => {
     const { env, forwarded } = fakeEnv();
     const response = await handleLiveRequest(liveRequest(`workspace=${WS}`), env);

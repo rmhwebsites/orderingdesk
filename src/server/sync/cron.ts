@@ -1,7 +1,7 @@
 import { lt, ne } from "drizzle-orm";
 import { getDbFromEnv, type Db } from "../../db";
 import { storeConnections, webhookDeliveries } from "../../db/schema";
-import { broadcastSync } from "../broadcast";
+import { broadcastSync, kickUsers } from "../broadcast";
 import { shareShopifyMoves } from "../shopify/fanout";
 import { syncRoster } from "../shopify/roster-sync";
 import { runSync, type SyncOptions } from "./run";
@@ -55,7 +55,14 @@ export async function runAllSyncs(db: Db, env: CloudflareEnv, opts?: SyncOptions
     // token store. Logged as counts only (no emails).
     try {
       const roster = await syncRoster(db, env, workspaceId, opts);
-      if (roster.kind !== "skipped") {
+      if (roster.kind === "ok") {
+        const { revokedUserIds, ...counts } = roster;
+        console.log("[roster] " + JSON.stringify({ workspaceId, ...counts }));
+        // People whose tag went: close their open sockets (never throws).
+        if (revokedUserIds.length > 0) {
+          await kickUsers(env, workspaceId, revokedUserIds);
+        }
+      } else if (roster.kind === "failed") {
         console.log("[roster] " + JSON.stringify({ workspaceId, ...roster }));
       }
     } catch (e) {

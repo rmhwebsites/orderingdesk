@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { MAX_RECONNECT_DELAY_MS, POLL_INTERVAL_MS, liveUrl, reconnectDelay } from "./use-live";
+import { LIVE_KICK_CLOSE_CODE } from "./live-events";
+import { MAX_RECONNECT_DELAY_MS, POLL_INTERVAL_MS, liveUrl, reconnectDelay, shouldReconnect } from "./use-live";
 
 describe("reconnectDelay", () => {
   it("doubles from one second with up to 20% jitter", () => {
@@ -29,5 +30,15 @@ describe("liveUrl", () => {
     expect(liveUrl({ protocol: "http:", host: "localhost:3000" }, "w s", "t")).toBe(
       "ws://localhost:3000/live?workspace=w+s&ticket=t",
     );
+  });
+});
+
+describe("shouldReconnect", () => {
+  it("reconnects after any close except the room removing this person", () => {
+    for (const code of [1000, 1001, 1006, 1011, 4000]) {
+      expect(shouldReconnect(code)).toBe(true);
+    }
+    expect(shouldReconnect(LIVE_KICK_CLOSE_CODE)).toBe(false);
+    expect(LIVE_KICK_CLOSE_CODE).toBe(4003);
   });
 });

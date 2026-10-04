@@ -11,6 +11,7 @@ import type { LiveEvent } from "../lib/live-events";
 
 const BROADCAST_TIMEOUT_MS = 3000;
 const ROOM_BROADCAST_URL = "https://workspace-room/broadcast";
+const ROOM_KICK_URL = "https://workspace-room/kick";
 
 function timeout(ms: number): { promise: Promise<never>; cancel: () => void } {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -69,4 +70,39 @@ export async function broadcastSync(
     addedOrderIds: result.addedOrderIds,
     updatedOrderIds: result.updatedOrderIds,
   });
+}
+
+// Closes the open sockets of people who just lost access to the workspace
+// (removed, their Shopify tag revoked, or platform admin access revoked):
+// the room closes every socket tagged with each user id. Best effort like
+// broadcast: the access change has committed, and the client's next
+// request is refused anyway; this only stops events reaching a socket that
+// was opened before the change. Never throws.
+export async function kickUsers(env: CloudflareEnv, workspaceId: string, userIds: readonly string[]): Promise<void> {
+  if (!env.ROOM || userIds.length === 0) {
+    return;
+  }
+  for (const userId of userIds) {
+    const limit = timeout(BROADCAST_TIMEOUT_MS);
+    try {
+      const room = env.ROOM.get(env.ROOM.idFromName(workspaceId));
+      const response = await Promise.race([
+        room.fetch(ROOM_KICK_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userId }),
+        }),
+        limit.promise,
+      ]);
+      if (!response.ok) {
+        console.warn("[live] " + JSON.stringify({ workspaceId, kick: true, status: response.status }));
+      }
+    } catch (e) {
+      console.warn(
+        "[live] " + JSON.stringify({ workspaceId, kick: true, error: e instanceof Error ? e.message : "kick failed" }),
+      );
+    } finally {
+      limit.cancel();
+    }
+  }
 }

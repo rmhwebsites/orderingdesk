@@ -97,8 +97,9 @@ describe("applyRosterCustomer", () => {
     for (const next of [customer("501", "jo@impact.example", ["vip"]), null]) {
       const db = await setup();
       await seedUser(db, "u_jo", "jo@impact.example");
-      await applyRosterCustomer(db, WS, "501", customer("501", "jo@impact.example", ["Ordering Desk Staff"]), NOW);
-      await applyRosterCustomer(db, WS, "501", next, NOW + 1);
+      expect(await applyRosterCustomer(db, WS, "501", customer("501", "jo@impact.example", ["Ordering Desk Staff"]), NOW)).toEqual([]);
+      // The user whose access went, so their open sockets can be closed.
+      expect(await applyRosterCustomer(db, WS, "501", next, NOW + 1)).toEqual(["u_jo"]);
       expect(await roster(db)).toEqual([]);
       expect(await membership(db, "u_jo")).toBeUndefined();
     }
@@ -111,7 +112,7 @@ describe("applyRosterCustomer", () => {
     await seedMember(db, WS, "u_jo", "staff", "manual");
     await applyRosterCustomer(db, WS, "501", customer("501", "jo@impact.example", ["Ordering Desk Manager"]), NOW);
     expect(await membership(db, "u_jo")).toEqual({ role: "staff", source: "manual" });
-    await applyRosterCustomer(db, WS, "501", null, NOW + 1);
+    expect(await applyRosterCustomer(db, WS, "501", null, NOW + 1)).toEqual([]);
     expect(await roster(db)).toEqual([]);
     expect(await membership(db, "u_jo")).toEqual({ role: "staff", source: "manual" });
   });
@@ -121,7 +122,9 @@ describe("applyRosterCustomer", () => {
     await seedUser(db, "u_old", "old@impact.example");
     await seedUser(db, "u_new", "new@impact.example");
     await applyRosterCustomer(db, WS, "501", customer("501", "old@impact.example", ["Ordering Desk Staff"]), NOW);
-    await applyRosterCustomer(db, WS, "501", customer("501", "new@impact.example", ["Ordering Desk Staff"]), NOW + 1);
+    expect(await applyRosterCustomer(db, WS, "501", customer("501", "new@impact.example", ["Ordering Desk Staff"]), NOW + 1)).toEqual([
+      "u_old",
+    ]);
     expect(await roster(db)).toEqual([{ email: "new@impact.example", role: "staff", customerId: "501" }]);
     expect(await membership(db, "u_old")).toBeUndefined();
     expect(await membership(db, "u_new")).toEqual({ role: "staff", source: "shopify" });
@@ -193,7 +196,7 @@ describe("syncRoster", () => {
       [node(503, "sam@impact.example", ["Ordering Desk Staff", "Ordering Desk Manager"]), node(504, null, ["Ordering Desk Staff"])],
     ]);
     const result = await syncRoster(db, env, WS, { fetchImpl: shop.impl, now: () => NOW });
-    expect(result).toEqual({ kind: "ok", complete: true, entries: 3, removed: 1 });
+    expect(result).toEqual({ kind: "ok", complete: true, entries: 3, removed: 1, revokedUserIds: ["u_gone"] });
 
     expect(shop.calls.map((call) => call.variables)).toEqual([
       { cursor: null, search: 'tag:"Ordering Desk Manager" OR tag:"Ordering Desk Staff"' },
@@ -217,6 +220,7 @@ describe("syncRoster", () => {
       complete: false,
       entries: 1,
       removed: 0,
+      revokedUserIds: [],
     });
     expect((await roster(db)).map((row) => row.email)).toEqual(["jo@impact.example", "keep@impact.example"]);
   });
@@ -236,7 +240,11 @@ describe("syncRoster", () => {
     await seedUser(db, "u_jo", "jo@impact.example");
     await seedMember(db, WS, "u_jo", "manager", "manual");
     await applyRosterCustomer(db, WS, "501", customer("501", "jo@impact.example", ["Ordering Desk Staff"]), NOW - 1);
-    await syncRoster(db, env, WS, { fetchImpl: customerPages([[]]).impl, now: () => NOW });
+    expect(await syncRoster(db, env, WS, { fetchImpl: customerPages([[]]).impl, now: () => NOW })).toMatchObject({
+      kind: "ok",
+      removed: 1,
+      revokedUserIds: [],
+    });
     expect(await roster(db)).toEqual([]);
     expect(await membership(db, "u_jo")).toEqual({ role: "manager", source: "manual" });
   });

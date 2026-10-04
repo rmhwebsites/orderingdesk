@@ -6,10 +6,16 @@
 // unexpired ticket for that workspace is forwarded to the workspace's
 // WorkspaceRoom; anything else gets a 401 and no upgrade. Relative imports
 // only: bundled into the custom worker.
+//
+// The room is handed the verified user, nonce and expiry as headers on its
+// /connect path (whatever the client sent under those names is replaced):
+// it tags the socket with the user, so a kick can close it, and spends the
+// nonce, so the ticket works once.
 
 import { verifyLiveTicket } from "./ticket";
 
 export const LIVE_PATH = "/live";
+const ROOM_CONNECT_URL = "https://workspace-room/connect";
 
 export async function handleLiveRequest(request: Request, env: CloudflareEnv): Promise<Response> {
   const url = new URL(request.url);
@@ -25,8 +31,12 @@ export async function handleLiveRequest(request: Request, env: CloudflareEnv): P
   if (request.method !== "GET" || request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
     return new Response("Expected a WebSocket upgrade", { status: 426 });
   }
-  // The room routes by path and only ever upgrades this request; its
-  // /broadcast path is reachable through the binding alone, never from here.
+  // The room routes by path: this always lands on /connect, so its
+  // /broadcast and /kick paths are reachable through the binding alone.
+  const headers = new Headers(request.headers);
+  headers.set("x-live-user", claims.userId);
+  headers.set("x-live-nonce", claims.nonce);
+  headers.set("x-live-exp", String(claims.exp));
   const room = env.ROOM.get(env.ROOM.idFromName(claims.workspaceId));
-  return room.fetch(request);
+  return room.fetch(new Request(ROOM_CONNECT_URL, { method: "GET", headers }));
 }

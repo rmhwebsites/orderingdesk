@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import type { LiveEvent } from "../lib/live-events";
-import { broadcast, broadcastSync } from "./broadcast";
+import { broadcast, broadcastSync, kickUsers } from "./broadcast";
 
 const WS = "ws_impact";
 
@@ -102,5 +102,27 @@ describe("broadcastSync", () => {
     const { env, calls } = fakeEnv(() => Response.json({ sent: 1 }));
     await broadcastSync(env, WS, { addedOrderIds: [], updatedOrderIds: [] });
     expect(calls).toEqual([]);
+  });
+});
+
+describe("kickUsers", () => {
+  it("asks the workspace room to close each user's sockets", async () => {
+    const { env, calls } = fakeEnv(() => Response.json({ closed: 1 }));
+    await kickUsers(env, WS, ["u_marta", "u_jo"]);
+    expect(calls).toEqual([
+      { room: WS, url: "https://workspace-room/kick", method: "POST", body: JSON.stringify({ userId: "u_marta" }) },
+      { room: WS, url: "https://workspace-room/kick", method: "POST", body: JSON.stringify({ userId: "u_jo" }) },
+    ]);
+  });
+
+  it("sends nothing for nobody, and never throws", async () => {
+    const quiet = fakeEnv(() => Response.json({ closed: 0 }));
+    await kickUsers(quiet.env, WS, []);
+    expect(quiet.calls).toEqual([]);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const broken = fakeEnv(() => Promise.reject(new Error("DO unavailable")));
+    await expect(kickUsers(broken.env, WS, ["u_marta"])).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalled();
+    await expect(kickUsers({} as CloudflareEnv, WS, ["u_marta"])).resolves.toBeUndefined();
   });
 });

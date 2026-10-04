@@ -107,7 +107,8 @@ describe("invitePlatformAdmin", () => {
 describe("revokePlatformAdmin", () => {
   it("revokes a promoted admin", async () => {
     const db = await setup();
-    expect(await revokePlatformAdmin(db, ENV, "u_boss", { userId: "u_helper" })).toEqual({ kind: "revoked" });
+    // The revoked admin's id, so the route can close their open sockets.
+    expect(await revokePlatformAdmin(db, ENV, "u_boss", { userId: "u_helper" })).toEqual({ kind: "revoked", userId: "u_helper" });
     expect(await grants(db)).toEqual([]);
   });
 
@@ -141,7 +142,7 @@ describe("revokePlatformAdmin", () => {
       { id: "pa", email: "next@example.com", platformAdmin: true, invitedBy: "u_boss", createdAt: 1 },
       { id: "ws", email: "next@example.com", workspaceId: "ws_impact", role: "staff", invitedBy: "u_boss", createdAt: 1 },
     ]);
-    expect(await revokePlatformAdmin(db, ENV, "u_boss", { email: "NEXT@example.com" })).toEqual({ kind: "revoked" });
+    expect(await revokePlatformAdmin(db, ENV, "u_boss", { email: "NEXT@example.com" })).toEqual({ kind: "revoked", userId: null });
     expect(await platformInvites(db)).toEqual([
       { email: "next@example.com", workspaceId: "ws_impact", role: "staff", platformAdmin: false, invitedBy: "u_boss" },
     ]);

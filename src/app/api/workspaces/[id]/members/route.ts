@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { roleAtLeast } from "@/lib/roles";
+import { kickUsers } from "@/server/broadcast";
 import { sendWorkspaceInviteEmail } from "@/server/email/invite";
 import { loadMailWorkspace } from "@/server/email/workspace";
 import { guardResponse, requireMember } from "@/server/guard";
-import { inviteMember, listMembers, removeMember } from "@/server/members";
+import { changeMemberRole, inviteMember, listMembers, removeMember } from "@/server/members";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -49,17 +50,38 @@ export async function POST(request: Request, context: RouteContext) {
   }
 }
 
-// Managers and platform admins. Body {userId} removes a member (never
-// yourself, never a Shopify-tagged member) or {email} withdraws a pending
-// invite. 200 {ok}; 400 {error}.
-export async function DELETE(request: Request, context: RouteContext) {
+// Managers and platform admins. Body {userId, role: manager | staff}
+// changes a manual member's role (never your own, never a Shopify-tagged
+// member, whose role follows the tag). 200 {ok}; 400 {error}.
+export async function PATCH(request: Request, context: RouteContext) {
   try {
     const { id } = await context.params;
     const { db, userId } = await requireMember(id, "manager");
     const body = (await request.json().catch(() => null)) as unknown;
+    const result = await changeMemberRole(db, { workspaceId: id, actorUserId: userId }, body);
+    if (result.kind === "invalid") {
+      return NextResponse.json({ error: result.error }, { status: 400 });
+    }
+    return NextResponse.json({ ok: true });
+  } catch (e) {
+    return guardResponse(e);
+  }
+}
+
+// Managers and platform admins. Body {userId} removes a member (never
+// yourself, never a Shopify-tagged member) and closes their open sockets,
+// or {email} withdraws a pending invite. 200 {ok}; 400 {error}.
+export async function DELETE(request: Request, context: RouteContext) {
+  try {
+    const { id } = await context.params;
+    const { db, userId, env } = await requireMember(id, "manager");
+    const body = (await request.json().catch(() => null)) as unknown;
     const result = await removeMember(db, { workspaceId: id, actorUserId: userId }, body);
     if (result.kind === "invalid") {
       return NextResponse.json({ error: result.error }, { status: 400 });
+    }
+    if (result.userId) {
+      await kickUsers(env, id, [result.userId]);
     }
     return NextResponse.json({ ok: true });
   } catch (e) {

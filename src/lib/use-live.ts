@@ -7,7 +7,7 @@
 // on each poll tick.
 
 import { useEffect, useRef, useState } from "react";
-import { parseLiveEvent, type LiveEvent } from "./live-events";
+import { LIVE_KICK_CLOSE_CODE, parseLiveEvent, type LiveEvent } from "./live-events";
 
 export type LiveStatus = "connecting" | "live" | "offline";
 
@@ -20,6 +20,13 @@ const HEARTBEAT_MS = 25000;
 export function reconnectDelay(attempt: number, random: number = Math.random()): number {
   const base = Math.min(MAX_RECONNECT_DELAY_MS, 1000 * 2 ** Math.min(attempt, 10));
   return Math.min(MAX_RECONNECT_DELAY_MS, Math.round(base * (0.8 + random * 0.4)));
+}
+
+// Every close is retried except the room removing this person (their
+// access to the workspace went): then the page reloads instead, and the
+// server answers with whatever they may still see.
+export function shouldReconnect(closeCode: number): boolean {
+  return closeCode !== LIVE_KICK_CLOSE_CODE;
 }
 
 export function liveUrl(location: { protocol: string; host: string }, workspaceId: string, ticket: string): string {
@@ -142,15 +149,23 @@ export function useLive(opts: {
           handlers.current.onEvent(event);
         }
       };
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         if (socket !== ws) {
           return;
         }
         socket = null;
         clearInterval(heartbeatTimer);
-        if (!disposed) {
-          wentDown();
+        if (disposed) {
+          return;
         }
+        if (!shouldReconnect(event.code)) {
+          disposed = true;
+          stopPolling();
+          setStatus("offline");
+          window.location.reload();
+          return;
+        }
+        wentDown();
       };
     }
 

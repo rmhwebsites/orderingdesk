@@ -126,7 +126,9 @@ export async function invitePlatformAdmin(
   return { kind: "invited", email };
 }
 
-export type RevokePlatformAdminResult = { kind: "invalid"; error: string } | { kind: "revoked" };
+// userId: the admin whose access was revoked, or null when a pending invite
+// was withdrawn.
+export type RevokePlatformAdminResult = { kind: "invalid"; error: string } | { kind: "revoked"; userId: string | null };
 
 // Body {userId} revokes a promoted admin; {email} withdraws a pending
 // platform-admin invite. Platform admins remove other platform admins, never
@@ -156,14 +158,14 @@ export async function revokePlatformAdmin(
       .delete(platformAdmins)
       .where(eq(platformAdmins.userId, targetUserId))
       .returning({ userId: platformAdmins.userId });
-    return removed.length > 0 ? { kind: "revoked" } : { kind: "invalid", error: "No such platform admin" };
+    return removed.length > 0 ? { kind: "revoked", userId: targetUserId } : { kind: "invalid", error: "No such platform admin" };
   }
 
   if (targetEmail.length > 0) {
     await db
       .delete(pendingInvites)
       .where(and(eq(pendingInvites.email, targetEmail), eq(pendingInvites.platformAdmin, true)));
-    return { kind: "revoked" };
+    return { kind: "revoked", userId: null };
   }
 
   return { kind: "invalid", error: "userId or email is required" };

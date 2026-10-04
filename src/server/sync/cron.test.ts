@@ -4,11 +4,13 @@ import { openTestDb, seedWorkspace } from "../desk/test-helpers";
 import type { SyncResult } from "./run";
 
 vi.mock("./run", () => ({ runSync: vi.fn() }));
-vi.mock("../broadcast", () => ({ broadcastSync: vi.fn(async () => undefined) }));
-vi.mock("../shopify/roster-sync", () => ({ syncRoster: vi.fn(async () => ({ kind: "ok", complete: true, entries: 0, removed: 0 })) }));
+vi.mock("../broadcast", () => ({ broadcastSync: vi.fn(async () => undefined), kickUsers: vi.fn(async () => undefined) }));
+vi.mock("../shopify/roster-sync", () => ({
+  syncRoster: vi.fn(async () => ({ kind: "ok", complete: true, entries: 0, removed: 0, revokedUserIds: [] })),
+}));
 
 const { runSync } = await import("./run");
-const { broadcastSync } = await import("../broadcast");
+const { broadcastSync, kickUsers } = await import("../broadcast");
 const { syncRoster } = await import("../shopify/roster-sync");
 const { runAllSyncs, WEBHOOK_DELIVERY_RETENTION_MS } = await import("./cron");
 
@@ -35,6 +37,7 @@ async function setup() {
 beforeEach(() => {
   vi.mocked(runSync).mockReset();
   vi.mocked(broadcastSync).mockClear();
+  vi.mocked(kickUsers).mockClear();
   vi.mocked(syncRoster).mockClear();
   vi.spyOn(console, "log").mockImplementation(() => undefined);
 });
@@ -80,6 +83,23 @@ describe("runAllSyncs roster and housekeeping", () => {
     vi.mocked(runSync).mockResolvedValue(result());
     await runAllSyncs(db, env);
     expect(vi.mocked(syncRoster).mock.calls.map((call) => call[2]).sort()).toEqual(["ws_a", "ws_b"]);
+  });
+
+  it("closes the open sockets of people whose Shopify tag was revoked", async () => {
+    const db = await setup();
+    vi.mocked(runSync).mockResolvedValue(result());
+    vi.mocked(syncRoster).mockImplementation(async (_db, _env, workspaceId) => ({
+      kind: "ok",
+      complete: true,
+      entries: 1,
+      removed: workspaceId === "ws_a" ? 1 : 0,
+      revokedUserIds: workspaceId === "ws_a" ? ["u_gone"] : [],
+    }));
+    await runAllSyncs(db, env);
+    expect(vi.mocked(kickUsers).mock.calls).toEqual([[env, "ws_a", ["u_gone"]]]);
+    // User ids stay out of the log line.
+    const logged = vi.mocked(console.log).mock.calls.map((call) => String(call[0])).join("\n");
+    expect(logged).not.toContain("u_gone");
   });
 
   it("keeps going when a roster sync throws", async () => {

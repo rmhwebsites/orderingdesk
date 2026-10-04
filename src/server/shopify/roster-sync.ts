@@ -20,7 +20,7 @@
 
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "../../db";
-import { applyBatch } from "../../db/batch";
+import { applyBatch, rowsAffected } from "../../db/batch";
 import { shopifyRoster, user, workspaceMembers, workspaces, type RosterTags } from "../../db/schema";
 import { resolveRosterTags } from "../roster";
 import { failureText, fetchTaggedCustomers, type RosterCustomer } from "./admin";
@@ -100,8 +100,9 @@ async function grant(
 }
 
 // Removes the roster row for this email and the shopify membership of the
-// user with this email, in this workspace only.
-async function revoke(db: Db, workspaceId: string, email: string, userId: string | undefined): Promise<void> {
+// user with this email, in this workspace only. True when a membership
+// went (that user's open sockets are then closed by the caller).
+async function revoke(db: Db, workspaceId: string, email: string, userId: string | undefined): Promise<boolean> {
   const statements: PromiseLike<unknown>[] = [
     db.delete(shopifyRoster).where(and(eq(shopifyRoster.workspaceId, workspaceId), eq(shopifyRoster.email, email))),
   ];
@@ -118,18 +119,20 @@ async function revoke(db: Db, workspaceId: string, email: string, userId: string
         ),
     );
   }
-  await applyBatch(db, statements);
+  const results = await applyBatch(db, statements);
+  return userId !== undefined && rowsAffected(results[1], "roster") > 0;
 }
 
 // One customer as Shopify has it now (null: the customer no longer exists).
-// customerId is the numeric Shopify id the webhook named.
+// customerId is the numeric Shopify id the webhook named. Answers the users
+// whose shopify membership went.
 export async function applyRosterCustomer(
   db: Db,
   workspaceId: string,
   customerId: string,
   customer: RosterCustomer | null,
   now: number,
-): Promise<void> {
+): Promise<string[]> {
   const rosterTags = await workspaceRosterTags(db, workspaceId);
   const email = customer?.email ?? null;
   const role = customer && email ? rosterRoleFor(customer.tags, rosterTags) : null;
@@ -140,16 +143,22 @@ export async function applyRosterCustomer(
     .where(and(eq(shopifyRoster.workspaceId, workspaceId), eq(shopifyRoster.shopifyCustomerId, customerId)));
   const stale = held.map((row) => row.email).filter((heldEmail) => role === null || heldEmail !== email);
   const users = await userIdsByEmail(db, [...stale, ...(email && role ? [email] : [])]);
+  const revoked: string[] = [];
   for (const staleEmail of stale) {
-    await revoke(db, workspaceId, staleEmail, users.get(staleEmail));
+    const userId = users.get(staleEmail);
+    if (await revoke(db, workspaceId, staleEmail, userId)) {
+      revoked.push(userId!);
+    }
   }
   if (email && role) {
     await grant(db, workspaceId, email, role, customerId, now, users.get(email));
   }
+  return revoked;
 }
 
 export type RosterSyncResult =
-  | { kind: "ok"; complete: boolean; entries: number; removed: number }
+  // revokedUserIds: users whose shopify membership went.
+  | { kind: "ok"; complete: boolean; entries: number; removed: number; revokedUserIds: string[] }
   | { kind: "failed"; detail: string }
   | { kind: "skipped" };
 
@@ -208,8 +217,12 @@ export async function syncRoster(
   for (const [email, entry] of desired) {
     await grant(db, workspaceId, email, entry.role, entry.customerId, now, users.get(email));
   }
+  const revokedUserIds: string[] = [];
   for (const email of stale) {
-    await revoke(db, workspaceId, email, users.get(email));
+    const userId = users.get(email);
+    if (await revoke(db, workspaceId, email, userId)) {
+      revokedUserIds.push(userId!);
+    }
   }
-  return { kind: "ok", complete: fetched.complete, entries: desired.size, removed: stale.length };
+  return { kind: "ok", complete: fetched.complete, entries: desired.size, removed: stale.length, revokedUserIds };
 }

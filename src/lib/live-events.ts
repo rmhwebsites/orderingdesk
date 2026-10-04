@@ -5,6 +5,11 @@
 
 import type { EventView } from "../server/desk/shapes";
 
+// The close code a workspace room uses when it removes someone (their
+// membership or platform admin access went): the client stops
+// reconnecting instead of retrying.
+export const LIVE_KICK_CLOSE_CODE = 4003;
+
 export type LiveOrderStatus = {
   id: string;
   statusKey: string;

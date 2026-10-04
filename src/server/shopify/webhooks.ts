@@ -32,7 +32,7 @@ import { eq } from "drizzle-orm";
 import type { Db } from "../../db";
 import { rowsAffected } from "../../db/batch";
 import { storeConnections, webhookDeliveries } from "../../db/schema";
-import { broadcastSync } from "../broadcast";
+import { broadcastSync, kickUsers } from "../broadcast";
 import { decryptSecret } from "../crypto";
 import { upsertFetchedOrder } from "../sync/run";
 import { failureText, fetchCustomer, fetchOrderNode, legacyIdOf } from "./admin";
@@ -265,7 +265,7 @@ async function runJob(
   // (see upsertFetchedOrder).
   const now = clock();
   if (job.kind === "customer-deleted") {
-    await applyRosterCustomer(db, workspaceId, job.customerId, null, now);
+    await kickUsers(env, workspaceId, await applyRosterCustomer(db, workspaceId, job.customerId, null, now));
     return;
   }
 
@@ -286,7 +286,7 @@ async function runJob(
     if (!(await stillConnected(db, workspaceId, token.shopDomain))) {
       return;
     }
-    await applyRosterCustomer(db, workspaceId, job.customerId, fetched.customer, now);
+    await kickUsers(env, workspaceId, await applyRosterCustomer(db, workspaceId, job.customerId, fetched.customer, now));
     return;
   }
 

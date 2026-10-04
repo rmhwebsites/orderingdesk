@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
+import { kickUsers } from "@/server/broadcast";
 import { sendPlatformAdminInviteEmail } from "@/server/email/invite";
 import { guardResponse, requirePlatformAdmin } from "@/server/guard";
 import { invitePlatformAdmin, listPlatformAdmins, revokePlatformAdmin } from "@/server/platform-admins";
+import { workspacesWithoutMember } from "@/server/platform-users";
 
 // Every method: platform admins only (404 for anyone else, 401 signed out).
 
@@ -39,7 +41,9 @@ export async function POST(request: Request) {
 }
 
 // Body {userId} revokes a promoted admin (never yourself, never a bootstrap
-// admin) or {email} withdraws a pending invite. 200 {ok}; 400 {error}.
+// admin), closing their open sockets in every workspace they reached only
+// as an admin, or {email} withdraws a pending invite. 200 {ok}; 400
+// {error}.
 export async function DELETE(request: Request) {
   try {
     const { db, env, userId } = await requirePlatformAdmin();
@@ -47,6 +51,12 @@ export async function DELETE(request: Request) {
     const result = await revokePlatformAdmin(db, env, userId, body);
     if (result.kind === "invalid") {
       return NextResponse.json({ error: result.error }, { status: 400 });
+    }
+    if (result.userId) {
+      const revoked = result.userId;
+      for (const workspaceId of await workspacesWithoutMember(db, revoked)) {
+        await kickUsers(env, workspaceId, [revoked]);
+      }
     }
     return NextResponse.json({ ok: true });
   } catch (e) {

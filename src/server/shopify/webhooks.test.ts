@@ -34,20 +34,26 @@ async function sign(body: Uint8Array<ArrayBuffer> | string, secret = SECRET): Pr
 
 function fakeEnv() {
   const sent: LiveEvent[] = [];
+  // Kicks: users whose sockets the room was asked to close.
+  const kicks: Array<{ room: string; userId: string }> = [];
   const env = {
     ENCRYPTION_KEY: KEY,
     APP_URL: "https://orderingdesk.com",
     ROOM: {
       idFromName: (name: string) => ({ name }),
-      get: () => ({
-        async fetch(_url: string, init: RequestInit) {
+      get: (id: { name: string }) => ({
+        async fetch(url: string, init: RequestInit) {
+          if (url.endsWith("/kick")) {
+            kicks.push({ room: id.name, userId: (JSON.parse(String(init.body)) as { userId: string }).userId });
+            return Response.json({ closed: 1 });
+          }
           sent.push(JSON.parse(String(init.body)) as LiveEvent);
           return Response.json({ sent: 1 });
         },
       }),
     },
   } as unknown as CloudflareEnv;
-  return { env, sent };
+  return { env, sent, kicks };
 }
 
 async function setup(overrides: Partial<typeof schema.storeConnections.$inferInsert> = {}) {
@@ -428,14 +434,16 @@ describe("receiveShopifyWebhook: customers", () => {
     expect(members).toMatchObject([{ workspaceId: WS, role: "manager", source: "shopify" }]);
   });
 
-  it("removes the access of a deleted customer without asking Shopify", async () => {
+  it("removes the access of a deleted customer without asking Shopify, closing their open sockets", async () => {
     const db = await setup();
-    const { env } = fakeEnv();
+    const { env, kicks } = fakeEnv();
     await seedUser(db, "u_jo", "jo@impact.example");
     const shop = store({ customer: { id: "gid://shopify/Customer/501", email: "jo@impact.example", tags: ["Ordering Desk Staff"] } });
     await (await deliver(db, env, { topic: "customers/create", payload: { id: 501 }, webhookId: "c1" }, shop.impl)).work?.();
     expect(await rosterEmails(db)).toHaveLength(1);
+    expect(kicks).toEqual([]);
     await (await deliver(db, env, { topic: "customers/delete", payload: { id: 501 }, webhookId: "c2" })).work?.();
+    expect(kicks).toEqual([{ room: WS, userId: "u_jo" }]);
     expect(await rosterEmails(db)).toEqual([]);
     expect(await db.select().from(schema.workspaceMembers).where(eq(schema.workspaceMembers.userId, "u_jo"))).toEqual([]);
   });

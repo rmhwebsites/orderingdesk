@@ -4,12 +4,17 @@
 // handled in custom-worker.ts, before Next.js and better-auth), so it first
 // asks a guarded route for a ticket and passes it in the socket URL.
 //
-// Format: base64url(JSON {workspaceId, userId, exp}) "." base64url(HMAC-
+// Format: base64url(JSON {workspaceId, userId, exp, nonce}) "." base64url(HMAC-
 // SHA256). The HMAC covers a purpose prefix plus the encoded payload, keyed
 // with BETTER_AUTH_SECRET; the prefix keeps these signatures from ever
 // matching another use of that secret. WebCrypto only, so it runs on
 // workerd and in Node tests. Relative imports only: bundled into the custom
 // worker.
+//
+// Single use: every ticket carries a random nonce, and the workspace's room
+// (src/realtime/room.ts) remembers each nonce it has admitted until the
+// ticket expires, so a ticket that leaks (a log, a proxy) cannot open a
+// second socket.
 
 export const LIVE_TICKET_TTL_MS = 60000;
 
@@ -17,7 +22,13 @@ const PURPOSE = "ordering-desk.live-ticket.v1.";
 const MAX_TICKET_LENGTH = 1024;
 const SEGMENT = /^[A-Za-z0-9_-]+$/;
 
-export type LiveTicketClaims = { workspaceId: string; userId: string; exp: number };
+export type LiveTicketClaims = { workspaceId: string; userId: string; exp: number; nonce: string };
+
+const NONCE = /^[0-9a-f]{32}$/;
+
+function randomNonce(): string {
+  return [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -77,7 +88,9 @@ export async function signLiveTicket(
   }
   const exp = now + LIVE_TICKET_TTL_MS;
   const payloadSegment = toBase64Url(
-    encoder.encode(JSON.stringify({ workspaceId: subject.workspaceId, userId: subject.userId, exp })),
+    encoder.encode(
+      JSON.stringify({ workspaceId: subject.workspaceId, userId: subject.userId, exp, nonce: randomNonce() }),
+    ),
   );
   const signatureSegment = toBase64Url(await hmac(secret, payloadSegment));
   return { ticket: `${payloadSegment}.${signatureSegment}`, expiresAt: exp };
@@ -109,15 +122,17 @@ export async function verifyLiveTicket(
       typeof (claims as LiveTicketClaims).workspaceId !== "string" ||
       typeof (claims as LiveTicketClaims).userId !== "string" ||
       typeof (claims as LiveTicketClaims).exp !== "number" ||
-      !Number.isFinite((claims as LiveTicketClaims).exp)
+      !Number.isFinite((claims as LiveTicketClaims).exp) ||
+      typeof (claims as LiveTicketClaims).nonce !== "string" ||
+      !NONCE.test((claims as LiveTicketClaims).nonce)
     ) {
       return null;
     }
-    const { workspaceId, userId, exp } = claims as LiveTicketClaims;
+    const { workspaceId, userId, exp, nonce } = claims as LiveTicketClaims;
     if (exp <= (opts.now ?? Date.now()) || workspaceId !== opts.workspaceId) {
       return null;
     }
-    return { workspaceId, userId, exp };
+    return { workspaceId, userId, exp, nonce };
   } catch {
     return null;
   }
