@@ -2,8 +2,8 @@
 
 // Small building blocks shared by the Settings sections: the section frame,
 // labeled fields with help and inline errors, inline messages, tone chips,
-// an in-page confirmation step and a JSON request helper. Tokens and the
-// shared control shapes (src/components/ui.ts) only.
+// an in-page confirmation step, focus hand-off and a JSON request helper.
+// Tokens and the shared control shapes (src/components/ui.ts) only.
 
 import { useEffect, useRef } from "react";
 import { CaretDownIcon } from "@phosphor-icons/react/CaretDown";
@@ -55,6 +55,31 @@ export async function requestJson<T>(
   return { ok: false, status: response.status, error, data };
 }
 
+// Moves focus to target once the current update has rendered. For the
+// moment an element that holds focus goes away (an inline step closes, a
+// row is removed, a form swaps in): without it focus falls back to the page
+// body and keyboard and screen reader users land at the top of the page.
+// target is read when it runs, so it can name an element that only exists
+// after the update (the trigger shown again, the next row). It runs on the
+// next frame, and again shortly after in case no frame comes (a hidden tab
+// gets no animation frames; timers still run there).
+export function focusSoon(target: () => HTMLElement | null | undefined): void {
+  const run = () => {
+    const element = target();
+    if (element && document.activeElement !== element) {
+      element.focus();
+    }
+  };
+  requestAnimationFrame(run);
+  setTimeout(run, 100);
+}
+
+// The heading of a Settings section, focusable from script (not by Tab):
+// where focus goes when what it was on disappears with nothing nearer.
+export function sectionHeading(id: string): HTMLElement | null {
+  return document.getElementById(`${id}-heading`);
+}
+
 export function SettingsSection({
   id,
   title,
@@ -69,7 +94,7 @@ export function SettingsSection({
   return (
     <section id={id} aria-labelledby={`${id}-heading`} className="flex scroll-mt-32 flex-col gap-4 sm:scroll-mt-24">
       <div>
-        <h2 id={`${id}-heading`} className="font-display text-lg font-semibold text-ink">
+        <h2 id={`${id}-heading`} tabIndex={-1} className="font-display text-lg font-semibold text-ink">
           {title}
         </h2>
         <div className="mt-1 max-w-[65ch] text-sm text-ink-2">{description}</div>
@@ -190,7 +215,11 @@ export function ToneChip({ tone, children }: { tone: string; children: React.Rea
 }
 
 // The in-page confirmation step for a destructive action: says what will
-// happen, takes focus on its confirm button, and Esc cancels.
+// happen and takes focus on its confirm button. Cancel and Esc call
+// onCancel and give focus back to returnFocus (the control that opened the
+// step, as it is after the step closes). After a confirm, the caller moves
+// focus itself (focusSoon), since what should hold it depends on what the
+// action removed: the next row, the list heading, the field it cleared.
 export function ConfirmStep({
   message,
   confirmLabel,
@@ -198,6 +227,7 @@ export function ConfirmStep({
   busy,
   onConfirm,
   onCancel,
+  returnFocus,
 }: {
   message: React.ReactNode;
   confirmLabel: string;
@@ -205,11 +235,25 @@ export function ConfirmStep({
   busy: boolean;
   onConfirm: () => void;
   onCancel: () => void;
+  returnFocus: () => HTMLElement | null | undefined;
 }) {
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const wasBusy = useRef(busy);
   useEffect(() => {
     confirmRef.current?.focus();
   }, []);
+  // The buttons are disabled while the action runs, which drops focus to
+  // the page; when it fails and the step stays open, take it back.
+  useEffect(() => {
+    if (wasBusy.current && !busy) {
+      confirmRef.current?.focus();
+    }
+    wasBusy.current = busy;
+  }, [busy]);
+  const cancel = () => {
+    onCancel();
+    focusSoon(returnFocus);
+  };
   return (
     <div
       data-tone="red"
@@ -217,13 +261,13 @@ export function ConfirmStep({
       onKeyDown={(event) => {
         if (event.key === "Escape" && !busy) {
           event.stopPropagation();
-          onCancel();
+          cancel();
         }
       }}
     >
       <p className="min-w-0 flex-1 text-sm text-ink">{message}</p>
       <div className="flex shrink-0 gap-2">
-        <button type="button" onClick={onCancel} disabled={busy} className={ui.buttonSecondary}>
+        <button type="button" onClick={cancel} disabled={busy} className={ui.buttonSecondary}>
           Cancel
         </button>
         <button

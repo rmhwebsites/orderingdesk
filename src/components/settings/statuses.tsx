@@ -8,7 +8,7 @@ import { TrashIcon } from "@phosphor-icons/react/Trash";
 import { STATUS_LABEL_MAX } from "@/lib/status-label";
 import type { StatusView } from "@/server/desk/shapes";
 import { ui } from "@/components/ui";
-import { InlineMessage, Panel, requestJson, SaveStatus, Select, SettingsSection, Switch } from "./kit";
+import { focusSoon, InlineMessage, Panel, requestJson, SaveStatus, Select, SettingsSection, Switch } from "./kit";
 
 // The nine status colors (STATUS_COLORS in src/server/desk/statuses.ts),
 // each a semantic token pair in globals.css.
@@ -88,6 +88,17 @@ export function StatusesSection({ workspaceId, initial }: { workspaceId: string;
     requestAnimationFrame(() => {
       document.getElementById(`status-${row.uid}-${direction}`)?.focus();
     });
+  }
+
+  function remove(index: number) {
+    const row = rows[index];
+    const next = rows.filter((candidate) => candidate.uid !== row.uid);
+    setRows(next);
+    setDone(null);
+    setAnnouncement(`${row.label || "Status"} removed. Save statuses to keep the change.`);
+    // The row that took its place (or the one before it) holds focus.
+    const neighbour = next[Math.min(index, next.length - 1)];
+    focusSoon(() => document.getElementById(`status-${neighbour.uid}-label`));
   }
 
   function add() {
@@ -186,10 +197,7 @@ export function StatusesSection({ workspaceId, initial }: { workspaceId: string;
                   </span>
                   <button
                     type="button"
-                    onClick={() => {
-                      setRows((current) => current.filter((candidate) => candidate.uid !== row.uid));
-                      setDone(null);
-                    }}
+                    onClick={() => remove(index)}
                     disabled={rows.length <= 1}
                     aria-label={`Remove ${row.label || "this status"}`}
                     className={`${ui.iconButton} size-9`}
@@ -197,7 +205,11 @@ export function StatusesSection({ workspaceId, initial }: { workspaceId: string;
                     <TrashIcon size={16} aria-hidden />
                   </button>
                 </div>
-                <div className="grid gap-3 sm:grid-cols-[9rem_minmax(0,1fr)_auto] sm:items-center sm:pl-28">
+                {/* Color and Shopify link side by side from md, with the
+                    purchase order switch on its own row; the indent under
+                    the name and one row of three only from xl, where the
+                    link select keeps at least 12rem. */}
+                <div className="grid gap-3 md:grid-cols-2 md:items-center xl:grid-cols-[9rem_minmax(12rem,1fr)_auto] xl:pl-28">
                   <div className="flex min-w-0 items-center gap-2">
                     <label htmlFor={`${id}-color`} className="sr-only">
                       Color for {row.label || "this status"}
@@ -238,12 +250,14 @@ export function StatusesSection({ workspaceId, initial }: { workspaceId: string;
                       ))}
                     </Select>
                   </div>
-                  <Switch
-                    id={`${id}-po`}
-                    checked={row.triggersPo}
-                    onChange={(checked) => update(row.uid, { triggersPo: checked })}
-                    label="Starts a purchase order"
-                  />
+                  <div className="md:col-span-2 xl:col-span-1">
+                    <Switch
+                      id={`${id}-po`}
+                      checked={row.triggersPo}
+                      onChange={(checked) => update(row.uid, { triggersPo: checked })}
+                      label="Starts a purchase order"
+                    />
+                  </div>
                 </div>
               </li>
             );

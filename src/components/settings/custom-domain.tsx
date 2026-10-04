@@ -1,10 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { GlobeIcon } from "@phosphor-icons/react/Globe";
 import type { DomainView } from "@/server/domains";
 import { ui } from "@/components/ui";
-import { ConfirmStep, describedBy, Field, InlineMessage, Panel, requestJson, SettingsSection, ToneChip } from "./kit";
+import { ConfirmStep, describedBy, Field, focusSoon, InlineMessage, Panel, requestJson, SettingsSection, ToneChip } from "./kit";
 
 const STATUS: Record<NonNullable<DomainView["status"]>, { tone: string; label: string }> = {
   pending: { tone: "amber", label: "Pending check" },
@@ -48,6 +48,7 @@ export function CustomDomainSection({ workspaceId, initial }: { workspaceId: str
   const [busy, setBusy] = useState<"save" | "check" | "remove" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const removeRef = useRef<HTMLButtonElement>(null);
   const base = `/api/workspaces/${encodeURIComponent(workspaceId)}/domain`;
   const status = view.status ? STATUS[view.status] : null;
 
@@ -92,6 +93,9 @@ export function CustomDomainSection({ workspaceId, initial }: { workspaceId: str
     setReason(null);
     setView({ domain: null, status: null });
     setInput("");
+    // The domain and its buttons are gone: the domain field, now empty,
+    // holds focus next.
+    focusSoon(() => document.getElementById("custom-domain"));
   }
 
   return (
@@ -148,7 +152,13 @@ export function CustomDomainSection({ workspaceId, initial }: { workspaceId: str
             <button type="button" onClick={check} disabled={busy !== null} className={ui.buttonPrimary}>
               {busy === "check" ? "Checking" : "Check"}
             </button>
-            <button type="button" onClick={() => setConfirming(true)} disabled={busy !== null} className={ui.buttonQuiet}>
+            <button
+              ref={removeRef}
+              type="button"
+              onClick={() => setConfirming(true)}
+              disabled={busy !== null}
+              className={ui.buttonQuiet}
+            >
               Remove domain
             </button>
             <p className="text-sm text-ink-2">Check loads the address and confirms it reaches Ordering Desk.</p>
@@ -162,6 +172,7 @@ export function CustomDomainSection({ workspaceId, initial }: { workspaceId: str
             busy={busy === "remove"}
             onConfirm={remove}
             onCancel={() => setConfirming(false)}
+            returnFocus={() => removeRef.current}
           />
         ) : null}
         {error ? <InlineMessage tone="bad">{error}</InlineMessage> : null}

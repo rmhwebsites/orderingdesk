@@ -5,7 +5,17 @@ import { UserPlusIcon } from "@phosphor-icons/react/UserPlus";
 import { formatDate } from "@/lib/format";
 import { useNow } from "@/lib/use-now";
 import type { PlatformAdminView, PlatformInviteView } from "@/server/platform-admins";
-import { ConfirmStep, describedBy, Field, InlineMessage, Panel, requestJson, SaveStatus, ToneChip } from "@/components/settings/kit";
+import {
+  ConfirmStep,
+  describedBy,
+  Field,
+  focusSoon,
+  InlineMessage,
+  Panel,
+  requestJson,
+  SaveStatus,
+  ToneChip,
+} from "@/components/settings/kit";
 import { ui } from "@/components/ui";
 
 type AdminsData = { admins: PlatformAdminView[]; invites: PlatformInviteView[] };
@@ -58,9 +68,12 @@ export function PlatformAdmins({ initial, viewerUserId }: { initial: AdminsData;
     setConfirming(null);
     if (!result.ok) {
       setError(result.error);
+      focusSoon(() => document.getElementById(`revoke-${key}`));
       return;
     }
     await reload();
+    // The row is gone: the add field holds focus next.
+    focusSoon(() => document.getElementById("admin-email"));
   }
 
   return (
@@ -85,6 +98,7 @@ export function PlatformAdmins({ initial, viewerUserId }: { initial: AdminsData;
                   )}
                   {admin.source === "granted" && admin.userId && !isYou ? (
                     <button
+                      id={`revoke-${key}`}
                       type="button"
                       onClick={() => setConfirming(key)}
                       disabled={busy !== null}
@@ -106,6 +120,7 @@ export function PlatformAdmins({ initial, viewerUserId }: { initial: AdminsData;
                     busy={busy === key}
                     onConfirm={() => void revoke(key, { userId: admin.userId! })}
                     onCancel={() => setConfirming(null)}
+                    returnFocus={() => document.getElementById(`revoke-${key}`)}
                   />
                 ) : null}
               </li>

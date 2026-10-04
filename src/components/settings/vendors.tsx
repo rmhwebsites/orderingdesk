@@ -5,7 +5,7 @@ import { PlusIcon } from "@phosphor-icons/react/Plus";
 import { TruckIcon } from "@phosphor-icons/react/Truck";
 import type { VendorView } from "@/server/desk/vendors";
 import { ui } from "@/components/ui";
-import { ConfirmStep, describedBy, Field, InlineMessage, Panel, requestJson, SettingsSection } from "./kit";
+import { ConfirmStep, describedBy, Field, focusSoon, InlineMessage, Panel, requestJson, sectionHeading, SettingsSection } from "./kit";
 
 type Draft = { name: string; email: string; cc: string; notes: string };
 
@@ -163,7 +163,20 @@ export function VendorsSection({
     }
     setVendors((current) => sorted(current.map((vendor) => (vendor.id === id ? result.data.vendor : vendor))));
     setEditing(null);
+    // Back to this vendor's Edit button.
+    focusSoon(() => document.getElementById(`vendor-${id}-edit`));
     return null;
+  }
+
+  function startEditing(id: string) {
+    setEditing(id);
+    // The form replaces the row: its first field holds focus.
+    focusSoon(() => document.getElementById(`vendor-${id}-name`));
+  }
+
+  function stopEditing(id: string) {
+    setEditing(null);
+    focusSoon(() => document.getElementById(`vendor-${id}-edit`));
   }
 
   async function remove(id: string) {
@@ -175,8 +188,13 @@ export function VendorsSection({
       setRemoveError(result.error);
       return;
     }
-    setVendors((current) => current.filter((vendor) => vendor.id !== id));
+    const index = vendors.findIndex((vendor) => vendor.id === id);
+    const rest = vendors.filter((vendor) => vendor.id !== id);
+    setVendors(rest);
     setRemoving(null);
+    // The vendor that took its place, else the list heading.
+    const next = rest[Math.min(index, rest.length - 1)];
+    focusSoon(() => (next ? document.getElementById(`vendor-${next.id}-edit`) : null) ?? sectionHeading("vendors"));
   }
 
   return (
@@ -211,7 +229,7 @@ export function VendorsSection({
                     submitLabel="Save vendor"
                     busyLabel="Saving"
                     onSubmit={(draft) => update(vendor.id, draft)}
-                    onCancel={() => setEditing(null)}
+                    onCancel={() => stopEditing(vendor.id)}
                   />
                 ) : (
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
@@ -226,14 +244,16 @@ export function VendorsSection({
                     {canEdit ? (
                       <div className="flex shrink-0 gap-1">
                         <button
+                          id={`vendor-${vendor.id}-edit`}
                           type="button"
-                          onClick={() => setEditing(vendor.id)}
+                          onClick={() => startEditing(vendor.id)}
                           className={ui.buttonQuiet}
                           aria-label={`Edit ${vendor.name}`}
                         >
                           Edit
                         </button>
                         <button
+                          id={`vendor-${vendor.id}-remove`}
                           type="button"
                           onClick={() => setRemoving(vendor.id)}
                           className={ui.buttonQuiet}
@@ -253,6 +273,7 @@ export function VendorsSection({
                     busy={removeBusy}
                     onConfirm={() => void remove(vendor.id)}
                     onCancel={() => setRemoving(null)}
+                    returnFocus={() => document.getElementById(`vendor-${vendor.id}-remove`)}
                   />
                 ) : null}
               </li>

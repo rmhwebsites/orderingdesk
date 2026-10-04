@@ -1,11 +1,11 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { ImageSquareIcon } from "@phosphor-icons/react/ImageSquare";
 import { UploadSimpleIcon } from "@phosphor-icons/react/UploadSimple";
 import type { BrandAssetView, BrandingView } from "@/server/branding/assets";
 import { ui } from "@/components/ui";
-import { ConfirmStep, InlineMessage, requestJson } from "./kit";
+import { ConfirmStep, focusSoon, InlineMessage, requestJson } from "./kit";
 import { renderPngCopy } from "./png-copy";
 
 type Slot = "logo-light" | "logo-dark" | "symbol-light" | "symbol-dark";
@@ -45,7 +45,18 @@ function ImageSlot({
   onChange: (view: BrandingView) => void;
 }) {
   const inputId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const removeRef = useRef<HTMLButtonElement>(null);
   const asset = assetOf(view, slot);
+  // Every control names its slot (four slots share the same buttons).
+  const what = title.toLowerCase();
+  const describedBy = [
+    `${inputId}-hint`,
+    asset ? `${inputId}-email` : null,
+    disabledReason && !asset ? `${inputId}-disabled` : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
@@ -101,16 +112,22 @@ function ImageSlot({
     setConfirming(false);
     if (!result.ok) {
       setError(result.error);
+      focusSoon(() => removeRef.current);
       return;
     }
     onChange(result.data.branding);
+    // The image and its Remove button are gone: the upload control holds
+    // focus next.
+    focusSoon(() => inputRef.current);
   }
 
   return (
     <div className="flex min-w-0 flex-col gap-3 rounded-panel border border-line p-3.5">
       <div>
-        <p className="text-sm font-semibold text-ink">{title}</p>
-        <p className="text-xs text-ink-2">{hint}</p>
+        <h4 className="text-sm font-semibold text-ink">{title}</h4>
+        <p id={`${inputId}-hint`} className="text-xs text-ink-2">
+          {hint}
+        </p>
       </div>
       {/* Light versions sit on a light tile and dark versions on a dark one,
           whatever the app theme, so each shows as it will be used. */}
@@ -125,13 +142,19 @@ function ImageSlot({
           <ImageSquareIcon size={28} aria-hidden className={dark ? "text-tile-dark-ink" : "text-tile-light-ink"} />
         )}
       </div>
-      {asset ? <p className="text-xs text-ink-2">{emailNote(asset)}</p> : null}
+      {asset ? (
+        <p id={`${inputId}-email`} className="text-xs text-ink-2">
+          {emailNote(asset)}
+        </p>
+      ) : null}
       <div className="flex flex-wrap items-center gap-2">
         <input
+          ref={inputRef}
           id={inputId}
           type="file"
           accept={ACCEPT}
           className="peer sr-only"
+          aria-describedby={[describedBy, error ? `${inputId}-error` : null].filter(Boolean).join(" ")}
           disabled={busy !== null || disabledReason !== null}
           onChange={(event) => {
             const file = event.target.files?.[0];
@@ -147,25 +170,41 @@ function ImageSlot({
         >
           <UploadSimpleIcon size={16} aria-hidden />
           {busy ?? (asset ? "Replace" : "Upload")}
+          <span className="sr-only"> {what}</span>
         </label>
         {asset && busy === null ? (
-          <button type="button" onClick={() => setConfirming(true)} className={`${ui.buttonQuiet} h-9`}>
+          <button
+            ref={removeRef}
+            type="button"
+            onClick={() => setConfirming(true)}
+            aria-label={`Remove ${what}`}
+            className={`${ui.buttonQuiet} h-9`}
+          >
             Remove
           </button>
         ) : null}
       </div>
-      {disabledReason && !asset ? <p className="text-xs text-ink-2">{disabledReason}</p> : null}
+      {disabledReason && !asset ? (
+        <p id={`${inputId}-disabled`} className="text-xs text-ink-2">
+          {disabledReason}
+        </p>
+      ) : null}
       {confirming ? (
         <ConfirmStep
-          message={slot.endsWith("light") ? `Remove the ${title.toLowerCase()}? Its dark mode version goes too.` : `Remove the ${title.toLowerCase()}?`}
+          message={slot.endsWith("light") ? `Remove the ${what}? Its dark mode version goes too.` : `Remove the ${what}?`}
           confirmLabel="Remove"
           busyLabel="Removing"
           busy={busy === "Removing"}
           onConfirm={remove}
           onCancel={() => setConfirming(false)}
+          returnFocus={() => removeRef.current}
         />
       ) : null}
-      {error ? <InlineMessage tone="bad">{error}</InlineMessage> : null}
+      {error ? (
+        <div id={`${inputId}-error`}>
+          <InlineMessage tone="bad">{error}</InlineMessage>
+        </div>
+      ) : null}
     </div>
   );
 }

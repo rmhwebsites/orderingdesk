@@ -1,13 +1,24 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { PlugsIcon } from "@phosphor-icons/react/Plugs";
 import { StorefrontIcon } from "@phosphor-icons/react/Storefront";
 import { formatDateTime, relativeTime } from "@/lib/format";
 import { useNow } from "@/lib/use-now";
 import type { ConnectionSettingsView } from "@/server/desk/connection-view";
 import { ui } from "@/components/ui";
-import { ConfirmStep, describedBy, Field, InlineMessage, Panel, requestJson, SettingsSection, ToneChip } from "./kit";
+import {
+  ConfirmStep,
+  describedBy,
+  Field,
+  focusSoon,
+  InlineMessage,
+  Panel,
+  requestJson,
+  sectionHeading,
+  SettingsSection,
+  ToneChip,
+} from "./kit";
 
 type Mode = "client_credentials" | "legacy_token";
 
@@ -283,6 +294,7 @@ export function StoreConnectionSection({
   const [confirming, setConfirming] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [disconnectError, setDisconnectError] = useState<string | null>(null);
+  const disconnectRef = useRef<HTMLButtonElement>(null);
 
   function saved(next: SavedConnection, warning: string | null) {
     setConnection({
@@ -320,6 +332,8 @@ export function StoreConnectionSection({
     setConnection((current) =>
       current ? { ...current, status: "disabled", webhooksRegisteredAt: null, lastError: null } : current,
     );
+    // The disconnect controls are gone: the section heading holds focus.
+    focusSoon(() => sectionHeading("store"));
   }
 
   return (
@@ -357,16 +371,22 @@ export function StoreConnectionSection({
               <div className="flex flex-col gap-3 border-t border-line pt-5">
                 {confirming ? (
                   <ConfirmStep
-                    message={`Disconnect ${connection.shopDomain}? Syncing and live updates stop and the stored credentials are erased. Orders and their history stay, and connecting the same store again resumes.`}
+                    message={`Disconnect ${connection.shopDomain}? Syncing and live updates stop and the stored credentials are erased. People who have access through a Shopify customer tag lose it until the store is connected again. Orders and their history stay, and connecting the same store again resumes.`}
                     confirmLabel="Disconnect"
                     busyLabel="Disconnecting"
                     busy={disconnecting}
                     onConfirm={disconnect}
                     onCancel={() => setConfirming(false)}
+                    returnFocus={() => disconnectRef.current}
                   />
                 ) : (
                   <div>
-                    <button type="button" onClick={() => setConfirming(true)} className={ui.buttonSecondary}>
+                    <button
+                      ref={disconnectRef}
+                      type="button"
+                      onClick={() => setConfirming(true)}
+                      className={ui.buttonSecondary}
+                    >
                       Disconnect store
                     </button>
                   </div>

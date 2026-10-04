@@ -51,10 +51,12 @@ function SyncChip() {
     return <span className="od-skeleton h-8 w-36" aria-label="Loading sync status" />;
   }
   return (
+    // shrink-0: the chip never collapses below its icon and label (the
+    // top bar wraps first; see TopBar).
     <span
       data-tone={CHIP_TONE_COLOR[state.tone]}
       title={LIVE_TEXT[liveStatus]}
-      className="inline-flex h-8 min-w-0 items-center gap-1.5 rounded-control bg-tone-fill px-3 text-xs font-semibold text-tone-text"
+      className="inline-flex h-8 min-w-0 shrink-0 items-center gap-1.5 rounded-control bg-tone-fill px-3 text-xs font-semibold text-tone-text"
     >
       {chipIcon(state.tone, state.label)}
       <span className="truncate">{state.label}</span>
@@ -84,19 +86,23 @@ function SyncButton() {
   );
 }
 
+// Below lg the bar wraps: the workspace and its controls on the first row,
+// the sync state and the Sync button on a full-width second row, so the
+// sync state (including "Sync failing") is always readable next to a wide
+// logo. From lg everything shares one row.
 export function TopBar({ name, images }: { name: string; images: BrandImages }) {
   const { workspace } = useWorkspace();
   return (
     // z-30: the top layer of the page itself; the drawer (z-40) and toasts
     // (z-50) sit above it.
     <header className="sticky top-0 z-30 border-b border-line bg-surface">
-      <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5 sm:flex-nowrap sm:px-6">
+      <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5 sm:px-6 lg:flex-nowrap">
         {/* On a client host "/" is this workspace itself; on the hub it
             is the workspace list. */}
         <Link
           href="/"
           title={workspace.basePath === "" ? "Orders" : "All workspaces"}
-          className="order-1 -m-1 flex min-w-0 flex-1 items-center gap-3 rounded-control p-1 sm:flex-none"
+          className="order-1 -m-1 flex min-w-0 flex-1 items-center gap-3 rounded-control p-1 lg:flex-none"
         >
           <WorkspaceBrandSlot name={name} images={images} />
           <span className="min-w-0">
@@ -107,12 +113,12 @@ export function TopBar({ name, images }: { name: string; images: BrandImages }) 
           </span>
         </Link>
 
-        <div className="order-3 flex w-full min-w-0 items-center justify-between gap-2 sm:order-2 sm:ml-auto sm:w-auto sm:justify-end">
+        <div className="order-3 flex w-full min-w-0 items-center justify-between gap-2 lg:order-2 lg:ml-auto lg:w-auto lg:justify-end">
           <SyncChip />
           <SyncButton />
         </div>
 
-        <div className="order-2 flex items-center gap-1 sm:order-3">
+        <div className="order-2 flex shrink-0 items-center gap-1 lg:order-3">
           <ThemeToggle />
           {/* Every member: each role sees its own Settings sections. */}
           <Link href={`${workspace.basePath}/settings`} className={`${ui.buttonQuiet} h-10`}>

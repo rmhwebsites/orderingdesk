@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { EnvelopeSimpleIcon } from "@phosphor-icons/react/EnvelopeSimple";
 import { ShoppingBagIcon } from "@phosphor-icons/react/ShoppingBag";
 import { formatDate } from "@/lib/format";
@@ -9,7 +9,20 @@ import { useNow } from "@/lib/use-now";
 import type { RosterTags } from "@/db/schema";
 import type { MemberView, PendingInviteView } from "@/server/members";
 import { ui } from "@/components/ui";
-import { ConfirmStep, describedBy, Field, InlineMessage, Panel, requestJson, SaveStatus, Select, SettingsSection, ToneChip } from "./kit";
+import {
+  ConfirmStep,
+  describedBy,
+  Field,
+  focusSoon,
+  InlineMessage,
+  Panel,
+  requestJson,
+  SaveStatus,
+  sectionHeading,
+  Select,
+  SettingsSection,
+  ToneChip,
+} from "./kit";
 
 type TeamData = { members: MemberView[]; invites: PendingInviteView[]; rosterTags: RosterTags };
 
@@ -38,11 +51,12 @@ function MemberRow({
   onRemove: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
+  const removeRef = useRef<HTMLButtonElement>(null);
   const fromShopify = member.source === "shopify";
   const who = member.email ?? member.userId;
   const selectId = `role-${member.userId}`;
   return (
-    <li className="flex flex-col gap-3 py-3.5 first:pt-0 last:pb-0">
+    <li data-member={member.userId} className="flex flex-col gap-3 py-3.5 first:pt-0 last:pb-0">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="min-w-0 flex-1">
           <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-ink">
@@ -83,6 +97,7 @@ function MemberRow({
           )}
           {fromShopify || isYou ? null : (
             <button
+              ref={removeRef}
               type="button"
               disabled={busy}
               onClick={() => setConfirming(true)}
@@ -103,8 +118,12 @@ function MemberRow({
           onConfirm={() => {
             onRemove();
             setConfirming(false);
+            // Stay on this row while the removal runs; the section moves
+            // focus on once the row is gone.
+            focusSoon(() => removeRef.current);
           }}
           onCancel={() => setConfirming(false)}
+          returnFocus={() => removeRef.current}
         />
       ) : null}
     </li>
@@ -221,22 +240,50 @@ export function TeamSection({
   const [inviteDone, setInviteDone] = useState<string | null>(null);
   const base = `/api/workspaces/${encodeURIComponent(workspaceId)}/members`;
 
-  async function reload() {
+  async function reload(): Promise<{ members: MemberView[]; invites: PendingInviteView[] } | null> {
     const result = await requestJson<{ members: MemberView[]; invites?: PendingInviteView[] }>(base, { method: "GET" });
-    if (result.ok) {
-      setTeam((current) => ({ ...current, members: result.data.members, invites: result.data.invites ?? [] }));
+    if (!result.ok) {
+      return null;
     }
+    const next = { members: result.data.members, invites: result.data.invites ?? [] };
+    setTeam((current) => ({ ...current, ...next }));
+    return next;
+  }
+
+  // The first control of the member or invite row now at index (or the
+  // last one), for focus after a row was removed.
+  function rowControl(kind: "member" | "invite", ids: string[], index: number): HTMLElement | null {
+    const id = ids[Math.min(index, ids.length - 1)];
+    if (id === undefined) {
+      return null;
+    }
+    const row = document.querySelector(`[data-${kind}="${CSS.escape(id)}"]`);
+    return row?.querySelector<HTMLElement>("select:not([disabled]), button:not([disabled])") ?? null;
   }
 
   async function mutate(id: string, method: "PATCH" | "DELETE", json: unknown) {
     setBusyId(id);
     setListError(null);
+    const memberIndex = team.members.findIndex((member) => member.userId === id);
+    const inviteIndex = team.invites.findIndex((pending) => pending.email === id);
     const result = await requestJson<{ ok: true }>(base, { method, json });
     if (!result.ok) {
       setListError(result.error);
     }
-    await reload();
+    const next = await reload();
     setBusyId(null);
+    if (method !== "DELETE" || !result.ok || !next) {
+      return;
+    }
+    // The removed row is gone: focus the row that took its place, else the
+    // list's heading (members) or the invite field (invites).
+    if (memberIndex !== -1) {
+      const ids = next.members.map((member) => member.userId);
+      focusSoon(() => rowControl("member", ids, memberIndex) ?? sectionHeading("team"));
+    } else if (inviteIndex !== -1) {
+      const ids = next.invites.map((pending) => pending.email);
+      focusSoon(() => rowControl("invite", ids, inviteIndex) ?? document.getElementById("invite-email"));
+    }
   }
 
   async function invite(event: React.FormEvent<HTMLFormElement>) {
@@ -322,7 +369,11 @@ export function TeamSection({
             <h4 className="text-sm font-semibold text-ink">Waiting to sign in</h4>
             <ul className="flex flex-col divide-y divide-line">
               {team.invites.map((pending) => (
-                <li key={pending.email} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5 first:pt-0 last:pb-0">
+                <li
+                  key={pending.email}
+                  data-invite={pending.email}
+                  className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5 first:pt-0 last:pb-0"
+                >
                   <span className="min-w-0 flex-1 break-all text-sm text-ink">{pending.email}</span>
                   <span className="text-sm text-ink-2">
                     {roleLabel(pending.role)}
