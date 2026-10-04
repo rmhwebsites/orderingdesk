@@ -86,6 +86,12 @@ function MemberRow({
               Role follows their Shopify customer tag. Change or remove the tag in Shopify.
             </p>
           ) : null}
+          {!fromShopify && member.tagRole ? (
+            <p className="mt-1 text-xs text-ink-2">
+              Also approved as {roleLabel(member.tagRole).toLowerCase()} through a Shopify tag. The role set here wins,
+              and removing them denies that request.
+            </p>
+          ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {fromShopify || isYou ? (
@@ -122,7 +128,11 @@ function MemberRow({
       </div>
       {confirming ? (
         <ConfirmStep
-          message={`Remove ${who} from this workspace? They lose access right away, including any open tabs.`}
+          message={
+            member.tagRole
+              ? `Remove ${who} from this workspace? They lose access right away, including any open tabs, and their approved Shopify tag request is denied.`
+              : `Remove ${who} from this workspace? They lose access right away, including any open tabs.`
+          }
           confirmLabel="Remove"
           busyLabel="Removing"
           busy={busy}

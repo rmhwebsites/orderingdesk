@@ -5,11 +5,11 @@
 
 import { and, asc, eq, lte, sql } from "drizzle-orm";
 import type { Db } from "@/db";
-import { rowsAffected } from "@/db/batch";
-import { inviteSends, pendingInvites, user, workspaceMembers, workspaces } from "@/db/schema";
+import { applyBatch, rowsAffected } from "@/db/batch";
+import { inviteSends, pendingInvites, shopifyRoster, user, workspaceMembers, workspaces } from "@/db/schema";
 import { isWorkspaceRole, type WorkspaceRole } from "@/lib/roles";
 import { isRecord } from "./desk/shapes";
-import { listRosterRequests, type RosterRequests } from "./roster";
+import { listRosterRequests, rosterGrants, type RosterRequests } from "./roster";
 import { normalizeEmail } from "./desk/validate";
 
 export type MemberView = {
@@ -18,13 +18,17 @@ export type MemberView = {
   source: "manual" | "shopify";
   email: string | null;
   name: string | null;
+  // Manager view, manual members only, and only when there is one: the role
+  // an approved Shopify tag request for their email grants here. Their
+  // manual role wins while they are a member; removing them denies it.
+  tagRole?: WorkspaceRole;
 };
 
 export type PendingInviteView = { email: string; role: WorkspaceRole; createdAt: number };
 
 // Members by email, plus, when asked (the route asks for managers and
-// platform admins only), this workspace's pending invites and the Shopify
-// tag requests waiting for approval or denied.
+// platform admins only), each manual member's approved tag request (tagRole),
+// this workspace's pending invites and the Shopify tag requests.
 export async function listMembers(
   db: Db,
   workspaceId: string,
@@ -51,7 +55,21 @@ export async function listMembers(
     .where(and(eq(pendingInvites.workspaceId, workspaceId), eq(pendingInvites.platformAdmin, false)))
     .orderBy(asc(pendingInvites.email));
   const invites = rows.flatMap((row) => (row.role ? [{ email: row.email, role: row.role, createdAt: row.createdAt }] : []));
-  return { members, invites, requests: await listRosterRequests(db, workspaceId) };
+  const tagRows = await db
+    .select({ userId: workspaceMembers.userId, role: shopifyRoster.approvedRole })
+    .from(workspaceMembers)
+    .innerJoin(user, eq(workspaceMembers.userId, user.id))
+    .innerJoin(shopifyRoster, and(eq(shopifyRoster.workspaceId, workspaceMembers.workspaceId), eq(shopifyRoster.email, user.email)))
+    .where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.source, "manual"), rosterGrants()));
+  const tagRoles = new Map(tagRows.flatMap((row) => (row.role ? [[row.userId, row.role] as const] : [])));
+  return {
+    members: members.map((member) => {
+      const tagRole = tagRoles.get(member.userId);
+      return tagRole ? { ...member, tagRole } : member;
+    }),
+    invites,
+    requests: await listRosterRequests(db, workspaceId),
+  };
 }
 
 export type InviteMemberResult =
@@ -151,10 +169,19 @@ const SHOPIFY_MEMBER =
 // Body {userId} removes a member; {email} withdraws a pending invite.
 // Refused: removing yourself, and removing a member whose access comes from
 // a Shopify tag (sign-in and the Shopify sync would only grant it again).
+//
+// Removing a manual member also denies an approved Shopify tag request for
+// their email in this workspace, in the same batch. A manual membership
+// hides such an approval (it always wins), and left in place the next "/"
+// load would bring the person back through the tag, possibly with a higher
+// role, as a Shopify member Remove refuses. The denied request is listed in
+// Settings > Team, where a manager can approve it again on purpose. A
+// request nobody approved grants nothing and is left as it is.
 export async function removeMember(
   db: Db,
   ctx: { workspaceId: string; actorUserId: string },
   body: unknown,
+  opts?: { now?: number },
 ): Promise<RemoveMemberResult> {
   const fields = isRecord(body) ? body : {};
   const targetUserId = typeof fields.userId === "string" ? fields.userId : "";
@@ -165,8 +192,9 @@ export async function removeMember(
       return { kind: "invalid", error: "You cannot remove yourself" };
     }
     const rows = await db
-      .select({ id: workspaceMembers.id, source: workspaceMembers.source })
+      .select({ id: workspaceMembers.id, source: workspaceMembers.source, email: user.email })
       .from(workspaceMembers)
+      .leftJoin(user, eq(workspaceMembers.userId, user.id))
       .where(and(eq(workspaceMembers.workspaceId, ctx.workspaceId), eq(workspaceMembers.userId, targetUserId)))
       .limit(1);
     const target = rows[0];
@@ -176,7 +204,22 @@ export async function removeMember(
     if (target.source === "shopify") {
       return { kind: "invalid", error: SHOPIFY_MEMBER };
     }
-    await db.delete(workspaceMembers).where(eq(workspaceMembers.id, target.id));
+    const statements: PromiseLike<unknown>[] = [db.delete(workspaceMembers).where(eq(workspaceMembers.id, target.id))];
+    if (target.email) {
+      statements.push(
+        db
+          .update(shopifyRoster)
+          .set({ approvedRole: null, approvedAt: null, approvedBy: null, deniedAt: opts?.now ?? Date.now() })
+          .where(
+            and(
+              eq(shopifyRoster.workspaceId, ctx.workspaceId),
+              eq(shopifyRoster.email, target.email.toLowerCase()),
+              rosterGrants(),
+            ),
+          ),
+      );
+    }
+    await applyBatch(db, statements);
     return { kind: "removed", userId: targetUserId };
   }
 

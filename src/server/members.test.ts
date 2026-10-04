@@ -11,6 +11,7 @@ import {
   removeMember,
 } from "./members";
 import { openTestDb, seedMember, seedRosterEntry, seedUser, seedWorkspace } from "./desk/test-helpers";
+import { claimAccessOnSignIn } from "./invites";
 
 const WS = "ws_impact";
 
@@ -38,6 +39,19 @@ function membersOf(db: Db, workspaceId = WS) {
     .from(schema.workspaceMembers)
     .where(eq(schema.workspaceMembers.workspaceId, workspaceId))
     .orderBy(asc(schema.workspaceMembers.userId));
+}
+
+async function rosterRow(db: Db, id: string) {
+  const rows = await db
+    .select({
+      approvedRole: schema.shopifyRoster.approvedRole,
+      approvedAt: schema.shopifyRoster.approvedAt,
+      approvedBy: schema.shopifyRoster.approvedBy,
+      deniedAt: schema.shopifyRoster.deniedAt,
+    })
+    .from(schema.shopifyRoster)
+    .where(eq(schema.shopifyRoster.id, id));
+  return rows[0];
 }
 
 function invitesOf(db: Db) {
@@ -117,6 +131,25 @@ describe("listMembers", () => {
       { id: "r_ghost", email: "ghost@example.com", role: "manager", currentRole: "manager", since: 2, deniedAt: null },
     ]);
     expect(JSON.stringify(view)).not.toContain("Free Person");
+  });
+
+  // A manual membership always wins over a tag, so an approved tag request
+  // for the same email changes nothing visible. Managers see it next to the
+  // member, since removing the member denies it (see removeMember).
+  it("shows managers the approved tag request a manual member also has, and staff nothing of it", async () => {
+    const db = await setup();
+    await seedRosterEntry(db, { id: "r_crew", workspaceId: WS, email: "crew@example.com", role: "manager", state: "approved" });
+    await seedRosterEntry(db, { id: "r_lead", workspaceId: WS, email: "lead@example.com", role: "staff" });
+    const view = await listMembers(db, WS, { includeInvites: true });
+    expect(view.members).toEqual([
+      { userId: "u_crew", role: "staff", source: "manual", email: "crew@example.com", name: "Crew Person", tagRole: "manager" },
+      { userId: "u_lead", role: "manager", source: "manual", email: "lead@example.com", name: "Lead Person" },
+      { userId: "u_tagged", role: "staff", source: "shopify", email: "tagged@example.com", name: "Tagged Person" },
+    ]);
+    // Theirs already, so not an approved request waiting for a sign-in.
+    expect(view.requests?.approved).toEqual([]);
+    const plain = await listMembers(db, WS, { includeInvites: false });
+    expect(plain.members.find((member) => member.userId === "u_crew")).not.toHaveProperty("tagRole");
   });
 });
 
@@ -236,6 +269,50 @@ describe("removeMember", () => {
     // The removed member's id, so the route can close their open sockets.
     expect(await removeMember(db, ctx, { userId: "u_crew" })).toEqual({ kind: "removed", userId: "u_crew" });
     expect((await membersOf(db)).map((m) => m.userId)).toEqual(["u_lead", "u_tagged"]);
+  });
+
+  // The probe: a manual staff member whose email also carries an approved
+  // manager tag. Removing them used to leave the approval in place, so the
+  // next "/" load brought them back through the tag, as a manager, and as a
+  // Shopify member that Remove refuses. Removal denies that request in the
+  // same step, a raise waiting for approval included.
+  it("denies the removed member's approved tag request here too, so they do not come back", async () => {
+    for (const state of ["approved", "raise"] as const) {
+      const db = await setup();
+      await seedRosterEntry(db, {
+        id: "r_crew",
+        workspaceId: WS,
+        email: "crew@example.com",
+        role: state === "raise" ? "staff" : "manager",
+        state: "approved",
+      });
+      if (state === "raise") {
+        await db.update(schema.shopifyRoster).set({ role: "manager" }).where(eq(schema.shopifyRoster.id, "r_crew"));
+      }
+      await seedRosterEntry(db, { id: "r_crew_other", workspaceId: "ws_other", email: "crew@example.com", role: "staff", state: "approved" });
+
+      expect(await removeMember(db, ctx, { userId: "u_crew" }, { now: 77 }), state).toEqual({ kind: "removed", userId: "u_crew" });
+      expect(await rosterRow(db, "r_crew"), state).toEqual({ approvedRole: null, approvedAt: null, approvedBy: null, deniedAt: 77 });
+      // Another workspace's approval is that workspace's business.
+      expect(await rosterRow(db, "r_crew_other"), state).toMatchObject({ approvedRole: "staff", deniedAt: null });
+
+      await claimAccessOnSignIn(db, "u_crew", "crew@example.com");
+      expect((await membersOf(db)).map((member) => member.userId), state).toEqual(["u_lead", "u_tagged"]);
+      expect(await membersOf(db, "ws_other"), state).toEqual([{ userId: "u_crew", role: "staff", source: "shopify" }]);
+      // Listed as denied, where a manager can approve it again on purpose.
+      expect((await listMembers(db, WS, { includeInvites: true })).requests?.denied.map((entry) => entry.id), state).toEqual([
+        "r_crew",
+      ]);
+    }
+  });
+
+  it("leaves a tag request nobody approved as it is when removing a member: it grants nothing", async () => {
+    const db = await setup();
+    await seedRosterEntry(db, { id: "r_crew", workspaceId: WS, email: "crew@example.com", role: "manager" });
+    expect(await removeMember(db, ctx, { userId: "u_crew" }, { now: 77 })).toEqual({ kind: "removed", userId: "u_crew" });
+    expect(await rosterRow(db, "r_crew")).toEqual({ approvedRole: null, approvedAt: null, approvedBy: null, deniedAt: null });
+    await claimAccessOnSignIn(db, "u_crew", "crew@example.com");
+    expect((await membersOf(db)).map((member) => member.userId)).toEqual(["u_lead", "u_tagged"]);
   });
 
   it("lets a manager remove another manager", async () => {

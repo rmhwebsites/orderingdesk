@@ -9,12 +9,13 @@ import { changeMemberRole, inviteMember, listMembers, removeMember } from "@/ser
 type RouteContext = { params: Promise<{ id: string }> };
 
 // Any member: {members: [{userId, role, source, email, name}]}. Managers and
-// platform admins also get {invites: [{email, role, createdAt}]} and the
-// Shopify tag requests {requests: {waiting, denied, approved}} (approved:
-// nobody with the email belongs here yet; they join at their next sign-in),
-// each entry {id, email, role (asked for by the tag), currentRole (granted
-// now, or null), since, deniedAt} (approve or deny them at
-// .../roster/<id>/approve|deny; denying an approved one revokes it).
+// platform admins also get tagRole on a manual member whose email has an
+// approved Shopify tag request here, {invites: [{email, role, createdAt}]}
+// and the Shopify tag requests {requests: {waiting, denied, approved}}
+// (approved: nobody with the email belongs here yet; they join at their
+// next sign-in), each entry {id, email, role (asked for by the tag),
+// currentRole (granted now, or null), since, deniedAt} (approve or deny
+// them at .../roster/<id>/approve|deny; denying an approved one revokes it).
 export async function GET(_request: Request, context: RouteContext) {
   try {
     const { id } = await context.params;
@@ -77,8 +78,10 @@ export async function PATCH(request: Request, context: RouteContext) {
 }
 
 // Managers and platform admins. Body {userId} removes a member (never
-// yourself, never a Shopify-tagged member) and closes their open sockets,
-// or {email} withdraws a pending invite. 200 {ok}; 400 {error}.
+// yourself, never a Shopify-tagged member), denies an approved Shopify tag
+// request for their email here so it cannot bring them back, and closes
+// their open sockets, or {email} withdraws a pending invite. 200 {ok}; 400
+// {error}.
 export async function DELETE(request: Request, context: RouteContext) {
   try {
     const { id } = await context.params;

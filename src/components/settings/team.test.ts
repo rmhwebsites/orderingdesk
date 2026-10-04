@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import type { MemberView } from "@/server/members";
 import type { RosterRequests, RosterRequestView } from "@/server/roster";
 import { TeamSection } from "./team";
 
@@ -16,14 +17,16 @@ const request = (overrides: Partial<RosterRequestView>): RosterRequestView => ({
   ...overrides,
 });
 
-function render(requests: RosterRequests) {
+const LEAD: MemberView = { userId: "u_lead", role: "manager", source: "manual", email: "lead@example.com", name: null };
+
+function render(requests: RosterRequests, members: MemberView[] = [LEAD]) {
   return renderToStaticMarkup(
     createElement(TeamSection, {
       workspaceId: "ws_impact",
       viewerUserId: "u_lead",
       canEditRosterTags: false,
       initial: {
-        members: [{ userId: "u_lead", role: "manager", source: "manual", email: "lead@example.com", name: null }],
+        members,
         invites: [],
         requests,
         rosterTags: { manager: "Ordering Desk Manager", staff: "Ordering Desk Staff" },
@@ -84,5 +87,21 @@ describe("TeamSection tag requests", () => {
     expect(html).toContain('aria-label="Revoke the approval for ok@example.com"');
     expect(html).not.toContain('aria-label="Approve ok@example.com as staff"');
     expect(html).not.toContain('aria-label="Deny ok@example.com"');
+  });
+});
+
+describe("TeamSection members", () => {
+  // A manual role always wins over a tag, so an approved tag request for a
+  // manual member changes nothing visible; removing the member denies it.
+  it("shows a manual member's approved tag request next to them", () => {
+    const html = render({ waiting: [], denied: [], approved: [] }, [
+      LEAD,
+      { userId: "u_crew", role: "staff", source: "manual", email: "crew@example.com", name: null, tagRole: "manager" },
+      { userId: "u_plain", role: "staff", source: "manual", email: "plain@example.com", name: null },
+    ]);
+    expect(html).toContain("Also approved as manager through a Shopify tag");
+    expect(html).toContain("removing them denies that request");
+    expect(html.match(/Also approved as/g)).toHaveLength(1);
+    expect(html).toContain('aria-label="Remove crew@example.com"');
   });
 });
