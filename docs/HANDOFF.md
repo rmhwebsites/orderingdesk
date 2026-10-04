@@ -501,7 +501,9 @@ Once connected:
   to REQUEST that role in the workspace, then approve the request once in
   the workspace's Settings, Team, "Waiting for approval" (any manager of
   the workspace or a platform admin can). Until it is approved the tag
-  gives nothing: no sign-in email, no account, no access. The approval
+  gives nothing: no sign-in email, no account, no access. Once approved,
+  the person joins at their next sign-in (until then the request is listed
+  as "Approved, waiting to sign in", with Revoke). The approval
   step exists because a tag proves nothing: anyone can create a customer
   with tags from the storefront itself (the newsletter form sends
   contact[tags]), so without it a stranger could tag their own email
@@ -513,7 +515,9 @@ Once connected:
     added again. Denied requests are listed (collapsed) with Approve.
   - Removing the tag, deleting the customer or changing its email removes
     the access; tagging again later is a new request to approve.
-  People invited by hand inside Ordering Desk are never affected by tags.
+  People invited by hand inside Ordering Desk keep the role set by hand,
+  whatever their tag says. Removing one also denies an approved tag
+  request for them in that workspace, so the tag does not bring them back.
   Disconnecting the store removes every tag-based access in the workspace,
   approvals included; after it is connected again the tagged people show
   up as new requests at the first roster sync.
@@ -914,3 +918,45 @@ an address on a domain you have onboarded.
   - New accounts show their email's local part as their name (Team and
     admin lists show it above the email). Existing accounts keep theirs,
     and nobody can change a name now (/update-user is off).
+
+## STATE UPDATE, 2026-10-04 tag approval repairs (supersedes above)
+
+- Branch build/m1-core, on top of 2ae38a8: 1d2b3c0 (an approved tag
+  request adds nobody until the person signs in), fc3d9e4 (removing a
+  member denies their approved tag request), plus this docs commit. Not
+  pushed, not deployed. No new migration: 0006 is still the newest, and
+  the deploy order above stands (`npm run db:migrate:remote` applies 0004,
+  0005 and 0006, then deploy).
+- Approving works like an invite (security finding: approving inserted a
+  membership at once for an email that had an account, so Settings > Team
+  showed that person and their name right away, while an email with no
+  account just left the list; a manager can tag any email in their own
+  store).
+  - approveRosterEntry and the roster sync's grant never add a membership.
+    They only bring an EXISTING shopify membership in line with the row
+    (alignMembershipWithRoster in src/server/roster.ts: a lowered tag
+    lowers it, an approved raise takes it up). materializeRoster, run by
+    claimAccessOnSignIn at every sign-in and "/" load, is the only place a
+    roster row becomes a membership.
+  - listRosterRequests answers {waiting, denied, approved}; approved =
+    approved for the role the tag asks for and nobody with the email is a
+    member of the workspace yet, the same whether or not an account exists.
+    Settings > Team shows them as "Approved, waiting to sign in" with
+    Revoke (the deny route, behind ConfirmStep).
+  - Nothing is emailed on approval (nothing was before either): the
+    person signs in on the client host or the hub to join.
+- Removing a manual member (removeMember, src/server/members.ts) denies a
+  granting roster row (approved, or a raise waiting with an earlier
+  approval) for their email in that workspace, in the same batch. Before,
+  the approval stayed hidden behind the manual membership and the next "/"
+  load re-granted it as a shopify membership, possibly as manager, which
+  Remove refuses. A request nobody approved is left as it is. The manager
+  view of GET .../members carries tagRole on such a manual member, shown in
+  Settings > Team next to them and in the Remove confirmation.
+- Known limits:
+  - A member whose access comes from an approved tag still cannot be
+    removed in Ordering Desk (Remove refuses, the Team list says to change
+    the tag in Shopify); the deny route would do it, but the UI offers
+    Deny on waiting requests and Revoke on unclaimed approvals only.
+  - An approved person who is already signed in joins when they next open
+    "/" or sign in, not on other pages.

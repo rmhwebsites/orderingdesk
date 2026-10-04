@@ -52,8 +52,16 @@ wherever they conflict. Original: `2026-10-01-order-desk-design.md`.
      - A request that is waiting, or was denied, grants nothing: no sign-in
        email (the usual "check your email" answer), no account, no
        membership.
-     - Approval is per (workspace, email, role). Approving grants the role
-       at once to an existing user (a new email at first sign-in). A tag
+     - Approval is per (workspace, email, role). Approving works like an
+       invite (revised Oct 4, security review): it adds nobody, and the
+       person claims the role at their next sign-in or when they open "/",
+       whether or not they already have an account. Until then Settings >
+       Team lists the request as "Approved, waiting to sign in" (with
+       Revoke), the same either way, so approving never shows a manager
+       which emails have an account or adds someone who did nothing (a
+       manager can put any email on a customer in their own store). Only
+       someone already a Shopify-tag member of the workspace sees an
+       approval at once (an approved raise takes their role up). A tag
        change that raises access (staff to manager) needs a new approval,
        and the membership stays at the approved role until then; a change
        that lowers it applies at once.
@@ -69,7 +77,12 @@ wherever they conflict. Original: `2026-10-01-order-desk-design.md`.
        store; after a reconnect the tags come back as new requests.
      - Memberships record their source (`manual` or `shopify`); Shopify
        sync only ever adds or removes `shopify`-sourced memberships, never
-       manual ones. Tag names are per-workspace settings with those
+       manual ones (it never adds one for an approval either: only the
+       person's own sign-in does). A manual membership wins over a tag
+       while it exists; removing a manual member also denies an approved
+       tag request for their email in that workspace, so the tag cannot
+       bring them back (Settings > Team shows such an approval next to the
+       manual member). Tag names are per-workspace settings with those
        defaults.
 - An email with no route to an account gets the same "check your email"
   response as everyone else (no account enumeration), and no email is sent.
