@@ -460,8 +460,8 @@ Supersedes the 798 point figure and the old line item limit above.
   materializes the Shopify roster (src/server/invites.ts, roster.ts).
 - Local dev: sign-up is closed locally too. Put your address in
   PLATFORM_ADMIN_EMAILS in .dev.vars (see .dev.vars.example).
-- Settings links stay hidden behind SETTINGS_PAGE_AVAILABLE
-  (src/lib/features.ts) until the settings stage builds the page.
+- (Superseded by the settings stage below: the Settings links are back
+  and src/lib/features.ts is gone.)
 
 ## Connecting a Shopify store
 
@@ -486,9 +486,9 @@ ticket.
    Client secret.
 5. In Ordering Desk, open the workspace's Settings, Store connection, and
    enter the store's .myshopify.com address, the Client ID and the Client
-   secret. (Until the settings screen ships, the same three fields go to
-   PUT /api/workspaces/<workspace id>/connection as JSON from a signed-in
-   platform admin session.) Ordering Desk checks them with Shopify right
+   secret (the same three fields also go to PUT /api/workspaces/<workspace
+   id>/connection as JSON from a signed-in platform admin session). Ordering
+   Desk checks them with Shopify right
    away: if a permission is missing it says which one, and nothing is
    saved. When they are accepted it also switches on live updates
    (webhooks); if Shopify refuses those, the store still connects and syncs
@@ -594,9 +594,10 @@ B. The client's domain is somewhere else: Cloudflare for SaaS on the
       domain> to customers.orderingdesk.com, plus the validation TXT record
       Cloudflare shows. Wait until the hostname shows Active.
 
-Then in Ordering Desk (platform admins only), save and check the host. Until
-the settings screen ships, from a signed-in orderingdesk.com tab (browser
-console; the workspace id comes from GET /api/workspaces):
+Then in Ordering Desk (platform admins only), open the workspace's Settings,
+Custom domain: save the host and press Check. The same from a signed-in
+orderingdesk.com tab (browser console; the workspace id comes from GET
+/api/workspaces):
 
     await fetch("/api/workspaces/<workspace id>/domain", { method: "PUT",
       headers: { "content-type": "application/json" },
@@ -625,8 +626,8 @@ sender name and their reply-to address.
    is untouched; IMPACT's mail stays on Namecheap Private Email). This is
    possible only when the client's zone is in your Cloudflare account,
    because Cloudflare adds the sending records there.
-3. Press Verify in the workspace's Settings (until the settings screen
-   ships: POST /api/workspaces/<workspace id>/sender/verify from a signed-in
+3. Press Verify in the workspace's Settings, Notifications and email (or
+   POST /api/workspaces/<workspace id>/sender/verify from a signed-in
    orderingdesk.com tab). A test email arrives at your address from
    accounts@orders.<client domain>; from then on the client's email comes
    from it. If Verify answers "Onboard <domain> under Compute > Email
@@ -707,3 +708,58 @@ an address on a domain you have onboarded.
   - The hub still sends a single-workspace client to /w/<slug> on
     orderingdesk.com, not to their client host.
   - Shopify webhooks stay on APP_URL (the hub).
+
+## STATE UPDATE, 2026-10-04 platform phase settings stage (supersedes above)
+
+- Branch build/m1-core: 7c23afb (branding uploads, theme rules, public
+  brand files), then the theme refactor, the settings services, realtime
+  hardening, the Settings page, the platform admin screen and a fix, plus
+  this docs commit. Not pushed, not deployed. No new migration: 0004 is
+  still the one to apply remotely first (`npm run db:migrate:remote`).
+- Theme (src/lib/brand-theme.ts, src/components/shell/brand-scope.tsx,
+  globals.css): every workspace screen, the client host sign-in page and
+  the Settings preview render a brand scope whose inline variables carry
+  the primary color per theme, an optional palette (light from the
+  brand's ink and background, dark derived or overridden), the heading and
+  body fonts (font-display and font-sans read --font-heading and
+  --font-body; Sora and Red Hat Display by default) and the radius scale
+  (rounded-control and rounded-panel; no component hard-codes a pill or
+  panel radius any more). A chosen Google Font loads with one stylesheet
+  link for that workspace. The tab icon is the symbol (dark version by
+  prefers-color-scheme). The hub sets none of it.
+- Settings: /w/<slug>/settings on the hub, /settings on an active client
+  host (src/app/settings/page.tsx). src/lib/settings-access.ts decides the
+  sections per role and src/server/settings-page.ts reads only those.
+  Every section talks to the existing routes; new ones: PATCH
+  .../members (change a manual member's role), PUT .../roster-tags
+  (platform admins), and statuses now carry shopifyLink (at most one
+  status per Shopify state; an entry without it keeps its stored link).
+- Branding in Settings: SVG and WebP uploads get their PNG copy rendered
+  by the browser (src/components/settings/png-copy.ts) and posted to
+  .../png. Colors are checked live with the same checkBrandColors the
+  server runs; a failing palette cannot be saved and each issue offers
+  the nearest passing shade. Saving refreshes the page so the shell
+  picks up the theme at once.
+- /admin (hub, platform admins): workspaces, platform admins, users.
+- Realtime: live tickets carry a nonce; the room admits each nonce once
+  (stored until the ticket expires, an alarm forgets expired ones) and
+  tags sockets with the user id. Removing a member, revoking a Shopify
+  tag (webhook or cron roster sync) or revoking a platform admin sends a
+  kick; the room closes that user's sockets with code 4003 and the client
+  reloads instead of reconnecting. The room now uses Durable Object
+  storage (the class is already SQLite-backed, migration tag v1), so no
+  wrangler change was needed.
+- Known limits:
+  - The From name setting is stored and shown, but nothing uses it yet
+    (it is meant for purchase order email; other mail uses the workspace
+    name).
+  - The Store connection card shows granted scopes only for connections
+    saved since the scope check was added; older rows show none missing.
+  - On a client host, /w/<own slug>/settings may land on "/" (the slug
+    layout's redirect) rather than /settings. Links there use basePath,
+    so nothing in the app leads to it.
+  - `next dev` does not run custom-worker.ts, so live sockets, the nonce
+    and kicks are covered by tests only until a preview or production
+    deploy. The email preview iframe also shows no logo locally: its CSP
+    allows https images only and local dev serves http.
+
