@@ -77,6 +77,7 @@ function ColorField({
   label: string;
   help?: string;
   value: string;
+  // A #rrggbb shown while the field is empty (the derived color).
   placeholder?: string;
   invalid: boolean;
   onChange: (value: string) => void;
@@ -89,7 +90,7 @@ function ColorField({
         <input
           type="color"
           aria-label={`${label} color picker`}
-          value={valid ? value.toLowerCase() : (placeholder ?? "#000000")}
+          value={valid ? value.toLowerCase() : /^#[0-9a-fA-F]{6}$/.test(placeholder ?? "") ? placeholder!.toLowerCase() : "#000000"}
           onChange={(event) => onChange(event.target.value)}
           className="h-10 w-12 shrink-0 cursor-pointer rounded-control border border-line-strong bg-surface p-1"
         />
@@ -173,6 +174,9 @@ export function BrandingSection({
     (field) => (draft.darkColors[field] ?? "").length > 0 && !/^#[0-9a-fA-F]{6}$/.test(draft.darkColors[field] ?? ""),
   );
   const issues: BrandColorIssue[] = colors ? checkBrandColors(colors, dark) : [];
+  // What dark mode works out on its own, shown in the empty override fields.
+  const derived = colors ? deriveDarkPalette(colors, null) : null;
+  const derivedDark = derived && colors ? { primary: colors.primary, ink: derived.ink, background: derived.bg } : null;
   const body = themeSaveBody(draft, saved);
   const colorsBlocked = !colors || darkInvalid.length > 0 || issues.length > 0;
   const blocked = body !== null && "colors" in body && colorsBlocked;
@@ -295,7 +299,9 @@ export function BrandingSection({
             ) : null}
             <details className="rounded-panel border border-line px-4 py-3" open={Object.keys(saved.darkColors).length > 0}>
               <summary className="cursor-pointer text-sm font-semibold text-ink">Dark mode overrides</summary>
-              <p className="mt-2 text-sm text-ink-2">Optional. Leave a field empty to keep the color worked out from light mode.</p>
+              <p className="mt-2 text-sm text-ink-2">
+                Optional. Leave a field empty to keep the color worked out from light mode (shown in the empty field).
+              </p>
               <div className="mt-3 grid gap-4 sm:grid-cols-3">
                 {(["primary", "ink", "background"] as const).map((field) => (
                   <ColorField
@@ -303,7 +309,7 @@ export function BrandingSection({
                     id={`brand-dark-${field}`}
                     label={`Dark ${FIELD_LABEL[field].toLowerCase()}`}
                     value={draft.darkColors[field] ?? ""}
-                    placeholder="Worked out"
+                    placeholder={derivedDark?.[field]}
                     invalid={darkInvalid.includes(field)}
                     onChange={(value) => setDarkColor(field, value)}
                   />
