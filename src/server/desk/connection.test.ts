@@ -601,6 +601,9 @@ describe("deleteConnection", () => {
       role: "staff" as const,
       shopifyCustomerId: id,
       updatedAt: 1,
+      approvedRole: "staff" as const,
+      approvedAt: 2,
+      approvedBy: "u_manager",
     });
     await db.insert(schema.shopifyRoster).values([
       rosterRow("r1", WS, "tagged@example.com"),
@@ -608,6 +611,7 @@ describe("deleteConnection", () => {
       rosterRow("r3", OTHER, "elsewhere@example.com"),
     ]);
 
+    expect(await canCreateAccount(db, {}, "newhire@example.com")).toBe(true);
     expect(await deleteConnection(db, WS)).toEqual({ revokedUserIds: ["u_tagged"] });
     const members = await db
       .select({ userId: schema.workspaceMembers.userId, workspaceId: schema.workspaceMembers.workspaceId })
@@ -618,7 +622,8 @@ describe("deleteConnection", () => {
     ]);
     const rosterLeft = await db.select({ email: schema.shopifyRoster.email }).from(schema.shopifyRoster);
     expect(rosterLeft).toEqual([{ email: "elsewhere@example.com" }]);
-    // A roster email of this workspace can no longer create an account.
+    // An approved roster email of this workspace can no longer create an
+    // account (a reconnect brings the tags back as new requests).
     expect(await canCreateAccount(db, {}, "newhire@example.com")).toBe(false);
   });
 

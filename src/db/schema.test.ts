@@ -140,6 +140,17 @@ describe("schema migrations", () => {
     expect(() => insert.run("r2", "ws1", "d@example.com", "manager", "c2", 2)).toThrow(/UNIQUE/);
   });
 
+  // A storefront form can tag a customer, so a tag only asks for access: a
+  // new roster row is unapproved until a manager approves it (migration 0006).
+  it("creates roster entries unapproved and not denied", () => {
+    db.prepare(
+      "INSERT INTO shopify_roster (id, workspace_id, email, role, shopify_customer_id, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+    ).run("r_new", "ws1", "e@example.com", "manager", "c9", 1);
+    expect(
+      db.prepare("SELECT approved_role, approved_at, approved_by, denied_at FROM shopify_roster WHERE id = ?").get("r_new"),
+    ).toEqual({ approved_role: null, approved_at: null, approved_by: null, denied_at: null });
+  });
+
   it("keeps custom domains unique and allows any number of workspaces without one", () => {
     const insert = db.prepare(
       "INSERT INTO workspaces (id, name, slug, created_by, created_at, custom_domain) VALUES (?, ?, ?, ?, ?, ?)",

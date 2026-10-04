@@ -2,14 +2,18 @@ import { describe, it, expect } from "vitest";
 import { and, eq } from "drizzle-orm";
 import type { Db } from "@/db";
 import * as schema from "@/db/schema";
+import { canCreateAccount } from "@/server/access";
 import { encryptSecret } from "@/server/crypto";
 import { claimAccessOnSignIn } from "@/server/invites";
-import { openTestDb, seedMember, seedUser, seedWorkspace } from "@/server/desk/test-helpers";
+import { approveRosterEntry, denyRosterEntry, listRosterRequests } from "@/server/roster";
+import { openTestDb, seedMember, seedRosterEntry, seedUser, seedWorkspace } from "@/server/desk/test-helpers";
 import { deleteConnection } from "@/server/desk/connection";
 import { applyRosterCustomer, rosterRoleFor, syncRoster } from "./roster-sync";
 
 // Tagged Shopify customers as workspace members (platform amendment
-// section 2). Stubbed fetch only.
+// section 2). A tag only asks for access: any storefront visitor can create
+// a customer with tags (the newsletter form's contact[tags]), so a manager
+// approves each (workspace, email, role) once. Stubbed fetch only.
 
 const WS = "ws_impact";
 const OTHER = "ws_other";
@@ -51,6 +55,31 @@ async function membership(db: Db, userId: string, workspaceId = WS) {
 
 const customer = (customerId: string, email: string | null, tags: string[]) => ({ customerId, email, tags });
 
+async function rosterIdOf(db: Db, email: string, workspaceId = WS) {
+  const rows = await db
+    .select({ id: schema.shopifyRoster.id })
+    .from(schema.shopifyRoster)
+    .where(and(eq(schema.shopifyRoster.workspaceId, workspaceId), eq(schema.shopifyRoster.email, email)));
+  if (!rows[0]) {
+    throw new Error(`no roster entry for ${email}`);
+  }
+  return rows[0].id;
+}
+
+// What a manager's Approve and Deny do (src/server/roster.ts).
+async function approve(db: Db, email: string, workspaceId = WS) {
+  const rosterId = await rosterIdOf(db, email, workspaceId);
+  return approveRosterEntry(db, { workspaceId, rosterId, approverId: "u_manager" }, {}, { now: NOW });
+}
+
+async function deny(db: Db, email: string, workspaceId = WS) {
+  return denyRosterEntry(db, { workspaceId, rosterId: await rosterIdOf(db, email, workspaceId) }, { now: NOW });
+}
+
+async function waitingEmails(db: Db, workspaceId = WS) {
+  return (await listRosterRequests(db, workspaceId)).waiting.map((entry) => [entry.email, entry.role, entry.currentRole]);
+}
+
 describe("rosterRoleFor", () => {
   it("reads the role from the workspace's tags, manager winning", () => {
     expect(rosterRoleFor(["vip", "Ordering Desk Staff"], DEFAULT_TAGS)).toBe("staff");
@@ -65,70 +94,169 @@ describe("rosterRoleFor", () => {
 });
 
 describe("applyRosterCustomer", () => {
-  it("adds a tagged customer to the roster and gives an existing user the membership at once", async () => {
+  it("puts a tagged customer on the roster as waiting, granting nothing until a manager approves", async () => {
     const db = await setup();
     await seedUser(db, "u_jo", "jo@impact.example");
     await applyRosterCustomer(db, WS, "501", customer("501", "jo@impact.example", ["Ordering Desk Staff"]), NOW);
     expect(await roster(db)).toEqual([{ email: "jo@impact.example", role: "staff", customerId: "501" }]);
+    expect(await membership(db, "u_jo")).toBeUndefined();
+    expect(await waitingEmails(db)).toEqual([["jo@impact.example", "staff", null]]);
+
+    // Approving gives an existing user the membership at once.
+    expect(await approve(db, "jo@impact.example")).toEqual({ kind: "approved", email: "jo@impact.example", role: "staff" });
     expect(await membership(db, "u_jo")).toEqual({ role: "staff", source: "shopify" });
     expect(await membership(db, "u_jo", OTHER)).toBeUndefined();
+    expect(await waitingEmails(db)).toEqual([]);
   });
 
-  it("leaves a new email on the roster until its first sign-in grants the membership", async () => {
+  // The storefront attack: a stranger tags their own new customer with the
+  // manager tag. Nothing follows from it until a manager approves.
+  it("gives a storefront-tagged stranger no account route and no membership until approved", async () => {
     const db = await setup();
     await applyRosterCustomer(db, WS, "502", customer("502", "new.person@impact.example", ["Ordering Desk Manager"]), NOW);
     expect(await roster(db)).toEqual([{ email: "new.person@impact.example", role: "manager", customerId: "502" }]);
+    expect(await canCreateAccount(db, {}, "new.person@impact.example")).toBe(false);
+    // Even with an account from somewhere else, sign-in grants nothing here.
     await seedUser(db, "u_new", "new.person@impact.example");
     await claimAccessOnSignIn(db, "u_new", "new.person@impact.example");
+    expect(await membership(db, "u_new")).toBeUndefined();
+
+    await approve(db, "new.person@impact.example");
+    expect(await canCreateAccount(db, {}, "new.person@impact.example")).toBe(true);
     expect(await membership(db, "u_new")).toEqual({ role: "manager", source: "shopify" });
   });
 
-  it("upgrades and downgrades with the tag", async () => {
+  it("needs a new approval to raise a role, keeping the old role meanwhile, and lowers at once", async () => {
     const db = await setup();
     await seedUser(db, "u_jo", "jo@impact.example");
     await applyRosterCustomer(db, WS, "501", customer("501", "jo@impact.example", ["Ordering Desk Staff"]), NOW);
+    await approve(db, "jo@impact.example");
+
+    // Staff to manager: the membership stays staff and the raise waits.
     await applyRosterCustomer(db, WS, "501", customer("501", "jo@impact.example", ["Ordering Desk Staff", "Ordering Desk Manager"]), NOW + 1);
     expect(await roster(db)).toEqual([{ email: "jo@impact.example", role: "manager", customerId: "501" }]);
+    expect(await membership(db, "u_jo")).toEqual({ role: "staff", source: "shopify" });
+    expect(await waitingEmails(db)).toEqual([["jo@impact.example", "manager", "staff"]]);
+    // A sign-in meanwhile grants the approved role only.
+    await claimAccessOnSignIn(db, "u_jo", "jo@impact.example");
+    expect(await membership(db, "u_jo")).toEqual({ role: "staff", source: "shopify" });
+
+    await approve(db, "jo@impact.example");
     expect(await membership(db, "u_jo")).toEqual({ role: "manager", source: "shopify" });
+
+    // Manager to staff applies at once, with no approval.
     await applyRosterCustomer(db, WS, "501", customer("501", "jo@impact.example", ["Ordering Desk Staff"]), NOW + 2);
     expect(await membership(db, "u_jo")).toEqual({ role: "staff", source: "shopify" });
+    expect(await waitingEmails(db)).toEqual([]);
+
+    // And raising again needs approving again.
+    await applyRosterCustomer(db, WS, "501", customer("501", "jo@impact.example", ["Ordering Desk Manager"]), NOW + 3);
+    expect(await membership(db, "u_jo")).toEqual({ role: "staff", source: "shopify" });
+    expect(await waitingEmails(db)).toEqual([["jo@impact.example", "manager", "staff"]]);
   });
 
-  it("removes the roster row and the shopify membership when the tag goes or the customer is deleted", async () => {
+  it("keeps an earlier staff approval when a raise that never got approved is taken back", async () => {
+    const db = await setup();
+    await applyRosterCustomer(db, WS, "501", customer("501", "jo@impact.example", ["Ordering Desk Staff"]), NOW);
+    await approve(db, "jo@impact.example");
+    await applyRosterCustomer(db, WS, "501", customer("501", "jo@impact.example", ["Ordering Desk Manager"]), NOW + 1);
+    // Not signed up yet: the staff approval still opens an account.
+    expect(await canCreateAccount(db, {}, "jo@impact.example")).toBe(true);
+    await applyRosterCustomer(db, WS, "501", customer("501", "jo@impact.example", ["Ordering Desk Staff"]), NOW + 2);
+    expect(await waitingEmails(db)).toEqual([]);
+    expect(await canCreateAccount(db, {}, "jo@impact.example")).toBe(true);
+  });
+
+  it("removes the roster row, its approval and the shopify membership when the tag goes or the customer is deleted", async () => {
     for (const next of [customer("501", "jo@impact.example", ["vip"]), null]) {
       const db = await setup();
       await seedUser(db, "u_jo", "jo@impact.example");
       expect(await applyRosterCustomer(db, WS, "501", customer("501", "jo@impact.example", ["Ordering Desk Staff"]), NOW)).toEqual([]);
+      await approve(db, "jo@impact.example");
       // The user whose access went, so their open sockets can be closed.
       expect(await applyRosterCustomer(db, WS, "501", next, NOW + 1)).toEqual(["u_jo"]);
       expect(await roster(db)).toEqual([]);
       expect(await membership(db, "u_jo")).toBeUndefined();
+
+      // Tagged again later: a fresh request, waiting for a fresh approval.
+      await applyRosterCustomer(db, WS, "501", customer("501", "jo@impact.example", ["Ordering Desk Staff"]), NOW + 2);
+      expect(await membership(db, "u_jo")).toBeUndefined();
+      expect(await waitingEmails(db)).toEqual([["jo@impact.example", "staff", null]]);
     }
   });
 
+  it("keeps a denied entry denied through tag changes, until the tag is removed and added again", async () => {
+    const db = await setup();
+    await seedUser(db, "u_jo", "jo@impact.example");
+    await applyRosterCustomer(db, WS, "501", customer("501", "jo@impact.example", ["Ordering Desk Staff"]), NOW);
+    expect(await deny(db, "jo@impact.example")).toEqual({ kind: "denied", revokedUserId: null });
+    await applyRosterCustomer(db, WS, "501", customer("501", "jo@impact.example", ["Ordering Desk Manager"]), NOW + 1);
+    await applyRosterCustomer(db, WS, "501", customer("501", "jo@impact.example", ["Ordering Desk Manager"]), NOW + 2);
+    const requests = await listRosterRequests(db, WS);
+    expect(requests.waiting).toEqual([]);
+    expect(requests.denied.map((entry) => [entry.email, entry.role])).toEqual([["jo@impact.example", "manager"]]);
+    expect(await membership(db, "u_jo")).toBeUndefined();
+
+    await applyRosterCustomer(db, WS, "501", customer("501", "jo@impact.example", ["vip"]), NOW + 3);
+    await applyRosterCustomer(db, WS, "501", customer("501", "jo@impact.example", ["Ordering Desk Staff"]), NOW + 4);
+    expect(await waitingEmails(db)).toEqual([["jo@impact.example", "staff", null]]);
+    expect((await listRosterRequests(db, WS)).denied).toEqual([]);
+  });
+
+  it("denying takes away every shopify membership for the email here, a pending raise included", async () => {
+    const db = await setup();
+    await seedUser(db, "u_jo", "jo@impact.example");
+    await applyRosterCustomer(db, WS, "501", customer("501", "jo@impact.example", ["Ordering Desk Staff"]), NOW);
+    await approve(db, "jo@impact.example");
+    await applyRosterCustomer(db, WS, "501", customer("501", "jo@impact.example", ["Ordering Desk Manager"]), NOW + 1);
+    expect(await deny(db, "jo@impact.example")).toEqual({ kind: "denied", revokedUserId: "u_jo" });
+    expect(await membership(db, "u_jo")).toBeUndefined();
+    expect(await canCreateAccount(db, {}, "jo@impact.example")).toBe(false);
+  });
+
   // A manager's invite outranks a tag: the roster never touches it.
-  it("never touches a manual membership, granting or removing", async () => {
+  it("never touches a manual membership, granting, approving, denying or removing", async () => {
     const db = await setup();
     await seedUser(db, "u_jo", "jo@impact.example");
     await seedMember(db, WS, "u_jo", "staff", "manual");
     await applyRosterCustomer(db, WS, "501", customer("501", "jo@impact.example", ["Ordering Desk Manager"]), NOW);
+    await approve(db, "jo@impact.example");
+    expect(await membership(db, "u_jo")).toEqual({ role: "staff", source: "manual" });
+    expect(await deny(db, "jo@impact.example")).toEqual({ kind: "denied", revokedUserId: null });
     expect(await membership(db, "u_jo")).toEqual({ role: "staff", source: "manual" });
     expect(await applyRosterCustomer(db, WS, "501", null, NOW + 1)).toEqual([]);
     expect(await roster(db)).toEqual([]);
     expect(await membership(db, "u_jo")).toEqual({ role: "staff", source: "manual" });
   });
 
-  it("moves the access to the new email when the customer's email changes", async () => {
+  it("moves the request to the new email when the customer's email changes, which needs approving again", async () => {
     const db = await setup();
     await seedUser(db, "u_old", "old@impact.example");
     await seedUser(db, "u_new", "new@impact.example");
     await applyRosterCustomer(db, WS, "501", customer("501", "old@impact.example", ["Ordering Desk Staff"]), NOW);
+    await approve(db, "old@impact.example");
     expect(await applyRosterCustomer(db, WS, "501", customer("501", "new@impact.example", ["Ordering Desk Staff"]), NOW + 1)).toEqual([
       "u_old",
     ]);
     expect(await roster(db)).toEqual([{ email: "new@impact.example", role: "staff", customerId: "501" }]);
     expect(await membership(db, "u_old")).toBeUndefined();
+    expect(await membership(db, "u_new")).toBeUndefined();
+    await approve(db, "new@impact.example");
     expect(await membership(db, "u_new")).toEqual({ role: "staff", source: "shopify" });
+  });
+
+  // A different customer with the email means the old one was deleted (a
+  // missed customers/delete): it starts over like any new request.
+  it("starts over when the same email comes back on another customer", async () => {
+    const db = await setup();
+    await seedUser(db, "u_jo", "jo@impact.example");
+    await applyRosterCustomer(db, WS, "501", customer("501", "jo@impact.example", ["Ordering Desk Staff"]), NOW);
+    await approve(db, "jo@impact.example");
+    expect(await applyRosterCustomer(db, WS, "777", customer("777", "jo@impact.example", ["Ordering Desk Staff"]), NOW + 1)).toEqual([
+      "u_jo",
+    ]);
+    expect(await membership(db, "u_jo")).toBeUndefined();
+    expect(await waitingEmails(db)).toEqual([["jo@impact.example", "staff", null]]);
   });
 
   it("only touches its own workspace, and skips a customer without an email", async () => {
@@ -143,7 +271,9 @@ describe("applyRosterCustomer", () => {
     });
     await seedUser(db, "u_jo", "jo@impact.example");
     await applyRosterCustomer(db, OTHER, "9", customer("9", "jo@impact.example", ["Ordering Desk Staff"]), NOW);
+    await approve(db, "jo@impact.example", OTHER);
     await applyRosterCustomer(db, WS, "501", customer("501", "jo@impact.example", ["Ordering Desk Staff"]), NOW);
+    await approve(db, "jo@impact.example");
     await applyRosterCustomer(db, WS, "501", null, NOW + 1);
     expect(await roster(db, OTHER)).toHaveLength(1);
     expect(await membership(db, "u_jo", OTHER)).toEqual({ role: "staff", source: "shopify" });
@@ -151,10 +281,12 @@ describe("applyRosterCustomer", () => {
     expect(await roster(db)).toEqual([]);
   });
 
-  it("takes back what it granted when the store is no longer connected", async () => {
+  it("takes back every tag-based access when the store is no longer connected", async () => {
     const db = await setup({ connection: "disabled" });
     await seedUser(db, "u_jo", "jo@impact.example");
-    const revoked = await applyRosterCustomer(db, WS, "501", customer("501", "jo@impact.example", ["Ordering Desk Staff"]), NOW);
+    await seedRosterEntry(db, { workspaceId: WS, email: "jo@impact.example", role: "staff", customerId: "501", state: "approved" });
+    await seedMember(db, WS, "u_jo", "staff", "shopify");
+    const revoked = await applyRosterCustomer(db, WS, "501", customer("501", "jo@impact.example", ["Ordering Desk Manager"]), NOW);
     expect(revoked).toEqual(["u_jo"]);
     expect(await roster(db)).toEqual([]);
     expect(await membership(db, "u_jo")).toBeUndefined();
@@ -209,6 +341,7 @@ describe("syncRoster", () => {
     await seedUser(db, "u_gone", "gone@impact.example");
     await seedUser(db, "u_jo", "jo@impact.example");
     await applyRosterCustomer(db, WS, "400", customer("400", "gone@impact.example", ["Ordering Desk Staff"]), NOW - 1);
+    await approve(db, "gone@impact.example");
     const shop = customerPages([
       [node(501, "Jo@Impact.example", ["Ordering Desk Staff"]), node(502, "lee@impact.example", ["Ordering Desk Manager"])],
       [node(503, "sam@impact.example", ["Ordering Desk Staff", "Ordering Desk Manager"]), node(504, null, ["Ordering Desk Staff"])],
@@ -225,8 +358,34 @@ describe("syncRoster", () => {
       { email: "lee@impact.example", role: "manager", customerId: "502" },
       { email: "sam@impact.example", role: "manager", customerId: "503" },
     ]);
-    expect(await membership(db, "u_jo")).toEqual({ role: "staff", source: "shopify" });
+    // New entries wait for a manager; the removed one lost its membership.
+    expect(await membership(db, "u_jo")).toBeUndefined();
+    expect((await waitingEmails(db)).map(([email]) => email)).toEqual([
+      "jo@impact.example",
+      "lee@impact.example",
+      "sam@impact.example",
+    ]);
     expect(await membership(db, "u_gone")).toBeUndefined();
+  });
+
+  it("keeps approvals across runs, lowers a role at once and holds a raise for approval", async () => {
+    const db = await setup();
+    await seedUser(db, "u_jo", "jo@impact.example");
+    await seedUser(db, "u_lee", "lee@impact.example");
+    const run = (pages: Parameters<typeof customerPages>[0]) =>
+      syncRoster(db, env, WS, { fetchImpl: customerPages(pages).impl, now: () => NOW });
+    await run([[node(501, "jo@impact.example", ["Ordering Desk Staff"]), node(502, "lee@impact.example", ["Ordering Desk Manager"])]]);
+    await approve(db, "jo@impact.example");
+    await approve(db, "lee@impact.example");
+    await run([[node(501, "jo@impact.example", ["Ordering Desk Staff"]), node(502, "lee@impact.example", ["Ordering Desk Manager"])]]);
+    expect(await membership(db, "u_jo")).toEqual({ role: "staff", source: "shopify" });
+    expect(await membership(db, "u_lee")).toEqual({ role: "manager", source: "shopify" });
+    expect(await waitingEmails(db)).toEqual([]);
+
+    await run([[node(501, "jo@impact.example", ["Ordering Desk Manager"]), node(502, "lee@impact.example", ["Ordering Desk Staff"])]]);
+    expect(await membership(db, "u_jo")).toEqual({ role: "staff", source: "shopify" });
+    expect(await membership(db, "u_lee")).toEqual({ role: "staff", source: "shopify" });
+    expect(await waitingEmails(db)).toEqual([["jo@impact.example", "manager", "staff"]]);
   });
 
   it("only adds when it could not read every page", async () => {
@@ -273,9 +432,13 @@ describe("syncRoster", () => {
   it("takes back what it granted when the store was disconnected while it read Shopify", async () => {
     const db = await setup();
     await seedUser(db, "u_jo", "jo@impact.example");
-    const shop = customerPages([[node(501, "jo@impact.example", ["Ordering Desk Staff"])]]);
+    await seedRosterEntry(db, { workspaceId: WS, email: "jo@impact.example", role: "staff", customerId: "501", state: "approved" });
+    const shop = customerPages([[node(501, "jo@impact.example", ["Ordering Desk Manager"])]]);
     const racing = (async (input: RequestInfo | URL, init?: RequestInit) => {
       await deleteConnection(db, WS);
+      // Granted again behind the disconnect's back (an approval landing).
+      await seedRosterEntry(db, { workspaceId: WS, email: "jo@impact.example", role: "staff", customerId: "501", state: "approved" });
+      await seedMember(db, WS, "u_jo", "staff", "shopify");
       return shop.impl(input, init);
     }) as typeof fetch;
     const result = await syncRoster(db, env, WS, { fetchImpl: racing, now: () => NOW });

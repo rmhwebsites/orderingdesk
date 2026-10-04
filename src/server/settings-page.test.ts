@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { eq } from "drizzle-orm";
 import * as schema from "@/db/schema";
 import { loadSettingsPage } from "./settings-page";
-import { openTestDb, seedMember, seedUser, seedWorkspace } from "./desk/test-helpers";
+import { openTestDb, seedMember, seedRosterEntry, seedUser, seedWorkspace } from "./desk/test-helpers";
 
 const WS = "ws_impact";
 const env = { APP_URL: "https://orderingdesk.test", EMAIL_FROM: "Ordering Desk <orders@orderingdesk.test>" } as unknown as CloudflareEnv;
@@ -26,6 +26,7 @@ async function setup() {
     invitedBy: "u_lead",
     createdAt: 5,
   });
+  await seedRosterEntry(db, { id: "r_asks", workspaceId: WS, email: "asks@example.com", role: "manager" });
   await db.insert(schema.vendors).values({ id: "v1", workspaceId: WS, name: "Hard Hat Supply", email: "orders@hats.example" });
   await db.insert(schema.storeConnections).values({
     workspaceId: WS,
@@ -59,6 +60,10 @@ describe("loadSettingsPage", () => {
     expect(page.team?.members.map((member) => member.email)).toEqual(["crew@example.com", "lead@example.com"]);
     expect(page.team?.invites).toEqual([{ email: "soon@example.com", role: "staff", createdAt: 5 }]);
     expect(page.team?.rosterTags).toEqual({ manager: "Lead", staff: "Crew" });
+    expect(page.team?.requests).toEqual({
+      waiting: [{ id: "r_asks", email: "asks@example.com", role: "manager", currentRole: null, since: 1, deniedAt: null }],
+      denied: [],
+    });
     expect(page.statuses?.map((status) => status.key)).toEqual(["new", "processing", "approved", "shipped"]);
     expect(page.notifications).toEqual({ notificationEmails: [], poPrefix: "PO", replyTo: null, fromName: null });
     expect(page.sender).toBeNull();

@@ -43,6 +43,13 @@
       "when": 1791151327680,
       "tag": "0005_invite_sends",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1791155364361,
+      "tag": "0006_roster_approval",
+      "breakpoints": true
     }
   ]
 }

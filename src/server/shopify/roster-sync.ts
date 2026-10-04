@@ -1,16 +1,25 @@
 // The Shopify roster (platform amendment section 2): customers of the
 // workspace's store tagged with its manager or staff tag (defaults
 // "Ordering Desk Manager" and "Ordering Desk Staff", workspaces.roster_tags)
-// get that role in the workspace, manager winning when both are present.
-// Relative imports on purpose: the cron path bundles this into the custom
-// worker entrypoint.
+// REQUEST that role in the workspace, manager winning when both are
+// present, and a manager approves each request once (the rules are in
+// src/server/roster.ts: storefront forms can set customer tags, so a tag
+// alone grants nothing). Relative imports on purpose: the cron path bundles
+// this into the custom worker entrypoint.
 //
-// - Granting: the customer's email goes on shopify_roster with the role. A
-//   user who already has an account gets a source = shopify membership at
-//   once; a new email gets it at first sign-in (claimAccessOnSignIn).
+// - Requesting: the customer's email goes on shopify_roster with the role,
+//   unapproved. An approved row grants its approved role: a user who
+//   already has an account holds it as a source = shopify membership, a new
+//   email gets it at first sign-in (claimAccessOnSignIn). Each write here
+//   brings that membership in line with the row: a lowered tag lowers it at
+//   once, a raised tag leaves it until the raise is approved.
+// - The same email on another customer means the old customer was deleted
+//   (a missed customers/delete): the row starts over, unapproved, and the
+//   membership goes.
 // - Revoking (tag removed, customer deleted, or the email changed away):
-//   the roster row goes, and so does any source = shopify membership for
-//   that email in that workspace.
+//   the roster row goes, with its approval, and so does any source =
+//   shopify membership for that email in that workspace. Tagging again
+//   later is a fresh request.
 // - A source = manual membership is never touched either way (a manager's
 //   invite outranks a tag): granting leaves its role, revoking leaves it.
 //
@@ -19,17 +28,18 @@
 // whole roster (syncRoster) so missed webhooks heal. Emails are lowercased.
 //
 // - Disconnecting the store (deleteConnection) takes away every access a
-//   tag gave in the workspace (clearShopifyAccess): with the store
-//   disconnected nothing would ever revoke it again. Both writers check
-//   the connection again after writing and take back what they wrote when
-//   the store was disconnected meanwhile, so no tag-based access outlives
-//   a disconnect. A reconnect grants it again at the next roster sync.
+//   tag gave in the workspace (clearShopifyAccess), approvals included:
+//   with the store disconnected nothing would ever revoke it again. Both
+//   writers check the connection again after writing and take back what
+//   they wrote when the store was disconnected meanwhile, so no tag-based
+//   access outlives a disconnect. After a reconnect the tags come back at
+//   the next roster sync as new requests.
 
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "../../db";
 import { applyBatch, rowsAffected } from "../../db/batch";
 import { shopifyRoster, storeConnections, user, workspaceMembers, workspaces, type RosterTags } from "../../db/schema";
-import { resolveRosterTags } from "../roster";
+import { grantMembershipFromRoster, resolveRosterTags, revokeUngrantedMembership } from "../roster";
 import { failureText, fetchTaggedCustomers, type RosterCustomer } from "./admin";
 import { getAccessToken } from "./token";
 
@@ -69,9 +79,17 @@ async function userIdsByEmail(db: Db, emails: string[]): Promise<Map<string, str
   return found;
 }
 
-// The roster row for this email with this role and customer, and the
-// existing user's shopify membership (a manual one is left as it is). Both
-// upserts write nothing when nothing changed.
+// The roster row for this email with this role and customer, then the
+// existing user's shopify membership brought in line with what the row
+// grants (a manual one is left as it is). A new row waits for approval. On
+// an existing row:
+// - the same customer with another role: a lowered role lowers the
+//   approved role (manager approval covers staff); a raised one keeps it,
+//   so the raise waits for its own approval. A denied row stays denied.
+// - another customer with the email: the old customer is gone, so the row
+//   starts over (no approval, no denial).
+// Nothing is written when nothing changed. True when the user's membership
+// went (their open sockets are then closed by the caller).
 async function grant(
   db: Db,
   workspaceId: string,
@@ -80,30 +98,34 @@ async function grant(
   customerId: string,
   now: number,
   userId: string | undefined,
-): Promise<void> {
+): Promise<boolean> {
+  const sameCustomer = sql`${shopifyRoster.shopifyCustomerId} = ${customerId}`;
   const statements: PromiseLike<unknown>[] = [
     db
       .insert(shopifyRoster)
       .values({ id: crypto.randomUUID(), workspaceId, email, role, shopifyCustomerId: customerId, updatedAt: now })
       .onConflictDoUpdate({
         target: [shopifyRoster.workspaceId, shopifyRoster.email],
-        set: { role, shopifyCustomerId: customerId, updatedAt: now },
+        set: {
+          role,
+          shopifyCustomerId: customerId,
+          updatedAt: now,
+          approvedRole: sql`case when not (${sameCustomer}) then null when ${role} = 'staff' and ${shopifyRoster.approvedRole} is not null then 'staff' else ${shopifyRoster.approvedRole} end`,
+          approvedAt: sql`case when ${sameCustomer} then ${shopifyRoster.approvedAt} end`,
+          approvedBy: sql`case when ${sameCustomer} then ${shopifyRoster.approvedBy} end`,
+          deniedAt: sql`case when ${sameCustomer} then ${shopifyRoster.deniedAt} end`,
+        },
         setWhere: sql`${shopifyRoster.role} <> ${role} or ${shopifyRoster.shopifyCustomerId} <> ${customerId}`,
       }),
   ];
   if (userId) {
     statements.push(
-      db
-        .insert(workspaceMembers)
-        .values({ id: crypto.randomUUID(), workspaceId, userId, role, source: "shopify" })
-        .onConflictDoUpdate({
-          target: [workspaceMembers.workspaceId, workspaceMembers.userId],
-          set: { role },
-          setWhere: sql`${workspaceMembers.source} = 'shopify' and ${workspaceMembers.role} <> ${role}`,
-        }),
+      grantMembershipFromRoster(db, workspaceId, email, userId),
+      revokeUngrantedMembership(db, workspaceId, email, userId),
     );
   }
-  await applyBatch(db, statements);
+  const results = await applyBatch(db, statements);
+  return userId !== undefined && rowsAffected(results[2], "roster") > 0;
 }
 
 // Removes the roster row for this email and the shopify membership of the
@@ -192,8 +214,8 @@ export async function applyRosterCustomer(
       revoked.push(userId!);
     }
   }
-  if (email && role) {
-    await grant(db, workspaceId, email, role, customerId, now, users.get(email));
+  if (email && role && (await grant(db, workspaceId, email, role, customerId, now, users.get(email)))) {
+    revoked.push(users.get(email)!);
   }
   return afterRosterWrite(db, workspaceId, revoked);
 }
@@ -206,9 +228,9 @@ export type RosterSyncResult =
 
 // Reconciles the workspace's roster with every tagged customer in Shopify
 // (both tags in one search, paginated; see fetchTaggedCustomers for the
-// query cost). Everyone found is granted. Rows for emails no longer found
-// are revoked only when every page was read: a partial read may simply not
-// have reached them. Works for both connection modes (legacy stores have no
+// query cost). Everyone found is recorded as a request (see grant). Rows
+// for emails no longer found are revoked only when every page was read: a
+// partial read may simply not have reached them. Works for both connection modes (legacy stores have no
 // webhooks, so this is how their roster moves).
 export async function syncRoster(
   db: Db,
@@ -256,10 +278,12 @@ export async function syncRoster(
     .where(eq(shopifyRoster.workspaceId, workspaceId));
   const stale = fetched.complete ? existing.map((row) => row.email).filter((email) => !desired.has(email)) : [];
   const users = await userIdsByEmail(db, [...desired.keys(), ...stale]);
-  for (const [email, entry] of desired) {
-    await grant(db, workspaceId, email, entry.role, entry.customerId, now, users.get(email));
-  }
   const revoked: string[] = [];
+  for (const [email, entry] of desired) {
+    if (await grant(db, workspaceId, email, entry.role, entry.customerId, now, users.get(email))) {
+      revoked.push(users.get(email)!);
+    }
+  }
   for (const email of stale) {
     const userId = users.get(email);
     if (await revoke(db, workspaceId, email, userId)) {

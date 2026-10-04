@@ -30,9 +30,28 @@ function invites(db: Db) {
   return db.select().from(schema.pendingInvites).orderBy(asc(schema.pendingInvites.id));
 }
 
-async function roster(db: Db, rows: Array<{ workspaceId: string; email: string; role: "manager" | "staff" }>) {
+// Roster rows a manager approved (the only kind that grants anything);
+// approvedRole defaults to the row's role.
+async function roster(
+  db: Db,
+  rows: Array<{
+    workspaceId: string;
+    email: string;
+    role: "manager" | "staff";
+    approvedRole?: "manager" | "staff" | null;
+    deniedAt?: number | null;
+  }>,
+) {
   await db.insert(schema.shopifyRoster).values(
-    rows.map((row, i) => ({ id: `r${i}`, shopifyCustomerId: `c${i}`, updatedAt: 1, ...row })),
+    rows.map((row, i) => ({
+      id: `r${i}`,
+      shopifyCustomerId: `c${i}`,
+      updatedAt: 1,
+      approvedAt: row.approvedRole === null ? null : 2,
+      approvedBy: row.approvedRole === null ? null : "u_approver",
+      ...row,
+      approvedRole: row.approvedRole === undefined ? row.role : row.approvedRole,
+    })),
   );
 }
 
@@ -133,6 +152,44 @@ describe("materializeRoster", () => {
     await materializeRoster(db, "u_new", "new.person@example.com");
 
     expect(await members(db)).toEqual([{ workspaceId: "ws_a", userId: "u_new", role: "manager", source: "shopify" }]);
+  });
+
+  // A Shopify tag only asks for access (storefront forms can set tags): an
+  // entry nobody approved, or one a manager denied, grants nothing.
+  it("grants nothing for an entry waiting for approval or denied", async () => {
+    const db = await setup();
+    await roster(db, [
+      { workspaceId: "ws_a", email: "new.person@example.com", role: "manager", approvedRole: null },
+      { workspaceId: "ws_b", email: "new.person@example.com", role: "staff", approvedRole: null, deniedAt: 5 },
+    ]);
+
+    expect(await materializeRoster(db, "u_new", "new.person@example.com")).toBe(0);
+
+    expect(await members(db)).toEqual([]);
+  });
+
+  it("grants the approved role while a raised role waits for its own approval", async () => {
+    const db = await setup();
+    await roster(db, [{ workspaceId: "ws_a", email: "new.person@example.com", role: "manager", approvedRole: "staff" }]);
+
+    await materializeRoster(db, "u_new", "new.person@example.com");
+
+    expect(await members(db)).toEqual([{ workspaceId: "ws_a", userId: "u_new", role: "staff", source: "shopify" }]);
+  });
+
+  // "/" claims access on every load, so concurrent loads run this side by
+  // side: each upsert is conflict safe and a repeat writes nothing.
+  it("is idempotent: a repeat run writes nothing and concurrent runs leave one membership", async () => {
+    const db = await setup();
+    await roster(db, [{ workspaceId: "ws_a", email: "new.person@example.com", role: "staff" }]);
+
+    const counts = await Promise.all(
+      Array.from({ length: 5 }, () => materializeRoster(db, "u_new", "new.person@example.com")),
+    );
+
+    expect(counts.reduce((sum, n) => sum + n, 0)).toBe(1);
+    expect(await materializeRoster(db, "u_new", "new.person@example.com")).toBe(0);
+    expect(await members(db)).toEqual([{ workspaceId: "ws_a", userId: "u_new", role: "staff", source: "shopify" }]);
   });
 });
 

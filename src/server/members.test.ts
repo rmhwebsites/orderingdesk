@@ -10,7 +10,7 @@ import {
   listMembers,
   removeMember,
 } from "./members";
-import { openTestDb, seedMember, seedUser, seedWorkspace } from "./desk/test-helpers";
+import { openTestDb, seedMember, seedRosterEntry, seedUser, seedWorkspace } from "./desk/test-helpers";
 
 const WS = "ws_impact";
 
@@ -73,6 +73,30 @@ describe("listMembers", () => {
     const plain = await listMembers(db, WS, { includeInvites: false });
     expect(plain.members).toHaveLength(3);
     expect(plain.invites).toBeUndefined();
+  });
+
+  it("lists this workspace's Shopify tag requests that wait for approval and those denied, when asked", async () => {
+    const db = await setup();
+    await seedRosterEntry(db, { id: "r_asks", workspaceId: WS, email: "asks@example.com", role: "manager" });
+    await seedRosterEntry(db, { id: "r_ok", workspaceId: WS, email: "ok@example.com", role: "staff", state: "approved" });
+    await seedRosterEntry(db, { id: "r_no", workspaceId: WS, email: "no@example.com", role: "staff", state: "denied" });
+    await seedRosterEntry(db, { workspaceId: "ws_other", email: "elsewhere@example.com", role: "staff" });
+    // Approved as staff, now tagged manager: the raise waits.
+    await seedRosterEntry(db, { id: "r_raise", workspaceId: WS, email: "raise@example.com", role: "staff", state: "approved" });
+    await db
+      .update(schema.shopifyRoster)
+      .set({ role: "manager", updatedAt: 4 })
+      .where(eq(schema.shopifyRoster.id, "r_raise"));
+
+    const view = await listMembers(db, WS, { includeInvites: true });
+    expect(view.requests).toEqual({
+      waiting: [
+        { id: "r_asks", email: "asks@example.com", role: "manager", currentRole: null, since: 1, deniedAt: null },
+        { id: "r_raise", email: "raise@example.com", role: "manager", currentRole: "staff", since: 4, deniedAt: null },
+      ],
+      denied: [{ id: "r_no", email: "no@example.com", role: "staff", currentRole: null, since: 1, deniedAt: 3 }],
+    });
+    expect((await listMembers(db, WS, { includeInvites: false })).requests).toBeUndefined();
   });
 });
 

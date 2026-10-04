@@ -9,7 +9,10 @@ import { changeMemberRole, inviteMember, listMembers, removeMember } from "@/ser
 type RouteContext = { params: Promise<{ id: string }> };
 
 // Any member: {members: [{userId, role, source, email, name}]}. Managers and
-// platform admins also get {invites: [{email, role, createdAt}]}.
+// platform admins also get {invites: [{email, role, createdAt}]} and the
+// Shopify tag requests {requests: {waiting, denied}}, each entry {id,
+// email, role (asked for by the tag), currentRole (granted now, or null),
+// since, deniedAt} (approve or deny them at .../roster/<id>/approve|deny).
 export async function GET(_request: Request, context: RouteContext) {
   try {
     const { id } = await context.params;

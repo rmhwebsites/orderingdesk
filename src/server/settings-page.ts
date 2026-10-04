@@ -18,7 +18,7 @@ import type { DomainView } from "./domains";
 import { loadMailWorkspace } from "./email/workspace";
 import { appOrigin } from "./host";
 import { listMembers, type MemberView, type PendingInviteView } from "./members";
-import { resolveRosterTags } from "./roster";
+import { resolveRosterTags, type RosterRequests } from "./roster";
 import { senderView, type SenderView } from "./sender";
 import type { RosterTags } from "@/db/schema";
 
@@ -29,7 +29,7 @@ export type SettingsPageData = {
   access: SettingsAccess;
   connection: ConnectionSettingsView | null;
   vendors: VendorView[];
-  team: { members: MemberView[]; invites: PendingInviteView[]; rosterTags: RosterTags } | null;
+  team: { members: MemberView[]; invites: PendingInviteView[]; requests: RosterRequests; rosterTags: RosterTags } | null;
   statuses: StatusView[] | null;
   notifications: SettingsView | null;
   sender: SenderView | null;
@@ -80,7 +80,12 @@ export async function loadSettingsPage(
     connection,
     vendors,
     team: team
-      ? { members: team.members, invites: team.invites ?? [], rosterTags: resolveRosterTags(workspace.rosterTags) }
+      ? {
+          members: team.members,
+          invites: team.invites ?? [],
+          requests: team.requests ?? { waiting: [], denied: [] },
+          rosterTags: resolveRosterTags(workspace.rosterTags),
+        }
       : null,
     statuses: statusRows ? statusRows.map(statusView) : null,
     notifications: settings ? settings.settings : null,

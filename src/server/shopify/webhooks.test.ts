@@ -4,6 +4,7 @@ import type { Db } from "@/db";
 import * as schema from "@/db/schema";
 import { encryptSecret } from "@/server/crypto";
 import { openTestDb, seedUser, seedWorkspace } from "@/server/desk/test-helpers";
+import { approveRosterEntry } from "@/server/roster";
 import type { LiveEvent } from "@/lib/live-events";
 import { normalizeOrders } from "./normalize";
 import { MAX_WEBHOOK_BODY_BYTES, receiveShopifyWebhook, verifyShopifyHmac } from "./webhooks";
@@ -414,7 +415,15 @@ describe("receiveShopifyWebhook: customers", () => {
     return rows.map((row) => [row.email, row.role]);
   }
 
-  it("re-fetches the customer and updates the roster and the membership", async () => {
+  async function approveAll(db: Db) {
+    for (const row of await db.select().from(schema.shopifyRoster).where(eq(schema.shopifyRoster.workspaceId, WS))) {
+      await approveRosterEntry(db, { workspaceId: WS, rosterId: row.id, approverId: "u_manager" }, {});
+    }
+  }
+
+  // A tag only asks for access (storefront forms can set tags): the request
+  // waits for a manager, and an approved one follows later tag changes.
+  it("re-fetches the customer and records the request, granting nothing until it is approved", async () => {
     const db = await setup();
     const { env } = fakeEnv();
     await seedUser(db, "u_jo", "jo@impact.example");
@@ -430,8 +439,20 @@ describe("receiveShopifyWebhook: customers", () => {
     await receipt.work?.();
     expect(shop.calls[0].variables).toEqual({ id: "gid://shopify/Customer/501" });
     expect(await rosterEmails(db)).toEqual([["jo@impact.example", "manager"]]);
+    expect(await db.select().from(schema.workspaceMembers).where(eq(schema.workspaceMembers.userId, "u_jo"))).toEqual([]);
+
+    await approveAll(db);
     const members = await db.select().from(schema.workspaceMembers).where(eq(schema.workspaceMembers.userId, "u_jo"));
     expect(members).toMatchObject([{ workspaceId: WS, role: "manager", source: "shopify" }]);
+
+    // Lowered to staff in Shopify: applied at once.
+    const lowered = store({
+      customer: { id: "gid://shopify/Customer/501", email: "jo@impact.example", tags: ["Ordering Desk Staff"] },
+    });
+    await (
+      await deliver(db, env, { topic: "customers/update", payload: { id: 501 }, webhookId: "c-lower" }, lowered.impl)
+    ).work?.();
+    expect(await db.select({ role: schema.workspaceMembers.role }).from(schema.workspaceMembers)).toEqual([{ role: "staff" }]);
   });
 
   it("removes the access of a deleted customer without asking Shopify, closing their open sockets", async () => {
@@ -441,6 +462,7 @@ describe("receiveShopifyWebhook: customers", () => {
     const shop = store({ customer: { id: "gid://shopify/Customer/501", email: "jo@impact.example", tags: ["Ordering Desk Staff"] } });
     await (await deliver(db, env, { topic: "customers/create", payload: { id: 501 }, webhookId: "c1" }, shop.impl)).work?.();
     expect(await rosterEmails(db)).toHaveLength(1);
+    await approveAll(db);
     expect(kicks).toEqual([]);
     await (await deliver(db, env, { topic: "customers/delete", payload: { id: 501 }, webhookId: "c2" })).work?.();
     expect(kicks).toEqual([{ room: WS, userId: "u_jo" }]);

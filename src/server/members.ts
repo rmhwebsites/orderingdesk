@@ -8,6 +8,7 @@ import type { Db } from "@/db";
 import { inviteSends, pendingInvites, user, workspaceMembers, workspaces } from "@/db/schema";
 import { isWorkspaceRole, type WorkspaceRole } from "@/lib/roles";
 import { isRecord } from "./desk/shapes";
+import { listRosterRequests, type RosterRequests } from "./roster";
 import { normalizeEmail } from "./desk/validate";
 
 export type MemberView = {
@@ -20,13 +21,14 @@ export type MemberView = {
 
 export type PendingInviteView = { email: string; role: WorkspaceRole; createdAt: number };
 
-// Members by email, plus this workspace's pending invites when asked (the
-// route asks for managers and platform admins only).
+// Members by email, plus, when asked (the route asks for managers and
+// platform admins only), this workspace's pending invites and the Shopify
+// tag requests waiting for approval or denied.
 export async function listMembers(
   db: Db,
   workspaceId: string,
   opts: { includeInvites: boolean },
-): Promise<{ members: MemberView[]; invites?: PendingInviteView[] }> {
+): Promise<{ members: MemberView[]; invites?: PendingInviteView[]; requests?: RosterRequests }> {
   const members = await db
     .select({
       userId: workspaceMembers.userId,
@@ -48,7 +50,7 @@ export async function listMembers(
     .where(and(eq(pendingInvites.workspaceId, workspaceId), eq(pendingInvites.platformAdmin, false)))
     .orderBy(asc(pendingInvites.email));
   const invites = rows.flatMap((row) => (row.role ? [{ email: row.email, role: row.role, createdAt: row.createdAt }] : []));
-  return { members, invites };
+  return { members, invites, requests: await listRosterRequests(db, workspaceId) };
 }
 
 export type InviteMemberResult =

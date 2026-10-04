@@ -234,6 +234,19 @@ export const shopifyRoster = sqliteTable("shopify_roster", {
   role: text("role", { enum: ["manager", "staff"] }).notNull(),
   shopifyCustomerId: text("shopify_customer_id").notNull(),
   updatedAt: integer("updated_at").notNull(),
+  // A tag only asks for access: any storefront visitor can create a
+  // customer with tags (the newsletter form's contact[tags]), so a manager
+  // approves each request once (src/server/roster.ts). approvedRole is the
+  // role approved and the role the row grants. It never exceeds role: a
+  // lowered tag lowers it at once, a raised tag leaves it until the raise
+  // is approved. Null until a first approval. Rows start unapproved.
+  approvedRole: text("approved_role", { enum: ["manager", "staff"] }),
+  approvedAt: integer("approved_at"),
+  // The approving user's id.
+  approvedBy: text("approved_by"),
+  // Denied by a manager: grants nothing, and stays denied until the tag is
+  // removed (which deletes the row) and added again.
+  deniedAt: integer("denied_at"),
 }, (t) => [
   uniqueIndex("roster_unique").on(t.workspaceId, t.email),
   index("roster_email").on(t.email),

@@ -4,13 +4,16 @@
 //      promoted in the app, who for a new account arrives as a pending
 //      platform-admin invite);
 //   2. anyone with a pending workspace invite;
-//   3. tagged Shopify customers on a workspace roster (shopify_roster).
+//   3. tagged Shopify customers whose roster entry (shopify_roster) a manager
+//      APPROVED. A tag alone is no grant: any storefront visitor can create
+//      a customer with tags (src/server/roster.ts), so an entry waiting for
+//      approval, or denied, is no route to an account.
 // Existing users may always sign in.
 //
 // Relative imports on purpose: the realtime socket check (src/realtime/
 // live.ts) bundles this into the custom worker.
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNotNull, isNull } from "drizzle-orm";
 import type { Db } from "../db";
 import { pendingInvites, platformAdmins, shopifyRoster, user, workspaceMembers } from "../db/schema";
 
@@ -83,10 +86,18 @@ export async function canCreateAccount(db: Db, env: AdminEnv, email: string): Pr
       .from(pendingInvites)
       .where(eq(pendingInvites.email, normalized))
       .limit(1),
+    // The rosterGrants condition of src/server/roster.ts: approved, not
+    // denied.
     db
       .select({ id: shopifyRoster.id })
       .from(shopifyRoster)
-      .where(eq(shopifyRoster.email, normalized))
+      .where(
+        and(
+          eq(shopifyRoster.email, normalized),
+          isNotNull(shopifyRoster.approvedRole),
+          isNull(shopifyRoster.deniedAt),
+        ),
+      )
       .limit(1),
   ]);
   return invites.length > 0 || roster.length > 0;

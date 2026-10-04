@@ -2,7 +2,8 @@ import { describe, it, expect, vi } from "vitest";
 import { asc, eq } from "drizzle-orm";
 import type { Db } from "@/db";
 import * as schema from "@/db/schema";
-import { openTestDb, seedUser, seedWorkspace } from "./desk/test-helpers";
+import { approveRosterEntry } from "./roster";
+import { openTestDb, seedRosterEntry, seedUser, seedWorkspace } from "./desk/test-helpers";
 
 // getAuth() reads the Cloudflare context and the request headers;
 // authForHost (tested here) takes them as arguments.
@@ -360,14 +361,7 @@ describe("magic-link request (closed sign-up, no enumeration)", () => {
       invitedBy: "u_old",
       createdAt: 1,
     });
-    await db.insert(schema.shopifyRoster).values({
-      id: "r1",
-      workspaceId: "ws_impact",
-      email: "buyer@example.com",
-      role: "manager",
-      shopifyCustomerId: "c1",
-      updatedAt: 1,
-    });
+    await seedRosterEntry(db, { workspaceId: "ws_impact", email: "buyer@example.com", role: "manager", state: "approved" });
     for (const email of ["old@example.com", "Crew@example.com", "buyer@example.com"]) {
       expect((await requestLink(auth, email)).body).toEqual({ status: true });
     }
@@ -376,6 +370,39 @@ describe("magic-link request (closed sign-up, no enumeration)", () => {
       "crew@example.com",
       "buyer@example.com",
     ]);
+  });
+
+  // Any storefront visitor can create a Shopify customer with tags (the
+  // newsletter form's contact[tags]). Until a manager approves the request
+  // the tagged email is a stranger: no link, no account, no membership.
+  it("treats a storefront-tagged customer as a stranger until a manager approves the request", async () => {
+    const { db, auth, sent } = await setup();
+    const rosterId = await seedRosterEntry(db, { workspaceId: "ws_impact", email: "sneaky@example.com", role: "manager" });
+    const tagged = await requestLink(auth, "sneaky@example.com");
+    const stranger = await requestLink(auth, "stranger@example.com");
+    expect(tagged).toEqual(stranger);
+    expect(sent).toEqual([]);
+    expect(await users(db)).toEqual([]);
+
+    await approveRosterEntry(db, { workspaceId: "ws_impact", rosterId, approverId: "u_manager" }, {});
+    await requestLink(auth, "sneaky@example.com");
+    expect(sent.map((s) => s.email)).toEqual(["sneaky@example.com"]);
+    const response = await openLink(auth, sent[0].url);
+    expect(cookieHeader(response)).toContain("session_token");
+    const memberships = await db
+      .select({ role: schema.workspaceMembers.role, source: schema.workspaceMembers.source })
+      .from(schema.workspaceMembers);
+    expect(memberships).toEqual([{ role: "manager", source: "shopify" }]);
+  });
+
+  it("refuses the account of a tagged customer whose request was denied after the link was sent", async () => {
+    const { db, auth, sent } = await setup();
+    await seedRosterEntry(db, { workspaceId: "ws_impact", email: "crew2@example.com", role: "staff", state: "approved" });
+    await requestLink(auth, "crew2@example.com");
+    await db.update(schema.shopifyRoster).set({ approvedRole: null, approvedAt: null, approvedBy: null, deniedAt: 9 });
+    const response = await openLink(auth, sent[0].url);
+    expect(response.headers.get("location") ?? "").toContain("error=");
+    expect(await users(db)).toEqual([]);
   });
 });
 
@@ -407,14 +434,7 @@ describe("account creation", () => {
 
   it("creates a tagged Shopify customer's account as a shopify membership", async () => {
     const { db, auth, sent } = await setup();
-    await db.insert(schema.shopifyRoster).values({
-      id: "r1",
-      workspaceId: "ws_impact",
-      email: "buyer@example.com",
-      role: "manager",
-      shopifyCustomerId: "c1",
-      updatedAt: 1,
-    });
+    await seedRosterEntry(db, { workspaceId: "ws_impact", email: "buyer@example.com", role: "manager", state: "approved" });
     await requestLink(auth, "buyer@example.com");
     await openLink(auth, sent[0].url);
     const memberships = await db
@@ -448,14 +468,7 @@ describe("account creation", () => {
   it("claims access granted after the first sign-up at the next sign-in", async () => {
     const { db, auth, sent } = await setup();
     await seedUser(db, "u_old", "old@example.com");
-    await db.insert(schema.shopifyRoster).values({
-      id: "r1",
-      workspaceId: "ws_impact",
-      email: "old@example.com",
-      role: "staff",
-      shopifyCustomerId: "c1",
-      updatedAt: 1,
-    });
+    await seedRosterEntry(db, { workspaceId: "ws_impact", email: "old@example.com", role: "staff", state: "approved" });
     await requestLink(auth, "old@example.com");
     await openLink(auth, sent[0].url);
     const memberships = await db

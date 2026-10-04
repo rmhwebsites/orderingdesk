@@ -7,7 +7,7 @@ import {
   isPlatformAdmin,
   platformAdminEmails,
 } from "./access";
-import { openTestDb, seedUser, seedWorkspace } from "./desk/test-helpers";
+import { openTestDb, seedRosterEntry, seedUser, seedWorkspace } from "./desk/test-helpers";
 
 const ENV = { PLATFORM_ADMIN_EMAILS: " Boss@Example.com ,second@example.com,, " };
 
@@ -87,17 +87,22 @@ describe("canCreateAccount", () => {
     expect(await canCreateAccount(db, {}, "admin2@example.com")).toBe(true);
   });
 
-  it("allows a tagged Shopify customer on a workspace roster", async () => {
+  it("allows a tagged Shopify customer once a manager approved the roster entry", async () => {
     const db = await setup();
-    await db.insert(schema.shopifyRoster).values({
-      id: "r1",
-      workspaceId: "ws_impact",
-      email: "buyer@example.com",
-      role: "staff",
-      shopifyCustomerId: "c1",
-      updatedAt: 1,
-    });
+    await seedRosterEntry(db, { workspaceId: "ws_impact", email: "buyer@example.com", role: "staff", state: "approved" });
     expect(await canCreateAccount(db, {}, " buyer@example.com ")).toBe(true);
+  });
+
+  // Any storefront visitor can create a customer with tags (the newsletter
+  // form's contact[tags]), so a tag alone is never an access grant.
+  it("refuses a roster entry that is waiting for approval or was denied", async () => {
+    const db = await setup();
+    await seedRosterEntry(db, { workspaceId: "ws_impact", email: "stranger@example.com", role: "manager" });
+    await seedRosterEntry(db, { workspaceId: "ws_impact", email: "denied@example.com", role: "staff", state: "denied" });
+    expect(await canCreateAccount(db, {}, "stranger@example.com")).toBe(false);
+    expect(await canCreateAccount(db, {}, "denied@example.com")).toBe(false);
+    expect(await hasAccountRoute(db, {}, "stranger@example.com")).toBe(false);
+    expect(await hasAccountRoute(db, {}, "denied@example.com")).toBe(false);
   });
 
   it("refuses anyone with no route to an account", async () => {

@@ -86,6 +86,37 @@ export async function seedMember(
   });
 }
 
+// A shopify_roster row as a Shopify tag creates it: waiting for approval.
+// approved: a manager approved it for its role (approvedRole = role);
+// denied: a manager denied it.
+export async function seedRosterEntry(
+  db: Db,
+  entry: {
+    id?: string;
+    workspaceId: string;
+    email: string;
+    role: "manager" | "staff";
+    customerId?: string;
+    state?: "waiting" | "approved" | "denied";
+  },
+) {
+  const id = entry.id ?? `r_${entry.workspaceId}_${entry.email}`;
+  const state = entry.state ?? "waiting";
+  await db.insert(schema.shopifyRoster).values({
+    id,
+    workspaceId: entry.workspaceId,
+    email: entry.email.toLowerCase(),
+    role: entry.role,
+    shopifyCustomerId: entry.customerId ?? id,
+    updatedAt: 1,
+    approvedRole: state === "approved" ? entry.role : null,
+    approvedAt: state === "approved" ? 2 : null,
+    approvedBy: state === "approved" ? "u_approver" : null,
+    deniedAt: state === "denied" ? 3 : null,
+  });
+  return id;
+}
+
 // A workspace with its settings row and TEST_STATUSES (sort = list position),
 // the way POST /api/workspaces creates one.
 export async function seedWorkspace(db: Db, id: string) {
