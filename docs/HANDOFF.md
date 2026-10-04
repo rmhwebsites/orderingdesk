@@ -500,11 +500,14 @@ Once connected:
 - Tag a Shopify customer "Ordering Desk Manager" or "Ordering Desk Staff"
   to give them that role in the workspace (removing the tag removes the
   access). People invited by hand inside Ordering Desk are never affected
-  by tags.
+  by tags. Disconnecting the store removes every tag-based access in the
+  workspace; tagged people get it back at the first roster sync after the
+  store is connected again.
 - Every status change in Ordering Desk shows on the Shopify order as one
   tag, "Ordering Desk: <status>". Editing that tag in Shopify changes the
   status in Ordering Desk. Fulfilling or delivering in Shopify moves the
-  order forward to Shipped or Delivered (never backward).
+  order forward to Shipped or Delivered (never backward). Shopify allows
+  40 characters per order tag, so status names are capped at 25.
 - An older store app with an Admin API token (shpat_...) can still be
   connected with the token instead of a Client ID and secret. It needs the
   same permissions, gets no live updates (its webhooks could not be
@@ -763,3 +766,69 @@ an address on a domain you have onboarded.
     deploy. The email preview iframe also shows no logo locally: its CSP
     allows https images only and local dev serves http.
 
+
+## STATE UPDATE, 2026-10-04 review repairs (supersedes above)
+
+- Branch build/m1-core, on top of 149f311: eight repair commits for the
+  settings stage review (security, correctness, design, and the Phase 5
+  part A items), plus this docs commit. Not pushed, not deployed.
+- NEW MIGRATION 0005 (drizzle/0005_invite_sends.sql): one additive table,
+  invite_sends, for the team invite limit. It touches no existing row.
+  DEPLOY ORDER: `npm run db:migrate:remote` (applies 0004 and 0005), then
+  deploy this code right away.
+- Sessions and sign-in links are bound to their host (src/server/auth.ts).
+  The hub signs session cookies with BETTER_AUTH_SECRET as before, so
+  existing hub sessions stay valid; each client host signs with its own
+  key derived from it (hostSecret), so a cookie captured on a client host
+  is no session anywhere else. Sign-in tokens are stored as a hash of the
+  origin and the token (linkTokenHash), so a link issued on one host finds
+  nothing on another; any link requested before the deploy stops working
+  (they expire in 5 minutes anyway).
+- Platform powers answer on the hub only (src/server/guard.ts, Viewer): on
+  a client host a platform admin works as a manager of that workspace, and
+  /admin, workspace creation, platform admins and the platform-only
+  settings (store connection, branding, custom domain, email sender, roster
+  tags, workspace name and accent) answer 404 there. The client host
+  Settings page tells a platform admin so and links to the hub's Settings.
+  Ryan: use orderingdesk.com for those.
+- Sign-in link delivery runs after the response (ctx.waitUntil) and a
+  failed send is logged without the address, so an allowed and a refused
+  email look the same, in content and in time. A broken workspace sender
+  therefore no longer shows an error on the sign-in form: watch the
+  Worker logs for "[auth]" lines.
+- Team invites are always pending invites, whether or not the email has an
+  account somewhere (no direct add, same answer either way). A signed-in
+  person claims theirs at their next sign-in or when they open "/" on the
+  hub or the workspace's client host (the invite email's button). Each
+  workspace may send 30 invite emails per hour (429 after that); withdrawn
+  invites still count.
+- Store disconnect clears the workspace's shopify_roster rows and source
+  shopify memberships and closes those people's sockets; a roster write
+  that finds the store disconnected after writing takes itself back.
+- Realtime: /live checks the ticket's user against D1 (member or platform
+  admin) when the ticket is used; the room records each kick until every
+  ticket issued before it has expired, attaches {userId, connectedAt} to
+  each socket and closes sockets older than 30 minutes with code 4001, on
+  which the client reconnects with a fresh ticket. A ticket route answer
+  of 401 or 404 makes the client reload instead of retrying.
+- Status labels are capped at 25 characters (src/lib/status-label.ts:
+  Shopify's 40 character tag limit minus "Ordering Desk: "; the 40 is from
+  Shopify's Order docs, not checked live). A refused tag write no longer
+  stops the fulfillment of a status linked to fulfilled.
+- The desk's status control saves only an explicit choice: a keyboard
+  change is staged until Enter or leaving the control (Escape drops it); a
+  mouse or touch pick saves at once (src/lib/status-commit.ts).
+- Branding: the contrast summary is built from contrastReport, the same
+  checks that block saving. "Use the Ordering Desk colors" asks first and
+  puts the accent back to the Ordering Desk primary. Without a palette,
+  button text falls back to black or white when the Ordering Desk ink and
+  paper both miss AA on the accent.
+- Settings keep keyboard focus through inline confirms, row removals and
+  vendor edits (focusSoon and ConfirmStep's returnFocus in
+  src/components/settings/kit.tsx). Component tests render with
+  react-dom/server (no DOM library), so focus moves are checked in the
+  browser, not in vitest.
+- Known limits: the 30 minute socket refresh refetches the desk once per
+  socket per half hour; on a client host a platform admin has manager
+  access only (by design, see above); the Shopify tag limit and the
+  waitUntil delivery are not verified live.
