@@ -104,7 +104,23 @@ export const storeConnections = sqliteTable("store_connections", {
   backfillStartedAt: integer("backfill_started_at"),
   backfillFinishedAt: integer("backfill_finished_at"),
   backfillError: text("backfill_error"),
+  // Draft orders (draft orders spec section 5), synced in the same run and
+  // under the same lease as orders, with their own cursor: the same
+  // "<ms>|<cursor>" resume token as sync_cursor, and the window it belongs
+  // to.
+  draftSyncCursor: text("draft_sync_cursor"),
+  draftSyncCursorSince: integer("draft_sync_cursor_since"),
+  // The window-open anchor of the last completed draft fetch; 0 means the
+  // first draft sync (every open draft, inserted silently) is still pending.
+  draftLastSyncAt: integer("draft_last_sync_at").notNull().default(0),
+  // When the hourly check of every open draft card last ran to completion.
+  draftCheckedAt: integer("draft_checked_at").notNull().default(0),
 });
+
+// The Shopify states and draft order outcomes a status can follow (see
+// statuses.shopify_link).
+export const SHOPIFY_LINK_VALUES = ["fulfilled", "delivered", "draft_completed", "draft_rejected"] as const;
+export type ShopifyLinkValue = (typeof SHOPIFY_LINK_VALUES)[number];
 
 export const statuses = sqliteTable("statuses", {
   id: text("id").primaryKey(),
@@ -117,14 +133,26 @@ export const statuses = sqliteTable("statuses", {
   // The Shopify state this status mirrors, or null. Moving an order into a
   // status linked to fulfilled creates a Shopify fulfillment; Shopify
   // reporting the order fulfilled or delivered moves it to the linked status.
-  shopifyLink: text("shopify_link", { enum: ["fulfilled", "delivered"] }),
+  // draft_completed: where Approve puts a request and where a request goes
+  // when its draft is completed in Shopify. draft_rejected: where Reject
+  // puts a request. Plain text column (no CHECK since 0004).
+  shopifyLink: text("shopify_link", { enum: SHOPIFY_LINK_VALUES }),
 }, (t) => [uniqueIndex("status_key_unique").on(t.workspaceId, t.key)]);
 
+// One row per request (draft orders spec section 2): a draft card is a row
+// with shopify_order_id null and shopify_draft_id set; when Shopify reports
+// the order the draft became, the same row gets the order id (the attach
+// compare-and-set in src/server/sync/drafts.ts) and keeps its id, status,
+// notes, events and purchase orders. The kind is derived, never stored:
+// shopifyOrderId === null means a draft card.
 export const orders = sqliteTable("orders", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id),
-  shopifyOrderId: text("shopify_order_id").notNull(),
+  // Null while the card is a draft. Set once, by the attach.
+  shopifyOrderId: text("shopify_order_id"),
+  // "#D12" while a draft, the order name after the attach.
   name: text("name").notNull(),
+  // The current snapshot: the normalized draft, then the order.
   shopify: text("shopify", { mode: "json" }).notNull(),
   statusKey: text("status_key").notNull(),
   statusSetBy: text("status_set_by"),
@@ -137,10 +165,31 @@ export const orders = sqliteTable("orders", {
   // sync, the Sync button or a webhook landed it. Null for orders that were
   // never claimed, including every order stored before migration 0007.
   notifiedAt: integer("notified_at"),
+  // Declared last, matching the physical column order after the 0010
+  // rebuild (positional insert-selects depend on it).
+  // The legacy numeric draft id, for cards that are or were drafts.
+  shopifyDraftId: text("shopify_draft_id"),
+  // "#D12", kept after the order attaches.
+  draftName: text("draft_name"),
+  // The draft's normalized snapshot as of the attach, refreshed by later
+  // draft updates. Null for cards that never were drafts; the display
+  // fallback for request fields on the order card.
+  draftSnapshot: text("draft_snapshot", { mode: "json" }),
+  // When Shopify reported the open draft gone (delete webhook, a null
+  // re-fetch, or the hourly check). The card is kept.
+  draftDeletedAt: integer("draft_deleted_at"),
 }, (t) => [
+  // SQLite UNIQUE allows many NULLs: open drafts never collide here, and
+  // plain orders never collide in order_draft_unique.
   uniqueIndex("order_unique").on(t.workspaceId, t.shopifyOrderId),
+  uniqueIndex("order_draft_unique").on(t.workspaceId, t.shopifyDraftId),
   index("order_ws_created").on(t.workspaceId, t.createdAt),
   index("order_ws_status").on(t.workspaceId, t.statusKey),
+  // Bare column names on purpose in both SQL fragments below: drizzle-kit
+  // builds this table as __new_orders and renames it, and a table-qualified
+  // name would keep pointing at the temporary name.
+  index("order_open_drafts").on(t.workspaceId, t.createdAt).where(sql`shopify_order_id is null`),
+  check("order_source", sql`shopify_order_id is not null or shopify_draft_id is not null`),
 ]);
 
 export const events = sqliteTable("events", {
@@ -152,7 +201,20 @@ export const events = sqliteTable("events", {
   // purchase order send attempt that failed. TypeScript-only enum: the
   // column has no CHECK, so adding a value needs no migration.
   type: text("type", {
-    enum: ["order_new", "status", "note", "po_sent", "po_draft", "po_failed", "sync_error", "shopify_write"],
+    enum: [
+      "order_new",
+      "status",
+      "note",
+      "po_sent",
+      "po_draft",
+      "po_failed",
+      "sync_error",
+      "shopify_write",
+      // A draft card became the order Shopify made from it, and a draft
+      // Shopify no longer has (draft orders spec sections 6.1 and 6.3).
+      "draft_completed",
+      "draft_deleted",
+    ],
   }).notNull(),
   text: text("text").notNull(),
   actorId: text("actor_id"),

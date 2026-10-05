@@ -57,7 +57,7 @@
 import { and, asc, eq, gte, inArray, sql } from "drizzle-orm";
 import type { Db } from "../../db";
 import { applyBatch, rowsAffected } from "../../db/batch";
-import { events, orders, statuses, storeConnections } from "../../db/schema";
+import { events, orders, statuses, storeConnections, type ShopifyLinkValue } from "../../db/schema";
 import type { LiveOrderStatus } from "../../lib/live-events";
 import { STATUS_TAG_PREFIX } from "../../lib/status-label";
 import { eventView, type EventView } from "../desk/shapes";
@@ -85,7 +85,7 @@ export type StatusRow = {
   key: string;
   label: string;
   sort: number;
-  shopifyLink: "fulfilled" | "delivered" | null;
+  shopifyLink: ShopifyLinkValue | null;
 };
 
 export type ShopifyState = "fulfilled" | "delivered" | null;

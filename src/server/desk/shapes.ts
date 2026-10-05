@@ -1,7 +1,7 @@
 // Response shapes shared by the desk services and API routes. Phase 5 builds
 // the desk UI against these, so change them deliberately.
 
-import type { events, statuses, workspaceSettings } from "@/db/schema";
+import type { events, ShopifyLinkValue, statuses, workspaceSettings } from "@/db/schema";
 
 export type StatusView = {
   key: string;
@@ -10,8 +10,9 @@ export type StatusView = {
   sort: number;
   triggersPo: boolean;
   // The Shopify state this status mirrors (platform amendment section 4),
+  // or the draft order outcome it receives (draft orders spec section 8),
   // or null.
-  shopifyLink: "fulfilled" | "delivered" | null;
+  shopifyLink: ShopifyLinkValue | null;
 };
 
 export type EventView = {

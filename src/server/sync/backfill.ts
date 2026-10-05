@@ -431,7 +431,9 @@ export async function runBackfillTick(
         .from(orders)
         .where(and(eq(orders.workspaceId, workspaceId), inArray(orders.shopifyOrderId, ids.slice(i, i + EXISTENCE_CHUNK))));
       for (const row of rows) {
-        known.add(row.shopifyOrderId);
+        if (row.shopifyOrderId !== null) {
+          known.add(row.shopifyOrderId);
+        }
       }
     }
     if (inRange.length > 0 && !(await stillOurs())) {

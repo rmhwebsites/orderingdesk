@@ -100,7 +100,17 @@ describe("createWorkspace", () => {
     expect(statuses.map((s) => s.key)).toEqual(DEFAULT_STATUSES.map((s) => s.key));
     expect(statuses.find((s) => s.key === "shipped")?.shopifyLink).toBe("fulfilled");
     expect(statuses.find((s) => s.key === "delivered")?.shopifyLink).toBe("delivered");
-    expect(statuses.filter((s) => s.shopifyLink !== null)).toHaveLength(2);
+    // Draft orders (spec section 2.3): Approve uses Approved, Reject uses a
+    // pink Rejected status at the end.
+    expect(statuses.find((s) => s.key === "approved")?.shopifyLink).toBe("draft_completed");
+    expect(statuses[statuses.length - 1]).toEqual({
+      key: "rejected",
+      label: "Rejected",
+      sort: statuses.length - 1,
+      triggersPo: false,
+      shopifyLink: "draft_rejected",
+    });
+    expect(statuses.filter((s) => s.shopifyLink !== null)).toHaveLength(4);
     expect(statuses.find((s) => s.key === "approved")?.triggersPo).toBe(true);
   });
 

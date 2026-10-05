@@ -279,6 +279,12 @@ describe("getOrderDetail", () => {
         createdAt: 10,
         syncedAt: 20,
         notifiedAt: null,
+        // Draft columns (migration 0010): null for a card that never was a
+        // draft.
+        shopifyDraftId: null,
+        draftName: null,
+        draftSnapshot: null,
+        draftDeletedAt: null,
       },
       itemsTruncated: false,
     });

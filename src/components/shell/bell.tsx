@@ -4,11 +4,13 @@ import Link from "next/link";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { BellIcon } from "@phosphor-icons/react/Bell";
 import { ChatTextIcon } from "@phosphor-icons/react/ChatText";
+import { CheckCircleIcon } from "@phosphor-icons/react/CheckCircle";
 import { ChecksIcon } from "@phosphor-icons/react/Checks";
 import { FileTextIcon } from "@phosphor-icons/react/FileText";
 import { ShoppingBagIcon } from "@phosphor-icons/react/ShoppingBag";
 import { StorefrontIcon } from "@phosphor-icons/react/Storefront";
 import { TagIcon } from "@phosphor-icons/react/Tag";
+import { TrashIcon } from "@phosphor-icons/react/Trash";
 import { WarningIcon } from "@phosphor-icons/react/Warning";
 import { actorLabel, activityToasts, orderHref, unreadBadge } from "@/lib/activity-feed";
 import { formatDateTime, relativeTime } from "@/lib/format";
@@ -37,6 +39,8 @@ const ICONS: Record<ActivityItem["type"], typeof BellIcon> = {
   sync_error: WarningIcon,
   // Only failed Shopify writes reach the feed.
   shopify_write: StorefrontIcon,
+  draft_completed: CheckCircleIcon,
+  draft_deleted: TrashIcon,
 };
 
 function itemTitle(item: ActivityItem): string {

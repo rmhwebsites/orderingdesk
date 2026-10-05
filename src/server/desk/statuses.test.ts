@@ -313,6 +313,36 @@ describe("replaceStatuses", () => {
     ]);
   });
 
+  // Draft orders (spec section 8.1): Approve and Reject follow the statuses
+  // linked to draft_completed and draft_rejected, one each, and a list that
+  // carries them (migration 0010 links Approved and adds Rejected) saves
+  // back unchanged.
+  it("saves the draft order links, one status each, with the error naming every link", async () => {
+    const { db } = await setup();
+    const result = await replaceStatuses(db, WS, [
+      { key: "new", label: "New", color: "lime", triggersPo: false, shopifyLink: null },
+      { key: "approved", label: "Approved", color: "green", triggersPo: true, shopifyLink: "draft_completed" },
+      entry("Rejected", { shopifyLink: "draft_rejected" }),
+    ]);
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") return;
+    expect(result.statuses.map((s) => [s.key, s.shopifyLink])).toEqual([
+      ["new", null],
+      ["approved", "draft_completed"],
+      ["rejected", "draft_rejected"],
+    ]);
+    const twice = await replaceStatuses(db, WS, [
+      { key: "approved", label: "Approved", color: "green", triggersPo: true, shopifyLink: "draft_completed" },
+      entry("Done", { shopifyLink: "draft_completed" }),
+    ]);
+    expect(twice).toEqual({ kind: "invalid", error: "Only one status can follow Draft approved; Approved and Done both do" });
+    const unknown = await replaceStatuses(db, WS, [entry("Bad link", { shopifyLink: "cancelled" })]);
+    expect(unknown).toEqual({
+      kind: "invalid",
+      error: "Status 1: the Shopify link must be fulfilled, delivered, draft completed, draft rejected or none",
+    });
+  });
+
   it("refuses an unknown Shopify link and two statuses linked to the same Shopify state", async () => {
     const { db } = await setup();
     const before = await statusRows(db);

@@ -221,7 +221,9 @@ export async function claimAndLoad(
     .from(orders)
     .where(inChunk);
   for (const row of rows) {
-    into.set(row.shopifyOrderId, { id: row.id, shopify: row.shopify });
+    if (row.shopifyOrderId !== null) {
+      into.set(row.shopifyOrderId, { id: row.id, shopify: row.shopify });
+    }
   }
 }
 

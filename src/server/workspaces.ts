@@ -13,14 +13,18 @@ export const WORKSPACE_NAME_MAX = 80;
 // Default statuses seeded into every new workspace. Colors are design token
 // names resolved by the UI, not hex values. Shipped and Delivered mirror
 // Shopify's fulfilled and delivered states (platform amendment section 4).
+// Approved is where Approve puts a draft order request, Rejected where
+// Reject puts it (draft orders spec section 2.3; migration 0010 did the
+// same for existing workspaces).
 export const DEFAULT_STATUSES = [
   { key: "new", label: "New", color: "lime", triggersPo: false, shopifyLink: null },
   { key: "processing", label: "Processing", color: "blue", triggersPo: false, shopifyLink: null },
   { key: "on_hold", label: "On Hold", color: "amber", triggersPo: false, shopifyLink: null },
-  { key: "approved", label: "Approved", color: "green", triggersPo: true, shopifyLink: null },
+  { key: "approved", label: "Approved", color: "green", triggersPo: true, shopifyLink: "draft_completed" },
   { key: "shipped", label: "Shipped", color: "violet", triggersPo: false, shopifyLink: "fulfilled" },
   { key: "delivered", label: "Delivered", color: "slate", triggersPo: false, shopifyLink: "delivered" },
   { key: "issue", label: "Issue", color: "red", triggersPo: false, shopifyLink: null },
+  { key: "rejected", label: "Rejected", color: "pink", triggersPo: false, shopifyLink: "draft_rejected" },
 ] as const;
 
 // The workspaces a viewer may see, by name. Shared by the hub page and GET

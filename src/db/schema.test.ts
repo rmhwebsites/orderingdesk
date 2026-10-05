@@ -3,7 +3,7 @@ import Database from "better-sqlite3";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { is } from "drizzle-orm";
+import { getTableColumns, getTableName, is } from "drizzle-orm";
 import { SQLiteTable } from "drizzle-orm/sqlite-core";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "./schema";
@@ -280,6 +280,32 @@ describe("schema migrations", () => {
     for (const table of tables) {
       expect(() => orm.select().from(table).all()).not.toThrow();
     }
+    // And the other way: every physical column, in the physical order, is a
+    // column of the schema (a hand-written migration step cannot add one the
+    // schema does not declare). Order matters for the orders table: its
+    // positional insert-selects rely on it (rebuilt in 0010).
+    for (const table of tables) {
+      const name = getTableName(table);
+      const physical = (db.prepare(`PRAGMA table_info("${name}")`).all() as { name: string }[]).map((column) => column.name);
+      const declared = Object.values(getTableColumns(table)).map((column) => column.name);
+      expect(physical, name).toEqual(name === "orders" || name === "events" ? declared : expect.arrayContaining(declared));
+      expect(physical.length, name).toBe(declared.length);
+    }
+  });
+
+  // Migration 0010 (draft orders): a draft card has no order id yet, and
+  // every row names at least one of the two ids.
+  it("stores draft cards without an order id and refuses rows with neither id", () => {
+    const insert = db.prepare(
+      "INSERT INTO orders (id, workspace_id, shopify_order_id, shopify_draft_id, name, shopify, status_key, created_at, synced_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    );
+    insert.run("o_draft_1", "ws1", null, "8001", "#D1", "{}", "new", 1, 1);
+    insert.run("o_draft_2", "ws1", null, "8002", "#D2", "{}", "new", 1, 1);
+    expect(() => insert.run("o_draft_dup", "ws1", null, "8001", "#D1", "{}", "new", 1, 1)).toThrow(/UNIQUE/);
+    expect(() => insert.run("o_neither", "ws1", null, null, "#X", "{}", "new", 1, 1)).toThrow(/CHECK/);
+    expect(
+      db.prepare("SELECT draft_last_sync_at, draft_checked_at, draft_sync_cursor FROM store_connections WHERE workspace_id = ?").get("ws1"),
+    ).toEqual({ draft_last_sync_at: 0, draft_checked_at: 0, draft_sync_cursor: null });
   });
 });
 
@@ -388,18 +414,22 @@ describe("platform migration of existing rows", () => {
     ]);
   });
 
-  it("links the shipped and delivered status keys to their Shopify states, and nothing else", () => {
+  // 0004 links the shipped and delivered keys; 0010 (draft orders) links
+  // the approved key to draft_completed and adds a Rejected status last.
+  it("links the shipped and delivered status keys to their Shopify states, and the draft outcomes", () => {
     expect(
-      db.prepare("SELECT id, label, shopify_link FROM statuses ORDER BY workspace_id, sort").all(),
+      db.prepare("SELECT workspace_id, key, label, sort, shopify_link FROM statuses ORDER BY workspace_id, sort").all(),
     ).toEqual([
-      { id: "ws_custom_sent", label: "Shipped", shopify_link: null },
-      { id: "ws_impact_new", label: "New", shopify_link: null },
-      { id: "ws_impact_processing", label: "Processing", shopify_link: null },
-      { id: "ws_impact_on_hold", label: "On Hold", shopify_link: null },
-      { id: "ws_impact_approved", label: "Approved", shopify_link: null },
-      { id: "ws_impact_shipped", label: "Shipped", shopify_link: "fulfilled" },
-      { id: "ws_impact_delivered", label: "Delivered", shopify_link: "delivered" },
-      { id: "ws_impact_issue", label: "Issue", shopify_link: null },
+      { workspace_id: "ws_custom", key: "sent", label: "Shipped", sort: 0, shopify_link: null },
+      { workspace_id: "ws_custom", key: "rejected", label: "Rejected", sort: 1, shopify_link: "draft_rejected" },
+      { workspace_id: "ws_impact", key: "new", label: "New", sort: 0, shopify_link: null },
+      { workspace_id: "ws_impact", key: "processing", label: "Processing", sort: 1, shopify_link: null },
+      { workspace_id: "ws_impact", key: "on_hold", label: "On Hold", sort: 2, shopify_link: null },
+      { workspace_id: "ws_impact", key: "approved", label: "Approved", sort: 3, shopify_link: "draft_completed" },
+      { workspace_id: "ws_impact", key: "shipped", label: "Shipped", sort: 4, shopify_link: "fulfilled" },
+      { workspace_id: "ws_impact", key: "delivered", label: "Delivered", sort: 5, shopify_link: "delivered" },
+      { workspace_id: "ws_impact", key: "issue", label: "Issue", sort: 6, shopify_link: null },
+      { workspace_id: "ws_impact", key: "rejected", label: "Rejected", sort: 7, shopify_link: "draft_rejected" },
     ]);
   });
 

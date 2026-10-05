@@ -26,7 +26,7 @@ type Row = {
   label: string;
   color: string;
   triggersPo: boolean;
-  shopifyLink: "fulfilled" | "delivered" | null;
+  shopifyLink: StatusView["shopifyLink"];
 };
 
 type InUse = { key: string; label: string; count: number };

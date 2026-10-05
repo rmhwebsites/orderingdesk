@@ -7,7 +7,7 @@
 import { and, asc, count, eq, inArray, notExists, sql } from "drizzle-orm";
 import type { Db } from "@/db";
 import { applyBatch } from "@/db/batch";
-import { orders, statuses } from "@/db/schema";
+import { orders, SHOPIFY_LINK_VALUES, statuses } from "@/db/schema";
 import { SHOPIFY_TAG_MAX, STATUS_LABEL_MAX, STATUS_TAG_PREFIX } from "@/lib/status-label";
 import { isRecord, statusView, type StatusView } from "./shapes";
 
@@ -29,9 +29,19 @@ export const STATUS_LIST_MAX = 20;
 // 25: the label becomes the Shopify order tag "Ordering Desk: <label>",
 // which Shopify caps at 40 characters (src/lib/status-label.ts).
 export { STATUS_LABEL_MAX };
-// The Shopify states a status may mirror (platform amendment section 4).
-export const SHOPIFY_LINKS = ["fulfilled", "delivered"] as const;
+// The Shopify states a status may mirror (platform amendment section 4),
+// and the draft order outcomes a status may receive: draft_completed is
+// where Approve (or completing the draft in Shopify) puts a request,
+// draft_rejected where Reject puts it (draft orders spec section 8.1). One
+// status per link.
+export const SHOPIFY_LINKS = SHOPIFY_LINK_VALUES;
 export type ShopifyLink = (typeof SHOPIFY_LINKS)[number];
+const LINK_NAMES: Record<ShopifyLink, string> = {
+  fulfilled: "Shopify's fulfilled state",
+  delivered: "Shopify's delivered state",
+  draft_completed: "Draft approved",
+  draft_rejected: "Draft rejected",
+};
 
 export type InUseStatus = { key: string; label: string; count: number };
 
@@ -88,7 +98,7 @@ function parseEntries(body: unknown): Entry[] | string {
     } else if (typeof raw.shopifyLink === "string" && (SHOPIFY_LINKS as readonly string[]).includes(raw.shopifyLink)) {
       shopifyLink = raw.shopifyLink as ShopifyLink;
     } else {
-      return `${position}: the Shopify link must be fulfilled, delivered or none`;
+      return `${position}: the Shopify link must be fulfilled, delivered, draft completed, draft rejected or none`;
     }
     entries.push({ key, label, color, triggersPo: raw.triggersPo, shopifyLink });
   }
@@ -170,7 +180,7 @@ export async function replaceStatuses(
     if (linked.length > 1) {
       return {
         kind: "invalid",
-        error: `Only one status can follow Shopify's ${state} state; ${linked.map((entry) => entry.label).join(" and ")} both do`,
+        error: `Only one status can follow ${LINK_NAMES[state]}; ${linked.map((entry) => entry.label).join(" and ")} both do`,
       };
     }
   }

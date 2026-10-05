@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/ArrowSquareOut";
 import { ChatTextIcon } from "@phosphor-icons/react/ChatText";
 import { CheckIcon } from "@phosphor-icons/react/Check";
+import { CheckCircleIcon } from "@phosphor-icons/react/CheckCircle";
 import { CopyIcon } from "@phosphor-icons/react/Copy";
 import { FileTextIcon } from "@phosphor-icons/react/FileText";
 import { InfoIcon } from "@phosphor-icons/react/Info";
@@ -12,6 +13,7 @@ import { PaperPlaneRightIcon } from "@phosphor-icons/react/PaperPlaneRight";
 import { ShoppingBagIcon } from "@phosphor-icons/react/ShoppingBag";
 import { StorefrontIcon } from "@phosphor-icons/react/Storefront";
 import { TagIcon } from "@phosphor-icons/react/Tag";
+import { TrashIcon } from "@phosphor-icons/react/Trash";
 import { WarningIcon } from "@phosphor-icons/react/Warning";
 import { XIcon } from "@phosphor-icons/react/X";
 import { formatDateTime, formatMoney, relativeTime, sentenceCase, shopifyAdminOrderUrl } from "@/lib/format";
@@ -250,6 +252,8 @@ const EVENT_ICONS: Record<EventView["type"], typeof ChatTextIcon> = {
   po_failed: WarningIcon,
   sync_error: WarningIcon,
   shopify_write: StorefrontIcon,
+  draft_completed: CheckCircleIcon,
+  draft_deleted: TrashIcon,
 };
 
 // A Shopify write that failed reads as a warning, so it stands out.
