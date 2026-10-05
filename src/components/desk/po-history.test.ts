@@ -261,26 +261,78 @@ describe("SendConfirm", () => {
     const question = html.match(new RegExp(`<p id="${labelledBy}"[^>]*>`))?.[0] ?? "";
     expect(question).toContain('tabindex="-1"');
   });
+
+  // Why the step asks again (the PO changed since the review, or the last
+  // press could not be confirmed) is the first thing seen and heard: right
+  // under the question, above the addresses and the line list, able to take
+  // focus, and read out with the send button.
+  it("puts why it asks again right under the question, focusable, and describes the send with it", () => {
+    const fresh = poFixture({ notes: "Leave at the side door", contentVersion: "2.bbbb" });
+    const reason = "This purchase order changed since you reviewed it. Check what will go out now and confirm again.";
+    const html = confirmStep(reconfirmPending(pendingOf(), { recipients: NORTH, message: reason, po: fresh }, "request-9"));
+    const questionId = html.match(/role="group" aria-labelledby="([^"]+)"/)?.[1] ?? "";
+    const afterQuestion = html.match(new RegExp(`<p id="${questionId}"[^>]*>[\\s\\S]*?</p>(<div[^>]*>)`));
+    expect(afterQuestion).toBeTruthy();
+    const messageTag = afterQuestion?.[1] ?? "";
+    expect(messageTag).toContain('tabindex="-1"');
+    const messageId = messageTag.match(/id="([^"]+)"/)?.[1] ?? "";
+    expect(messageId).toBeTruthy();
+    expect(messageId).not.toBe(questionId);
+    expect(html.indexOf(reason)).toBeGreaterThan(html.indexOf(messageTag));
+    expect(html.indexOf(reason)).toBeLessThan(html.indexOf(">To</dt>"));
+    expect(html.indexOf(reason)).toBeLessThan(html.indexOf("Leave at the side door"));
+    expect(html.split(reason)).toHaveLength(2);
+    const send = html.match(/<button[^>]*aria-describedby="([^"]+)"[^>]*>[\s\S]*?Send to vendor/)?.[1] ?? "";
+    expect(send.split(" ")).toEqual([questionId, messageId]);
+  });
+
+  it("describes the send with the question alone when there is no message", () => {
+    const html = confirmStep(pendingOf());
+    const questionId = html.match(/role="group" aria-labelledby="([^"]+)"/)?.[1] ?? "";
+    const send = html.match(/<button[^>]*aria-describedby="([^"]+)"[^>]*>[\s\S]*?Send to vendor/)?.[1] ?? "";
+    expect(send).toBe(questionId);
+    expect(html).not.toMatch(new RegExp(`<p id="${questionId}"[^>]*>[\\s\\S]*?</p><div[^>]*tabindex="-1"`));
+  });
+
+  it("shows an offline or error message under the question too", () => {
+    const html = confirmStep(pendingOf({ message: "Could not reach the server, so it is not known whether it went out." }));
+    const questionId = html.match(/role="group" aria-labelledby="([^"]+)"/)?.[1] ?? "";
+    expect(html).toMatch(new RegExp(`<p id="${questionId}"[^>]*>[\\s\\S]*?</p><div id="[^"]+" tabindex="-1"[^>]*><div role="status"[^>]*>[\\s\\S]*?Could not reach the server`));
+  });
 });
 
 describe("confirmFocus", () => {
-  const step = (busy: boolean, requestId = "r1") => ({ busy, requestId });
+  const step = (busy: boolean, requestId = "r1", message = false) => ({ busy, requestId, message });
 
   it("puts focus on the question when the step opens", () => {
     expect(confirmFocus(null, step(false))).toBe("question");
   });
 
-  it("puts focus on the question again for a new confirmation (who it goes to changed)", () => {
+  it("puts focus on the question for a new confirmation that carries no message", () => {
     expect(confirmFocus(step(true, "r1"), step(false, "r2"))).toBe("question");
   });
 
-  it("gives focus back to the send button when the same send settles and the step stays open", () => {
+  // A 409: the PO changed since the review. The reason is what to hear and
+  // see first, not the question, which may read exactly as before.
+  it("puts focus on the message for a new confirmation that says why it asks again", () => {
+    expect(confirmFocus(step(true, "r1"), step(false, "r2", true))).toBe("message");
+  });
+
+  // An error or offline answer keeps the same confirmation open: focus goes
+  // to what happened, which says to press the send button again.
+  it("puts focus on the message when the same send settles with one", () => {
+    expect(confirmFocus(step(true), step(false, "r1", true))).toBe("message");
+    expect(confirmFocus(step(true, "r1", true), step(false, "r1", true))).toBe("message");
+  });
+
+  it("gives focus back to the send button when the same send settles without a message", () => {
     expect(confirmFocus(step(true), step(false))).toBe("send");
   });
 
   it("leaves focus alone otherwise", () => {
     expect(confirmFocus(step(false), step(true))).toBeNull();
     expect(confirmFocus(step(false), step(false))).toBeNull();
+    expect(confirmFocus(step(false, "r1", true), step(false, "r1", true))).toBeNull();
   });
 });
 

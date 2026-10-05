@@ -7,7 +7,8 @@
 // content (PoView.contentVersion), so the server sends nothing else: when
 // the PO changed since the step opened (another manager saved it, the
 // vendor was edited), it answers with the PO as it would go out now and the
-// step shows that and asks again. It opens with focus on its question,
+// step shows that and asks again, with focus on why (a message right under
+// the question). It opens with focus on its question,
 // never on the send, and ignores a send pressed in its first moment, so the
 // press that opened it cannot also send. Used by the review modal (its
 // Review and send) and by Retry and Review and send again in the drawer's
@@ -155,20 +156,28 @@ export function confirmArmed(openedAt: number | null, now: number): boolean {
   return openedAt !== null && now - openedAt >= CONFIRM_ARM_MS;
 }
 
-type StepFocusState = { busy: boolean; requestId: string };
+// message: the step shows a message (why it asks again, or what happened to
+// the last press).
+type StepFocusState = { busy: boolean; requestId: string; message: boolean };
 
-// Where focus goes as the step changes. When it opens, and for every new
-// confirmation (new recipients), focus lands on the question, never on the
-// irreversible send: the WAI-ARIA practice for an action that cannot be
-// undone, and so a double or held Enter from the button that opened the
-// step cannot send. When the same send settles and the step stays open (a
-// message to read, then send again), focus goes back to its send button,
-// which was disabled while sending.
-export function confirmFocus(previous: StepFocusState | null, next: StepFocusState): "question" | "send" | null {
+// Where focus goes as the step changes, never on the irreversible send when
+// a new confirmation appears: the WAI-ARIA practice for an action that
+// cannot be undone, and so a double or held Enter from the button that
+// opened the step cannot send. When it opens, focus lands on the question.
+// A new confirmation (the PO changed since the review) lands on its message,
+// which sits right under the question and says why it asks again: the
+// question itself may read exactly as before. When the same send settles
+// and the step stays open (an error, or no answer from the server), focus
+// goes to the message too, which says what happened; without one it goes
+// back to the send button, which was disabled while sending.
+export function confirmFocus(previous: StepFocusState | null, next: StepFocusState): "question" | "message" | "send" | null {
   if (previous === null || previous.requestId !== next.requestId) {
-    return "question";
+    return next.message ? "message" : "question";
   }
-  return previous.busy && !next.busy ? "send" : null;
+  if (previous.busy && !next.busy) {
+    return next.message ? "message" : "send";
+  }
+  return null;
 }
 
 export function SendConfirm({
@@ -184,11 +193,14 @@ export function SendConfirm({
 }) {
   const confirmRef = useRef<HTMLButtonElement>(null);
   const questionRef = useRef<HTMLParagraphElement>(null);
+  const messageRef = useRef<HTMLDivElement>(null);
   const questionId = useId();
+  const messageId = useId();
   const linesId = useId();
   const focusState = useRef<StepFocusState | null>(null);
   const openedAt = useRef<number | null>(null);
   const summary = recipientSummary(pending.recipients);
+  const hasMessage = Boolean(pending.message);
   // A line without a cost cannot go out (the server refuses it too).
   const sendable = pending.content.lines.length > 0 && pending.content.subtotal !== null;
 
@@ -198,15 +210,17 @@ export function SendConfirm({
   }, [pending.requestId]);
 
   useEffect(() => {
-    const next = { busy, requestId: pending.requestId };
+    const next = { busy, requestId: pending.requestId, message: hasMessage };
     const target = confirmFocus(focusState.current, next);
     focusState.current = next;
     if (target === "question") {
       questionRef.current?.focus();
+    } else if (target === "message") {
+      messageRef.current?.focus();
     } else if (target === "send") {
       confirmRef.current?.focus();
     }
-  }, [busy, pending.requestId]);
+  }, [busy, pending.requestId, hasMessage]);
 
   return (
     <div
@@ -223,6 +237,14 @@ export function SendConfirm({
       <p ref={questionRef} id={questionId} tabIndex={-1} className="text-sm font-semibold text-ink outline-none">
         {pending.resend ? `Send ${pending.label} again to ${pending.vendorName}?` : `Send ${pending.label} to ${pending.vendorName}?`}
       </p>
+      {/* Why it asks again, or what happened to the last press: first, above
+          what goes out, so it is what is seen and heard before anything else
+          (focus lands here), and the send button is described by it. */}
+      {pending.message ? (
+        <div ref={messageRef} id={messageId} tabIndex={-1} className="rounded-panel outline-none">
+          <InlineMessage tone="warn">{pending.message}</InlineMessage>
+        </div>
+      ) : null}
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm">
         <dt className="text-ink-2">To</dt>
         <dd className="break-all text-ink">{summary.to}</dd>
@@ -233,7 +255,6 @@ export function SendConfirm({
       <p className="text-xs text-ink-2">
         This is exactly what goes out, with the PDF attached. Once it is sent, it cannot be taken back.
       </p>
-      {pending.message ? <InlineMessage tone="warn">{pending.message}</InlineMessage> : null}
       {!sendable ? (
         <InlineMessage tone="bad">A line has no unit cost, so this cannot be sent. Cancel and enter every cost first.</InlineMessage>
       ) : null}
@@ -250,7 +271,7 @@ export function SendConfirm({
             }
           }}
           disabled={busy || !sendable}
-          aria-describedby={questionId}
+          aria-describedby={pending.message ? `${questionId} ${messageId}` : questionId}
           className={ui.buttonPrimary}
         >
           <PaperPlaneTiltIcon size={16} aria-hidden />
