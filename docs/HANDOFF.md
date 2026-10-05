@@ -1413,3 +1413,25 @@ an address on a domain you have onboarded.
   - enableDevicePush maps a dismissed permission prompt ("default") to
     blocked, so the blocked message shows until the page is reloaded even
     though the browser would ask again.
+
+
+## STATE UPDATE, 2026-10-05 PO send step message first (supersedes above)
+
+- Branch build/m1-core, on top of c932edd: 3ba4a92 (send step message
+  placement and focus), plus this docs commit. Not pushed, not deployed.
+  No migration, no dependency, no secret or wrangler change.
+- PO send step (src/components/desk/po-send-confirm.tsx): its message (why
+  it asks again after a 409, or what happened after an error or no answer
+  from the server) now sits right under the question, above To, Copies and
+  the line list, in an element with its own id and tabIndex -1.
+  - Focus (confirmFocus): on open, the question. A new confirmation with a
+    message (409) lands on the message, not the question, which may read
+    exactly as before. A send that settles with the step still open (error,
+    offline) lands on the message too; it says to press the send button
+    again. Only without a message does focus go back to the send button.
+  - The send button is described by the question and, when there is one,
+    the message (aria-describedby "<question> <message>").
+- Known limits: not checked in a browser this round (unit tests and
+  `npm run build` only); a 409 refresh in local dev (save from a second tab
+  while the step is open) is still worth a look. The "line has no unit
+  cost" notice stays above the buttons, since the send is disabled then.
