@@ -23,6 +23,8 @@ import type { EventView, StatusView } from "@/server/desk/shapes";
 import { ui } from "@/components/ui";
 import { StatusSelect } from "./status-select";
 import { APP_NAME } from "@/lib/brand";
+import type { PoView } from "@/server/po/service";
+import { PurchaseOrders } from "./po-history";
 
 export type DrawerOrder = {
   id: string;
@@ -426,6 +428,7 @@ function HeaderSkeleton() {
 
 export function OrderDrawerContent({
   labelId,
+  orderId,
   summary,
   detail,
   timeline,
@@ -440,8 +443,13 @@ export function OrderDrawerContent({
   onAddNote,
   onClose,
   onRetry,
+  canManagePos,
+  poRefreshKey,
+  onCreatePo,
+  onEditPo,
 }: {
   labelId: string;
+  orderId: string;
   summary: OrderSummary | undefined;
   detail: DrawerDetail;
   timeline: EventView[];
@@ -457,6 +465,12 @@ export function OrderDrawerContent({
   onAddNote: (text: string) => Promise<string | null>;
   onClose: () => void;
   onRetry: () => void;
+  // Managers and platform admins create and send purchase orders; staff
+  // see the history only (the server enforces it either way).
+  canManagePos: boolean;
+  poRefreshKey: number;
+  onCreatePo: () => void;
+  onEditPo: (po: PoView) => void;
 }) {
   const order = detail.status === "ready" ? detail.order : null;
   const snapshot = order ? readSnapshot(order.shopify) : null;
@@ -677,6 +691,14 @@ export function OrderDrawerContent({
                 </p>
               ) : null}
             </Section>
+
+            <PurchaseOrders
+              orderId={orderId}
+              canManage={canManagePos}
+              refreshKey={poRefreshKey}
+              onCreate={onCreatePo}
+              onEdit={onEditPo}
+            />
           </>
         ) : null}
 

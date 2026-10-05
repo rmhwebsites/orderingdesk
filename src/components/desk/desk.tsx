@@ -9,6 +9,7 @@ import {
   selectOrders,
   statusChips,
   totalOrders,
+  touchesPurchaseOrders,
   type DeskFilter,
   type DeskState,
   type LiveEffects,
@@ -18,6 +19,7 @@ import { roleAtLeast } from "@/lib/roles";
 import type { LiveEvent, LiveOrderStatus } from "@/lib/live-events";
 import type { OrderSummary } from "@/server/desk/read";
 import type { EventView, StatusView } from "@/server/desk/shapes";
+import type { PoView } from "@/server/po/service";
 import { useWorkspace } from "@/components/shell/workspace-provider";
 import { useToast } from "@/components/toasts";
 import { DeskSkeleton } from "./desk-skeleton";
@@ -30,6 +32,7 @@ import {
   type MemberView,
 } from "./order-drawer";
 import { OrderCards, OrderTable } from "./order-list";
+import { PoModal } from "./po-modal";
 import { StatusStrip } from "./status-strip";
 import { Toolbar } from "./toolbar";
 
@@ -105,6 +108,11 @@ export function Desk() {
   const openRef = useRef(openOrderId);
   const pushedRef = useRef(false);
   const membersLoadedAt = useRef(0);
+  // The purchase order review modal (managers and platform admins), and a
+  // counter that reloads the open drawer's PO history.
+  const canManagePos = roleAtLeast(role, "manager");
+  const [poModal, setPoModal] = useState<{ orderId: string; po: PoView | null } | null>(null);
+  const [poRefresh, setPoRefresh] = useState(0);
 
   // Status changes still waiting for the server, re-applied over any reload
   // that lands meanwhile so the row does not flick back.
@@ -319,6 +327,9 @@ export function Desk() {
       if (event.kind === "order.status") {
         setDetail((current) => withDetailStatus(current, event.order));
       }
+      if (touchesPurchaseOrders(event, openRef.current)) {
+        setPoRefresh((count) => count + 1);
+      }
       handleEffects(effects);
     },
     [userId, commit, handleEffects],
@@ -377,13 +388,19 @@ export function Desk() {
         }
         applyEvent({ kind: "order.status", event: body.event, order: body.order });
         if (body.triggersPo) {
-          // Phase 7 replaces this with the purchase order review modal.
-          const label = statuses.find((status) => status.key === nextKey)?.label ?? "This status";
-          toast({
-            title: "Purchase orders are coming soon",
-            body: `${label} will open a purchase order here once that feature ships. The status change is saved.`,
-            tone: "info",
-          });
+          // The status is saved either way. Managers review a purchase
+          // order now (nothing is sent until they confirm it); staff are
+          // told a manager will.
+          if (canManagePos) {
+            setPoModal({ orderId, po: null });
+          } else {
+            const label = statuses.find((status) => status.key === nextKey)?.label ?? "This status";
+            toast({
+              title: `${label} usually needs a purchase order`,
+              body: "A manager creates and sends it from the order.",
+              tone: "info",
+            });
+          }
         }
       } catch {
         pendingStatus.current.delete(orderId);
@@ -399,7 +416,7 @@ export function Desk() {
         });
       }
     },
-    [commit, applyEvent, statuses, toast],
+    [commit, applyEvent, statuses, toast, canManagePos],
   );
 
   const addNote = useCallback(
@@ -528,6 +545,7 @@ export function Desk() {
         {drawerOrderId ? (
           <OrderDrawerContent
             labelId={DRAWER_TITLE_ID}
+            orderId={drawerOrderId}
             summary={drawerSummary}
             detail={detail}
             timeline={drawerTimeline}
@@ -542,9 +560,32 @@ export function Desk() {
             onAddNote={(text) => addNote(drawerOrderId, text)}
             onClose={closeOrder}
             onRetry={() => void loadDrawer(drawerOrderId, false)}
+            canManagePos={canManagePos}
+            poRefreshKey={poRefresh}
+            onCreatePo={() => setPoModal({ orderId: drawerOrderId, po: null })}
+            onEditPo={(po) => setPoModal({ orderId: drawerOrderId, po })}
           />
         ) : null}
       </DrawerShell>
+
+      {poModal && canManagePos ? (
+        <PoModal
+          key={`${poModal.orderId}-${poModal.po?.id ?? "new"}`}
+          workspaceId={workspace.id}
+          orderId={poModal.orderId}
+          po={poModal.po}
+          onClose={() => setPoModal(null)}
+          onSaved={() => setPoRefresh((count) => count + 1)}
+          onSent={(po) => {
+            setPoRefresh((count) => count + 1);
+            toast({
+              title: `Purchase order ${po.number ?? ""} sent`,
+              body: po.vendor ? `To ${po.vendor.name}` : undefined,
+              tone: "good",
+            });
+          }}
+        />
+      ) : null}
     </main>
   );
 }
