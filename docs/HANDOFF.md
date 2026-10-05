@@ -481,6 +481,9 @@ ticket.
    - read_merchant_managed_fulfillment_orders and
      write_merchant_managed_fulfillment_orders (moving an order to Shipped
      marks it fulfilled in Shopify, without emailing the customer)
+   - optional: read_all_orders, only to import orders older than 60 days
+     (Order history, below). Shopify may ask you to request this scope for
+     the app first; that was not checked live.
 3. Install the app on the store and approve those permissions there.
 4. In the Dev Dashboard, open the app's settings and copy its Client ID and
    Client secret.
@@ -530,6 +533,18 @@ Once connected:
   connected with the token instead of a Client ID and secret. It needs the
   same permissions, gets no live updates (its webhooks could not be
   verified), and syncs every 10 minutes.
+- Importing older orders: the sync only brings in the last 60 days. In
+  the workspace's Settings, Store connection, Order history (hub only,
+  platform admins), choose "All orders" or "Orders since a date" and press
+  Start import. It runs in the background, about 100 orders every 10
+  minutes, newest first, after the regular sync has caught up; the page
+  shows the count and can stop it (what was imported stays). Imported
+  orders start at the status their Shopify state or status tag implies,
+  nobody is notified, they stay out of the bell, and nothing is written to
+  Shopify. Anything older than 60 days needs read_all_orders: add it to
+  the app, approve the new version on the store, connect again, then
+  start the import (without it Ordering Desk refuses to start, because
+  Shopify would silently return only the last 60 days).
 
 ## STATE UPDATE, 2026-10-02 platform phase Shopify stage (supersedes above)
 
@@ -1080,4 +1095,89 @@ an address on a domain you have onboarded.
     landing during a long run just after Mark all read can count as read.
   - Client hosts still have no sign-out button (only the hub has one), so
     signing out there cannot forget the device yet.
+
+## STATE UPDATE, 2026-10-04 order history import (supersedes above)
+
+- Branch build/m1-core, on top of fb95252: 22b967e (import engine, cron
+  tick, routes, migration 0008), f162bc0 (Settings panel), plus this docs
+  commit. Not pushed, not deployed.
+- NEW MIGRATION 0008 (drizzle/0008_order_history_import.sql): seven
+  columns on store_connections (backfill_status, backfill_since,
+  backfill_cursor, backfill_imported NOT NULL DEFAULT 0,
+  backfill_started_at, backfill_finished_at, backfill_error), additive,
+  existing rows read as "never imported". Applied locally. DEPLOY ORDER:
+  `npm run db:migrate:remote` FIRST (applies 0007 and 0008), then deploy.
+  runSync selects the whole store_connections row and drizzle names every
+  column in an insert, so code deployed before 0008 fails every sync and
+  every connection save (the sync test pinning the minimum schema is
+  raised to 0008).
+- Engine (src/server/sync/backfill.ts, header documents the rules):
+  - startBackfill / cancelBackfill / getBackfillView; routes GET, POST
+    ({range: "all"} or {range: "since", since: ms}) and DELETE
+    /api/workspaces/[id]/backfill, requireMember(id, "platform"), so 404
+    for everyone else and for a platform admin on a client host. 400 bad
+    input or a start date less than a day ago, 409 no connected store, a
+    connection in error or an import already running, 422 missing
+    read_all_orders.
+  - The cron (runAllSyncs) calls runBackfillTick after each workspace's
+    sync and roster sync: at most BACKFILL_PAGES_PER_TICK = 20 pages of 5
+    orders, about 20 Shopify requests and under 200 D1 statements. Query:
+    the sync's ORDER_FIELDS (same cost, 798), sortKey CREATED_AT, reverse
+    (newest first), search created_at >= since and < (start minus 24
+    hours). Its own cursor in backfill_cursor; sync_cursor,
+    sync_cursor_since, last_sync_at, last_error and status are never
+    written by it.
+  - Lease: a tick takes running_until like runSync (so it never overlaps a
+    sync of the same workspace; a Sync button press during a tick answers
+    "already running"), waits while sync_cursor is set (regular sync
+    catching up), pauses while the store is disconnected, and fences every
+    progress write on its lease and on the import's started_at, so a stop,
+    a new import, a connection save or a disconnect wins. A shop change in
+    saveConnection clears the import; new credentials for the same shop
+    keep it.
+  - Writes only orders not stored yet, through insertNewOrder (extracted
+    from writeOrderSnapshot in run.ts): conflict no-op inserts,
+    initialStatusFor (status tag, else linked Shopify state, else first
+    status), orders.notified_at set at insert (so notifyNewOrders never
+    claims them) and an order_new event "Order #N imported from the
+    store's order history" with meta.imported = true. Stored orders are
+    not claimed or rewritten (the regular sync owns them). Orders Shopify
+    returns outside the range are skipped.
+  - CHOICE on order_new: the events are created (the drawer timeline shows
+    the import) and marked; the bell (src/server/activity.ts bellWorthy)
+    leaves meta.imported events out of the feed and the unread count.
+  - Failures: a blip (throttle, 5xx, timeout) keeps it running with
+    backfill_error shown and the cursor kept; rejected credentials, a 401
+    or a GraphQL error Shopify will repeat (a stale cursor) fail it; a
+    reconnect without read_all_orders fails it at the next tick without
+    asking Shopify.
+  - Open desks refresh through a new live event, orders.imported {count}:
+    a refetch with nothing announced or flashed (older clients ignore the
+    unknown kind).
+- Settings > Store connection > Order history (platform admins, hub):
+  src/components/settings/order-history.tsx, helpers in
+  src/lib/order-history.ts. Polls GET every 30 seconds while running and
+  visible.
+- Known limits and things not verified live:
+  - No live import has run: the created_at search with an exact
+    timestamp, sortKey CREATED_AT with reverse, and Shopify's behavior
+    without read_all_orders (assumed: silently only the last 60 days) are
+    from Shopify's published docs and stubbed tests only. First live run:
+    start "Orders since" a recent date inside 60 days and watch the
+    "[backfill]" log lines and the count.
+  - Whether read_all_orders needs a request in the Dev Dashboard before an
+    app can be granted it was not checked.
+  - Historical orders that Shopify never fulfilled (cancelled, refunded,
+    picked up without a fulfillment) start in the first status (New), so a
+    big import can swell that count. Moving them is a manual job for now.
+  - Speed: about 600 orders an hour (100 per 10 minute tick), and nothing
+    while the regular sync is catching up. A cancel during a tick's write
+    loop lets that loop finish (at most 100 inserts) before it stops.
+  - After an import, later Shopify changes to an imported order follow the
+    normal rules (the regular sync refreshes it, and a status move from
+    Shopify writes the status tag back like any order).
+  - `npx tsc --noEmit` with the checked-in incremental setting reported no
+    errors while `npx tsc --noEmit --incremental false` found one during
+    this stage (a stale tsconfig.tsbuildinfo); run the second form before
+    committing.
 
