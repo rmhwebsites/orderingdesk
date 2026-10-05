@@ -66,7 +66,7 @@ import {
   createFulfillment,
   failureText,
   fetchFulfillableOrderIds,
-  fetchOrderTags,
+  fetchStatusTags,
   removeOrderTags,
   type AdminFailure,
 } from "./admin";
@@ -410,7 +410,7 @@ async function writeStatus(
   });
   const desired = statusTag(status.label);
 
-  const current = await fetchOrderTags(shopDomain, token, orderGid, fetchImpl);
+  const current = await fetchStatusTags(shopDomain, token, orderGid, fetchImpl);
   if (current.kind === "ok" && current.tags === null) {
     failures.push("Shopify no longer has this order");
     return outcome();

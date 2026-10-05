@@ -1,5 +1,5 @@
 // The lines a new purchase order starts from (the review modal's prefill).
-// The sync stores at most 48 line items per order and marks a partial list
+// The sync stores at most 35 line items per order and marks a partial list
 // (itemsTruncated; anything but an explicit false counts as partial). A PO
 // is never prefilled from a partial list: the full list is read from
 // Shopify on demand, and when that fails the prefill is refused with the

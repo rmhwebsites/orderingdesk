@@ -1,12 +1,14 @@
 // The Shopify Admin operations of the two-way sync (platform amendment
 // sections 2 to 4): webhook subscriptions, one order, one customer, the
-// tagged-customer roster, status tags and fulfillments. Every request goes
+// tagged-customer roster, status tags and fulfillments; and for draft orders
+// (draft orders spec section 3): one draft, the draft link lookup, and the
+// approve documents. Every request goes
 // through shopifyGraphql (allowlisted host, no redirects, timeout, no token
 // in any detail) with every runtime value in variables. Relative imports on
 // purpose: the cron path bundles this into the custom worker entrypoint.
 // Callers always get a typed result, never an exception.
 
-import { ORDER_FIELDS, shopifyGraphql, type GraphqlResult } from "./client";
+import { DRAFT_FIELDS, ORDER_FIELDS, shopifyGraphql, type GraphqlResult } from "./client";
 import { normalizeLineItems, type NormalizedOrder } from "./normalize";
 
 export type AdminFailure =
@@ -154,7 +156,7 @@ export async function replaceWebhookSubscriptions(
 
 // The same selection as the sync's page query (ORDER_FIELDS), so the node
 // normalizes to exactly the snapshot shape the sync stores. One order costs
-// about 160 points by the client.test.ts estimator.
+// about 157 points by the client.test.ts estimator.
 const ORDER_QUERY = `query OrderById($id: ID!) {
   order(id: $id) {${ORDER_FIELDS}
   }
@@ -175,8 +177,201 @@ export async function fetchOrderNode(
 }
 
 // ---------------------------------------------------------------------------
+// Draft orders (draft orders spec sections 3.3 to 3.6)
+
+// gid://shopify/DraftOrder/<legacy id>
+export function draftGid(draftId: string): string {
+  return `gid://shopify/DraftOrder/${draftId}`;
+}
+
+// The same selection as the drafts page query (DRAFT_FIELDS), about 159
+// points by the client.test.ts estimator.
+export const DRAFT_ORDER_QUERY = `query DraftOrderById($id: ID!) {
+  draftOrder(id: $id) {${DRAFT_FIELDS}
+  }
+}`;
+
+// The raw draft node, or null when Shopify has no such draft (deleted, or
+// purged after a year without activity).
+export async function fetchDraftNode(
+  shopDomain: string,
+  token: string,
+  draftOrderGid: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ kind: "ok"; node: Record<string, unknown> | null } | AdminFailure> {
+  const result = await shopifyGraphql(shopDomain, token, DRAFT_ORDER_QUERY, { id: draftOrderGid }, fetchImpl);
+  if (result.kind !== "ok") {
+    return failed(result);
+  }
+  return { kind: "ok", node: isRecord(result.data.draftOrder) ? result.data.draftOrder : null };
+}
+
+// Live objects, not the search index, so a draft completed a second ago is
+// seen as completed.
+export const DRAFT_LINKS_QUERY = `query DraftLinks($ids: [ID!]!) {
+  nodes(ids: $ids) {
+    ... on DraftOrder { id legacyResourceId status updatedAt order { id legacyResourceId name } }
+  }
+}`;
+export const DRAFT_LINK_CHUNK = 100;
+
+// What Shopify says about one draft now: still a request, completed (with
+// the legacy id and name of the order it became, when Shopify names it), or
+// gone (deleted or purged).
+export type DraftLink =
+  | { kind: "open" }
+  | { kind: "completed"; orderId: string | null; orderName: string | null }
+  | { kind: "gone" };
+
+function draftLinkOf(node: unknown): DraftLink | null {
+  if (node === null) {
+    return { kind: "gone" };
+  }
+  if (!isRecord(node) || typeof node.status !== "string") {
+    // Not a draft at all, or a shape this code does not know: no verdict.
+    return null;
+  }
+  if (node.status !== "COMPLETED") {
+    return { kind: "open" };
+  }
+  const order = isRecord(node.order) ? node.order : null;
+  const legacy = order?.legacyResourceId;
+  const orderId =
+    typeof legacy === "string" && legacy.length > 0
+      ? legacy
+      : typeof order?.id === "string" && order.id.length > 0
+        ? legacyIdOf(order.id)
+        : null;
+  const orderName = typeof order?.name === "string" && order.name.length > 0 ? order.name : null;
+  return { kind: "completed", orderId, orderName };
+}
+
+// The link state of each draft, by its legacy id, in chunks of
+// DRAFT_LINK_CHUNK ids per request. Shopify answers a deleted draft with
+// null in its place (gone). An id Shopify gave no usable verdict for is
+// left out of the map. Any failed chunk fails the whole lookup.
+export async function fetchDraftLinks(
+  shopDomain: string,
+  token: string,
+  draftIds: readonly string[],
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ kind: "ok"; links: Map<string, DraftLink> } | AdminFailure> {
+  const links = new Map<string, DraftLink>();
+  const ids = [...new Set(draftIds)];
+  for (let i = 0; i < ids.length; i += DRAFT_LINK_CHUNK) {
+    const chunk = ids.slice(i, i + DRAFT_LINK_CHUNK);
+    const result = await shopifyGraphql(shopDomain, token, DRAFT_LINKS_QUERY, { ids: chunk.map(draftGid) }, fetchImpl);
+    if (result.kind !== "ok") {
+      return failed(result);
+    }
+    const nodes = result.data.nodes;
+    if (!Array.isArray(nodes) || nodes.length !== chunk.length) {
+      return { kind: "transient", detail: "unexpected response shape" };
+    }
+    chunk.forEach((id, index) => {
+      const link = draftLinkOf(nodes[index]);
+      if (link) {
+        links.set(id, link);
+      }
+    });
+  }
+  return { kind: "ok", links };
+}
+
+// Read fresh right before an approval: the status, whether Shopify has
+// finished calculating the draft (ready), the order it became, the total.
+export const DRAFT_BEFORE_APPROVE_QUERY = `query DraftBeforeApprove($id: ID!) {
+  draftOrder(id: $id) {
+    id name status ready completedAt
+    order { id legacyResourceId name }
+    totalPriceSet { shopMoney { amount currencyCode } }
+  }
+}`;
+
+export type DraftForApprove = {
+  name: string;
+  // Shopify's own value: OPEN, INVOICE_SENT or COMPLETED.
+  status: string;
+  ready: boolean;
+  completedAt: string | null;
+  orderId: string | null;
+  orderName: string | null;
+  // The total as Shopify sent it (a decimal string), or null when missing.
+  total: string | null;
+  currency: string;
+};
+
+// The draft as Shopify has it now, or null when it no longer exists.
+export async function fetchDraftForApprove(
+  shopDomain: string,
+  token: string,
+  draftOrderGid: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ kind: "ok"; draft: DraftForApprove | null } | AdminFailure> {
+  const result = await shopifyGraphql(shopDomain, token, DRAFT_BEFORE_APPROVE_QUERY, { id: draftOrderGid }, fetchImpl);
+  if (result.kind !== "ok") {
+    return failed(result);
+  }
+  const node = result.data.draftOrder;
+  if (!isRecord(node)) {
+    return { kind: "ok", draft: null };
+  }
+  const link = draftLinkOf(node);
+  const money =
+    isRecord(node.totalPriceSet) && isRecord(node.totalPriceSet.shopMoney) ? node.totalPriceSet.shopMoney : {};
+  const amount = money.amount;
+  return {
+    kind: "ok",
+    draft: {
+      name: typeof node.name === "string" ? node.name : "",
+      status: typeof node.status === "string" ? node.status : "",
+      ready: node.ready === true,
+      completedAt: typeof node.completedAt === "string" ? node.completedAt : null,
+      orderId: link?.kind === "completed" ? link.orderId : null,
+      orderName: link?.kind === "completed" ? link.orderName : null,
+      total: typeof amount === "string" ? amount : typeof amount === "number" && Number.isFinite(amount) ? String(amount) : null,
+      currency: typeof money.currencyCode === "string" ? money.currencyCode : "USD",
+    },
+  };
+}
+
+// Completing a $0 draft with no other argument is what Mark as paid does:
+// no payment gateway, no source name, and paymentPending (deprecated) left
+// at its default false. The response carries the completed draft in the
+// sync's own selection.
+export const APPROVE_DRAFT_MUTATION = `mutation ApproveDraft($id: ID!) {
+  draftOrderComplete(id: $id) {
+    draftOrder {${DRAFT_FIELDS}
+    }
+    userErrors { field message }
+  }
+}`;
+
+// Completes the draft in Shopify. Variables are exactly { id }. userErrors
+// come back as refused, in Shopify's words. node: the completed draft (null
+// when Shopify sent none).
+export async function completeDraft(
+  shopDomain: string,
+  token: string,
+  draftOrderGid: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ kind: "ok"; node: Record<string, unknown> | null } | AdminFailure> {
+  const result = await shopifyGraphql(shopDomain, token, APPROVE_DRAFT_MUTATION, { id: draftOrderGid }, fetchImpl);
+  if (result.kind !== "ok") {
+    return failed(result);
+  }
+  const payload = result.data.draftOrderComplete;
+  const refused = userErrorsOf(payload);
+  if (refused) {
+    return { kind: "refused", detail: refused };
+  }
+  const node = isRecord(payload) && isRecord(payload.draftOrder) ? payload.draftOrder : null;
+  return { kind: "ok", node };
+}
+
+// ---------------------------------------------------------------------------
 // Every line item of one order (a purchase order prefill): the sync stores
-// only the first 48 and marks the rest as missing (itemsTruncated). 100 a
+// only the first 35 and marks the rest as missing (itemsTruncated). 100 a
 // page costs about 304 points by the client.test.ts estimator; at most 10
 // pages (1,000 line items) are read.
 
@@ -329,8 +524,14 @@ export async function fetchTaggedCustomers(
 // ---------------------------------------------------------------------------
 // Status tags and fulfillments (App -> Shopify)
 
-const ORDER_TAGS_QUERY = `query OrderTags($id: ID!) {
-  order(id: $id) { id tags }
+// Either kind (draft orders spec section 3.5): tagsAdd and tagsRemove take
+// a DraftOrder id unchanged. Never draftOrderUpdate for tags (it replaces
+// every tag, and updating a draft with a started checkout unlinks it).
+export const STATUS_TAGS_QUERY = `query StatusTags($id: ID!) {
+  node(id: $id) {
+    ... on Order { id tags }
+    ... on DraftOrder { id tags }
+  }
 }`;
 const TAGS_REMOVE = `mutation StatusTagRemove($id: ID!, $tags: [String!]!) {
   tagsRemove(id: $id, tags: $tags) { userErrors { field message } }
@@ -339,37 +540,39 @@ const TAGS_ADD = `mutation StatusTagAdd($id: ID!, $tags: [String!]!) {
   tagsAdd(id: $id, tags: $tags) { userErrors { field message } }
 }`;
 
-// The order's current tags, or null when Shopify has no such order.
-export async function fetchOrderTags(
+// The current tags of an order or a draft order (by its gid), or null when
+// Shopify has no such object.
+export async function fetchStatusTags(
   shopDomain: string,
   token: string,
-  orderGid: string,
+  gid: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ kind: "ok"; tags: string[] | null } | AdminFailure> {
-  const result = await shopifyGraphql(shopDomain, token, ORDER_TAGS_QUERY, { id: orderGid }, fetchImpl);
+  const result = await shopifyGraphql(shopDomain, token, STATUS_TAGS_QUERY, { id: gid }, fetchImpl);
   if (result.kind !== "ok") {
     return failed(result);
   }
-  const order = result.data.order;
-  if (!isRecord(order)) {
+  const node = result.data.node;
+  if (!isRecord(node) || typeof node.id !== "string") {
     return { kind: "ok", tags: null };
   }
   return {
     kind: "ok",
-    tags: Array.isArray(order.tags) ? order.tags.filter((tag): tag is string => typeof tag === "string") : [],
+    tags: Array.isArray(node.tags) ? node.tags.filter((tag): tag is string => typeof tag === "string") : [],
   };
 }
 
+// The gid may name an Order or a DraftOrder.
 async function tagMutation(
   document: string,
   field: "tagsAdd" | "tagsRemove",
   shopDomain: string,
   token: string,
-  orderGid: string,
+  gid: string,
   tags: string[],
   fetchImpl: typeof fetch,
 ): Promise<{ kind: "ok" } | AdminFailure> {
-  const result = await shopifyGraphql(shopDomain, token, document, { id: orderGid, tags }, fetchImpl);
+  const result = await shopifyGraphql(shopDomain, token, document, { id: gid, tags }, fetchImpl);
   if (result.kind !== "ok") {
     return failed(result);
   }

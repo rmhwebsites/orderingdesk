@@ -84,21 +84,23 @@ const REQUEST_TIMEOUT_MS = 90000;
 // a query whose requested cost is above 1,000 points before running it, on
 // every plan. Scalars are free, an object costs 1 point and a connection 2,
 // and everything selected under a connection is multiplied by its page size.
-// One order therefore costs 10 points (the order, two price sets of two
-// objects each, customer, shipping address, the line item connection and its
-// pageInfo), 5 for its fulfillment list (3 slots; a sized list of objects is
-// not a connection and Shopify does not document its price, so client.test.ts
-// prices it like one, which can only overstate it), plus 3 per line item slot
-// (the item and its price set), which makes orders x line items the whole
-// budget. Five orders of up to 48 line items request 3 + 5 x 159 = 798; a
-// 49th slot would make it 813. client.test.ts prices the query that is
-// actually sent and fails above 800, and raising any of these numbers means
-// lowering another. An order with more line items keeps its first 48 and is
-// stored with itemsTruncated set (from the line item pageInfo, see
-// normalize.ts), so nothing built from the snapshot can mistake it for the
-// whole order.
+// One order therefore costs 11 points (the order, its cart attribute list,
+// two price sets of two objects each, customer, shipping address, the line
+// item connection and its pageInfo), 5 for its fulfillment list (3 slots; a
+// sized list of objects is not a connection and Shopify does not document
+// its price, so client.test.ts prices it like one, which can only overstate
+// it), plus 4 per line item slot (the item, its property list and its price
+// set), which makes orders x line items the whole budget. Five orders of up
+// to 35 line items request 3 + 5 x (16 + 4 x 35) = 783. client.test.ts
+// prices the query that is actually sent and fails above 800, and raising
+// any of these numbers means lowering another. An order with more line
+// items keeps its first 35 and is stored with itemsTruncated set (from the
+// line item pageInfo, see normalize.ts), so nothing built from the snapshot
+// can mistake it for the whole order.
 export const ORDERS_PER_PAGE = 5;
-const LINE_ITEMS_PER_ORDER = 48;
+// One constant for orders and drafts, so a draft and the order it becomes
+// list the same lines.
+export const LINE_ITEMS = 35;
 // The delivered state lives on each fulfillment (displayStatus). A list that
 // comes back with all 3 slots filled may continue beyond them, so normalize
 // never reads such an order as delivered (see deliveredOf in normalize.ts).
@@ -120,17 +122,71 @@ export const ORDER_FIELDS = `
       email
       tags
       note
+      sourceName
       displayFinancialStatus
       displayFulfillmentStatus
+      customAttributes { key value }
       currentTotalPriceSet { shopMoney { amount currencyCode } }
       totalPriceSet { shopMoney { amount currencyCode } }
       customer { firstName lastName displayName email }
       shippingAddress { name firstName lastName address1 address2 city provinceCode zip countryCodeV2 }
       fulfillments(first: ${FULFILLMENTS_PER_ORDER}) { displayStatus }
-      lineItems(first: ${LINE_ITEMS_PER_ORDER}) {
-        nodes { title quantity sku variantTitle originalUnitPriceSet { shopMoney { amount } } }
+      lineItems(first: ${LINE_ITEMS}) {
+        nodes { title quantity sku variantTitle customAttributes { key value } originalUnitPriceSet { shopMoney { amount } } }
         pageInfo { hasNextPage }
       }`;
+
+// Draft orders (draft orders spec section 3.3): one draft costs 19 points
+// (the draft, its cart attribute list, the order it became, customer, the
+// purchasing entity (1, plus 3 for the company fragment as the estimator
+// prices it, which overstates Shopify's "maximum of possible selections"
+// rule by 1), shipping address, applied discount, three price sets of two
+// objects each, the line item connection and its pageInfo) plus 4 per line
+// item slot, so four drafts of up to 35 lines request 3 + 4 x (19 + 4 x 35)
+// = 639. Five would be 798, at the edge; drafts are far fewer than orders.
+// Left out on purpose: product and variant (need read_products),
+// paymentTerms (needs read_payment_terms, not granted), images and per-line
+// discounted totals (cost), ready (it changes while Shopify calculates and
+// would churn the snapshot; approve reads it fresh), deprecated money
+// fields. Shared by the page query, the single fetch and the approve
+// mutation, so all three normalize to the same snapshot.
+export const DRAFTS_PER_PAGE = 4;
+// 400 drafts per run.
+export const MAX_DRAFT_PAGES = 100;
+export const DRAFT_FIELDS = `
+      id
+      legacyResourceId
+      name
+      status
+      createdAt
+      updatedAt
+      completedAt
+      email
+      tags
+      note2
+      poNumber
+      discountCodes
+      customAttributes { key value }
+      order { id legacyResourceId name }
+      customer { firstName lastName displayName email }
+      purchasingEntity {
+        __typename
+        ... on PurchasingCompany { company { id name } location { id name } }
+      }
+      shippingAddress { name firstName lastName company address1 address2 city provinceCode zip countryCodeV2 phone }
+      appliedDiscount { title value valueType }
+      totalPriceSet { shopMoney { amount currencyCode } }
+      subtotalPriceSet { shopMoney { amount currencyCode } }
+      totalDiscountsSet { shopMoney { amount currencyCode } }
+      lineItems(first: ${LINE_ITEMS}) {
+        nodes { title quantity sku variantTitle custom customAttributes { key value } originalUnitPriceSet { shopMoney { amount } } }
+        pageInfo { hasNextPage }
+      }`;
+
+// The first draft sync reads every open request, whatever its age (Shopify
+// returns the drafts staff see as open in admin). Every later window has no
+// status filter: a status filter would miss completions.
+export const FIRST_DRAFT_SEARCH = "status:open OR status:invoice_sent";
 
 // Both the cursor and the updated_at search ride as GraphQL variables, so no
 // runtime value is ever spliced into the query document itself (the page
@@ -139,6 +195,15 @@ const ORDERS_QUERY = `
 query OrdersUpdatedSince($cursor: String, $search: String) {
   orders(first: ${ORDERS_PER_PAGE}, after: $cursor, sortKey: UPDATED_AT, query: $search) {
     nodes {${ORDER_FIELDS}
+    }
+    pageInfo { hasNextPage endCursor }
+  }
+}`;
+
+const DRAFTS_QUERY = `
+query DraftOrdersUpdatedSince($cursor: String, $search: String) {
+  draftOrders(first: ${DRAFTS_PER_PAGE}, after: $cursor, sortKey: UPDATED_AT, query: $search) {
+    nodes {${DRAFT_FIELDS}
     }
     pageInfo { hasNextPage endCursor }
   }
@@ -189,10 +254,37 @@ export async function fetchOrdersUpdatedSince(
   if (!SINCE_ISO.test(sinceIso)) {
     return { kind: "fatal", detail: "invalid since timestamp" };
   }
-  return fetchOrderPages(shopDomain, token, ORDERS_QUERY, `updated_at:>='${sinceIso}'`, fetchImpl, {
+  return fetchPages(shopDomain, token, ORDERS_FEED, `updated_at:>='${sinceIso}'`, fetchImpl, {
     startCursor: opts?.startCursor,
     maxPages: MAX_PAGES,
   });
+}
+
+// Draft orders updated since sinceIso, or, with null, every open draft
+// (FIRST_DRAFT_SEARCH, the first draft sync). The same results, failure
+// kinds, truncation and resume rules as fetchOrdersUpdatedSince, over
+// data.draftOrders.
+export async function fetchDraftsUpdatedSince(
+  shopDomain: string,
+  token: string,
+  sinceIso: string | null,
+  fetchImpl: typeof fetch = fetch,
+  opts?: FetchOrdersOptions,
+): Promise<ShopifyFetchResult> {
+  if (!SHOP_DOMAIN.test(shopDomain)) {
+    return { kind: "fatal", detail: "invalid shop domain" };
+  }
+  if (sinceIso !== null && !SINCE_ISO.test(sinceIso)) {
+    return { kind: "fatal", detail: "invalid since timestamp" };
+  }
+  return fetchPages(
+    shopDomain,
+    token,
+    DRAFTS_FEED,
+    sinceIso === null ? FIRST_DRAFT_SEARCH : `updated_at:>='${sinceIso}'`,
+    fetchImpl,
+    { startCursor: opts?.startCursor, maxPages: MAX_DRAFT_PAGES },
+  );
 }
 
 // One stretch of the order history import: orders created in
@@ -219,22 +311,30 @@ export async function fetchOrderHistory(
   ]
     .filter((part) => part !== null)
     .join(" ");
-  return fetchOrderPages(shopDomain, token, ORDER_HISTORY_QUERY, search, fetchImpl, {
+  return fetchPages(shopDomain, token, ORDER_HISTORY_FEED, search, fetchImpl, {
     startCursor: opts.startCursor,
     maxPages: Math.max(1, Math.min(Math.trunc(opts.maxPages), MAX_PAGES)),
   });
 }
 
-// The page loop both queries share. shopDomain and the search string are
+// One paginated feed: its query document and the root field its pages
+// arrive under.
+type Feed = { query: string; rootField: "orders" | "draftOrders" };
+const ORDERS_FEED: Feed = { query: ORDERS_QUERY, rootField: "orders" };
+const ORDER_HISTORY_FEED: Feed = { query: ORDER_HISTORY_QUERY, rootField: "orders" };
+const DRAFTS_FEED: Feed = { query: DRAFTS_QUERY, rootField: "draftOrders" };
+
+// The page loop every feed shares. shopDomain and the search string are
 // already validated by the caller.
-async function fetchOrderPages(
+async function fetchPages(
   shopDomain: string,
   token: string,
-  query: string,
+  feed: Feed,
   search: string,
   fetchImpl: typeof fetch,
   opts: { startCursor?: string; maxPages: number },
 ): Promise<ShopifyFetchResult> {
+  const query = feed.query;
   const url = `https://${shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`;
   const nodes: unknown[] = [];
   // The cursor the next request is sent with: the caller's resume point at
@@ -328,17 +428,17 @@ async function fetchOrderPages(
       return { kind: "fatal", detail: scrub(message, token) };
     }
 
-    const orders = isRecord(body) && isRecord(body.data) ? body.data.orders : undefined;
+    const page = isRecord(body) && isRecord(body.data) ? body.data[feed.rootField] : undefined;
     if (
-      !isRecord(orders) ||
-      !Array.isArray(orders.nodes) ||
-      !isRecord(orders.pageInfo) ||
-      typeof orders.pageInfo.hasNextPage !== "boolean"
+      !isRecord(page) ||
+      !Array.isArray(page.nodes) ||
+      !isRecord(page.pageInfo) ||
+      typeof page.pageInfo.hasNextPage !== "boolean"
     ) {
       return retryable("unexpected response shape");
     }
 
-    for (const node of orders.nodes) {
+    for (const node of page.nodes) {
       nodes.push(node);
       const updatedAt = isRecord(node) && typeof node.updatedAt === "string" ? node.updatedAt : "";
       const updatedAtMs = Date.parse(updatedAt);
@@ -348,7 +448,7 @@ async function fetchOrderPages(
       }
     }
 
-    const pageInfo = orders.pageInfo;
+    const pageInfo = page.pageInfo;
     if (pageInfo.hasNextPage !== true) {
       return { kind: "ok", nodes, truncated: false, maxUpdatedAt, endCursor: null };
     }

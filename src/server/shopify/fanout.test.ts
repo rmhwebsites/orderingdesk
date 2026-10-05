@@ -50,7 +50,7 @@ function store(tags: string[]) {
     } else if (body.query.includes("fulfillmentOrders(")) {
       data = { order: { id: "x", fulfillmentOrders: { nodes: [] } } };
     } else {
-      data = { order: { id: "x", tags } };
+      data = { node: { id: "x", tags } };
     }
     return new Response(JSON.stringify({ data }), { status: 200 });
   }) as typeof fetch;

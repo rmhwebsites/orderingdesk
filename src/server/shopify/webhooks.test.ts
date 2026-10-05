@@ -130,8 +130,8 @@ function store(opts: { node?: unknown; customer?: unknown; tags?: string[] } = {
       data = { order: opts.node ?? null };
     } else if (body.query.includes("query RosterCustomer(")) {
       data = { customer: opts.customer ?? null };
-    } else if (body.query.includes("order(id: $id) { id tags }")) {
-      data = { order: { id: "x", tags: opts.tags ?? [] } };
+    } else if (body.query.includes("StatusTags(")) {
+      data = { node: { id: "x", tags: opts.tags ?? [] } };
     } else if (body.query.includes("tagsAdd(")) {
       data = { tagsAdd: { userErrors: [] } };
     } else if (body.query.includes("tagsRemove(")) {

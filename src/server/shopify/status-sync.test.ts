@@ -359,8 +359,8 @@ function store(script: StoreScript = {}) {
           userErrors: refusal("fulfillmentCreate"),
         },
       };
-    } else if (body.query.includes("order(id: $id) { id tags }")) {
-      data = { order: script.tags === null ? null : { id: ORDER_GID, tags: script.tags ?? [] } };
+    } else if (body.query.includes("StatusTags(")) {
+      data = { node: script.tags === null ? null : { id: ORDER_GID, tags: script.tags ?? [] } };
     } else {
       throw new Error("unexpected request: " + body.query);
     }
@@ -557,9 +557,9 @@ describe("pushOrderStatus", () => {
     // Serve the tags as they are after each write.
     const tracking = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body ?? "{}")) as ShopCall;
-      if (body.query.includes("order(id: $id) { id tags }")) {
+      if (body.query.includes("StatusTags(")) {
         shop.calls.push({ query: body.query, variables: body.variables });
-        return new Response(JSON.stringify({ data: { order: { id: ORDER_GID, tags } } }), { status: 200 });
+        return new Response(JSON.stringify({ data: { node: { id: ORDER_GID, tags } } }), { status: 200 });
       }
       const response = await shop.impl(input, init);
       const added = body.query.includes("tagsAdd(") ? (body.variables.tags as string[]) : [];

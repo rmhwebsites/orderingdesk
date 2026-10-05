@@ -1,13 +1,26 @@
 import { describe, it, expect } from "vitest";
 import {
+  DRAFTS_PER_PAGE,
+  FIRST_DRAFT_SEARCH,
   FULFILLMENTS_PER_ORDER,
+  LINE_ITEMS,
+  MAX_DRAFT_PAGES,
+  fetchDraftsUpdatedSince,
   fetchOrderHistory,
   fetchOrdersUpdatedSince,
   MAX_PAGES,
   ORDERS_PER_PAGE,
   SHOPIFY_API_VERSION,
 } from "./client";
-import { ORDER_LINE_ITEMS_QUERY } from "./admin";
+import {
+  APPROVE_DRAFT_MUTATION,
+  DRAFT_BEFORE_APPROVE_QUERY,
+  DRAFT_LINK_CHUNK,
+  DRAFT_LINKS_QUERY,
+  DRAFT_ORDER_QUERY,
+  ORDER_LINE_ITEMS_QUERY,
+  STATUS_TAGS_QUERY,
+} from "./admin";
 
 const DOMAIN = "impact-rentals.myshopify.com";
 const TOKEN = "shpat_super_secret_value_9f3a";
@@ -146,6 +159,21 @@ const SINGLE_QUERY_COST_LIMIT = 1000;
 // Shopify returned, so the query has to leave a fifth of the limit unused.
 const QUERY_COST_BUDGET = SINGLE_QUERY_COST_LIMIT * 0.8;
 
+// Failures on a request after the first, which keep the pages already read
+// (shared by the orders and drafts feeds).
+const laterRequestFailures: Array<[string, () => Response | Error]> = [
+  [
+    "a THROTTLED GraphQL error",
+    () => jsonResponse({ errors: [{ message: "Throttled", extensions: { code: "THROTTLED" } }] }),
+  ],
+  ["HTTP 429", () => jsonResponse({}, 429)],
+  ["HTTP 503", () => jsonResponse({}, 503)],
+  ["invalid JSON", () => new Response("<html>bad gateway page</html>", { status: 200 })],
+  ["an unexpected response shape", () => jsonResponse({ data: {} })],
+  ["a network error", () => new Error("socket hang up")],
+  ["a timeout", () => new DOMException("The operation timed out", "TimeoutError")],
+];
+
 describe("fetchOrdersUpdatedSince", () => {
   it("fetches a single page of orders", async () => {
     const nodes = [
@@ -173,8 +201,14 @@ describe("fetchOrdersUpdatedSince", () => {
     expect(query).toContain("sortKey: UPDATED_AT");
     expect(query).toContain("query: $search");
     expect(query).toContain("legacyResourceId");
-    expect(query).toContain("lineItems(first: 48)");
+    expect(query).toContain("lineItems(first: 35)");
     expect(query).toContain("fulfillments(first: 3) { displayStatus }");
+    // Draft orders spec section 3.2: where the order came from, its cart
+    // attributes, each line item's properties, and the current country field.
+    expect(query).toContain("sourceName");
+    expect(query).toContain("customAttributes { key value }");
+    expect(query).toContain("countryCodeV2");
+    expect(query).not.toMatch(/countryCode\b/);
     expect(variablesOf(calls[0]).cursor).toBeNull();
     expect(variablesOf(calls[0]).search).toBe(SEARCH);
   });
@@ -339,18 +373,6 @@ describe("fetchOrdersUpdatedSince", () => {
   // the normal way for a large backlog to end a tick. Whatever was read
   // before it must survive, or the same pages are fetched and thrown away
   // again on every tick.
-  const laterRequestFailures: Array<[string, () => Response | Error]> = [
-    [
-      "a THROTTLED GraphQL error",
-      () => jsonResponse({ errors: [{ message: "Throttled", extensions: { code: "THROTTLED" } }] }),
-    ],
-    ["HTTP 429", () => jsonResponse({}, 429)],
-    ["HTTP 503", () => jsonResponse({}, 503)],
-    ["invalid JSON", () => new Response("<html>bad gateway page</html>", { status: 200 })],
-    ["an unexpected response shape", () => jsonResponse({ data: {} })],
-    ["a network error", () => new Error("socket hang up")],
-    ["a timeout", () => new DOMException("The operation timed out", "TimeoutError")],
-  ];
   for (const [label, failure] of laterRequestFailures) {
     it(`keeps the pages already read when a later request fails with ${label}`, async () => {
       const first = [{ id: "gid://shopify/Order/1", updatedAt: "2026-09-10T00:00:00Z" }];
@@ -416,7 +438,8 @@ describe("fetchOrdersUpdatedSince", () => {
     const lineItems = orders.fields
       .find((field) => field.name === "nodes")
       ?.fields.find((field) => field.name === "lineItems");
-    expect(lineItems?.pageSize).toBe(48);
+    expect(lineItems?.pageSize).toBe(LINE_ITEMS);
+    expect(LINE_ITEMS).toBe(35);
     const pageInfo = lineItems?.fields.find((field) => field.name === "pageInfo");
     expect(pageInfo?.fields.map((field) => field.name)).toContain("hasNextPage");
   });
@@ -446,13 +469,15 @@ describe("fetchOrdersUpdatedSince", () => {
     const { impl, calls } = stubFetch([ordersPage([], { hasNextPage: false, endCursor: null })]);
     await fetchOrdersUpdatedSince(DOMAIN, TOKEN, SINCE, impl);
     const cost = requestedQueryCost(String(calls[0].body.query));
-    // Per order: the order itself, two price sets of two objects each, the
-    // customer, the shipping address, the line item connection and its
-    // pageInfo make 10 points, the fulfillment list (3 slots, priced like a
-    // connection) 5 more, plus 3 per line item slot (the item and its price
-    // set). On top come 2 for the orders connection and 1 for pageInfo.
-    // A 49th line item slot would make it 3 + 5 * (15 + 3 * 49) = 813.
-    expect(cost).toBe(3 + 5 * (15 + 3 * 48));
+    // Per order: the order itself, its cart attribute list, two price sets
+    // of two objects each, the customer, the shipping address, the line item
+    // connection and its pageInfo make 11 points, the fulfillment list (3
+    // slots, priced like a connection) 5 more, plus 4 per line item slot (the
+    // item, its property list and its price set). On top come 2 for the
+    // orders connection and 1 for pageInfo. Was 798 with 48 line items and
+    // no properties.
+    expect(cost).toBe(3 + 5 * (16 + 4 * 35));
+    expect(cost).toBe(783);
     expect(cost).toBeLessThanOrEqual(QUERY_COST_BUDGET);
   });
 
@@ -641,7 +666,7 @@ describe("fetchOrderHistory", () => {
     expect(query).toContain("orders(first: 5,");
     expect(query).toContain("sortKey: CREATED_AT");
     expect(query).toContain("reverse: true");
-    expect(query).toContain("lineItems(first: 48)");
+    expect(query).toContain("lineItems(first: 35)");
     expect(query).toContain("fulfillments(first: 3) { displayStatus }");
     expect(variablesOf(calls[0])).toEqual({
       cursor: null,
@@ -703,5 +728,167 @@ describe("ORDER_LINE_ITEMS_QUERY", () => {
     const cost = requestedQueryCost(ORDER_LINE_ITEMS_QUERY);
     expect(cost).toBe(304);
     expect(cost).toBeLessThanOrEqual(QUERY_COST_BUDGET);
+  });
+});
+
+function draftsPage(
+  nodes: unknown[],
+  pageInfo: { hasNextPage: boolean; endCursor: string | null },
+): Response {
+  return jsonResponse({ data: { draftOrders: { nodes, pageInfo } } });
+}
+
+// Draft orders (draft orders spec section 3.7): the same page loop as
+// orders, over data.draftOrders, with its own page size and page cap.
+describe("fetchDraftsUpdatedSince", () => {
+  const draft = (i: number, updatedAt = `2026-09-${String(10 + (i % 18)).padStart(2, "0")}T00:00:00Z`) => ({
+    id: `gid://shopify/DraftOrder/${i}`,
+    updatedAt,
+  });
+
+  it("reads every open draft on the first draft sync", async () => {
+    const nodes = [draft(1)];
+    const { impl, calls } = stubFetch([draftsPage(nodes, { hasNextPage: false, endCursor: null })]);
+    const result = await fetchDraftsUpdatedSince(DOMAIN, TOKEN, null, impl);
+    expect(result).toEqual({ kind: "ok", nodes, truncated: false, maxUpdatedAt: nodes[0].updatedAt, endCursor: null });
+    expect(FIRST_DRAFT_SEARCH).toBe("status:open OR status:invoice_sent");
+    expect(variablesOf(calls[0])).toEqual({ cursor: null, search: FIRST_DRAFT_SEARCH });
+    const query = String(calls[0].body.query);
+    expect(query).toContain("draftOrders(first: 4,");
+    expect(query).toContain("sortKey: UPDATED_AT");
+    expect(query).toContain("query: $search");
+    expect(query).toContain("lineItems(first: 35)");
+    expect(query).toContain("... on PurchasingCompany { company { id name } location { id name } }");
+    expect(query).toContain("countryCodeV2");
+    expect(query).not.toContain("paymentTerms");
+    expect(query).not.toMatch(/\bready\b/);
+    expect(calls[0].init.redirect).toBe("manual");
+  });
+
+  it("reads every draft updated in a later window, with no status filter", async () => {
+    const { impl, calls } = stubFetch([draftsPage([], { hasNextPage: false, endCursor: null })]);
+    await fetchDraftsUpdatedSince(DOMAIN, TOKEN, SINCE, impl);
+    expect(variablesOf(calls[0])).toEqual({ cursor: null, search: SEARCH });
+  });
+
+  it("resumes from a cursor with the search its chain belongs to", async () => {
+    const { impl, calls } = stubFetch([draftsPage([draft(2)], { hasNextPage: false, endCursor: null })]);
+    await fetchDraftsUpdatedSince(DOMAIN, TOKEN, null, impl, { startCursor: "resume-here" });
+    expect(variablesOf(calls[0])).toEqual({ cursor: "resume-here", search: FIRST_DRAFT_SEARCH });
+  });
+
+  it("stops at 100 pages of 4 with the cursor to resume from", async () => {
+    expect(DRAFTS_PER_PAGE).toBe(4);
+    expect(MAX_DRAFT_PAGES).toBe(100);
+    const base = Date.parse("2026-09-01T00:00:00.000Z");
+    const script = Array.from({ length: 102 }, (_, i) =>
+      draftsPage([draft(i, new Date(base + i * 60000).toISOString())], { hasNextPage: true, endCursor: `d-${i}` }),
+    );
+    const { impl, calls } = stubFetch(script);
+    const result = await fetchDraftsUpdatedSince(DOMAIN, TOKEN, SINCE, impl);
+    expect(calls).toHaveLength(100);
+    expect(result).toMatchObject({ kind: "ok", truncated: true, endCursor: "d-99" });
+  });
+
+  for (const [label, failure] of laterRequestFailures) {
+    it(`keeps the drafts already read when a later request fails with ${label}`, async () => {
+      const first = [draft(1, "2026-09-10T00:00:00Z")];
+      const second = [draft(2, "2026-09-11T00:00:00Z")];
+      const { impl } = stubFetch([
+        draftsPage(first, { hasNextPage: true, endCursor: "d-2" }),
+        draftsPage(second, { hasNextPage: true, endCursor: "d-3" }),
+        failure(),
+      ]);
+      expect(await fetchDraftsUpdatedSince(DOMAIN, TOKEN, SINCE, impl)).toEqual({
+        kind: "ok",
+        nodes: [...first, ...second],
+        truncated: true,
+        maxUpdatedAt: "2026-09-11T00:00:00Z",
+        endCursor: "d-3",
+      });
+    });
+  }
+
+  it("ends at the cursor it last used when a later page reports more pages without one", async () => {
+    const { impl } = stubFetch([
+      draftsPage([draft(1, "2026-09-10T00:00:00Z")], { hasNextPage: true, endCursor: "d-2" }),
+      draftsPage([draft(2, "2026-09-30T00:00:00Z")], { hasNextPage: true, endCursor: null }),
+    ]);
+    expect(await fetchDraftsUpdatedSince(DOMAIN, TOKEN, SINCE, impl)).toMatchObject({
+      kind: "ok",
+      truncated: true,
+      endCursor: "d-2",
+    });
+  });
+
+  it("maps auth, fatal errors and an orders-shaped answer like the orders feed", async () => {
+    expect(await fetchDraftsUpdatedSince(DOMAIN, TOKEN, SINCE, stubFetch([jsonResponse({}, 401)]).impl)).toEqual({
+      kind: "auth",
+    });
+    const denied = jsonResponse({ errors: [{ message: `Access denied for draftOrders field. ${TOKEN}` }] });
+    expect(await fetchDraftsUpdatedSince(DOMAIN, TOKEN, SINCE, stubFetch([denied]).impl)).toEqual({
+      kind: "fatal",
+      detail: "Access denied for draftOrders field. [redacted]",
+    });
+    const wrongRoot = ordersPage([], { hasNextPage: false, endCursor: null });
+    expect(await fetchDraftsUpdatedSince(DOMAIN, TOKEN, SINCE, stubFetch([wrongRoot]).impl)).toEqual({
+      kind: "transient",
+      detail: "unexpected response shape",
+    });
+  });
+
+  it("refuses a bad shop domain or since value before any request", async () => {
+    const { impl, calls } = stubFetch([]);
+    expect(await fetchDraftsUpdatedSince("evil.example.com", TOKEN, null, impl)).toEqual({
+      kind: "fatal",
+      detail: "invalid shop domain",
+    });
+    expect(await fetchDraftsUpdatedSince(DOMAIN, TOKEN, "2026-09-01' OR status:any '", impl)).toEqual({
+      kind: "fatal",
+      detail: "invalid since timestamp",
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("keeps the drafts page inside the query cost budget", async () => {
+    const { impl, calls } = stubFetch([draftsPage([], { hasNextPage: false, endCursor: null })]);
+    await fetchDraftsUpdatedSince(DOMAIN, TOKEN, null, impl);
+    const cost = requestedQueryCost(String(calls[0].body.query));
+    // Per draft: the draft, its cart attribute list, the order it became,
+    // the customer, the purchasing entity (1, plus 3 for the company
+    // fragment as this estimator prices it), the shipping address, the
+    // applied discount, three price sets of two objects each, the line item
+    // connection and its pageInfo make 19, plus 4 per line item slot.
+    expect(cost).toBe(3 + 4 * (19 + 4 * 35));
+    expect(cost).toBe(639);
+    expect(cost).toBeLessThanOrEqual(QUERY_COST_BUDGET);
+  });
+});
+
+// The single draft, the link lookup, the tag read and the approve documents
+// (src/server/shopify/admin.ts) under the same estimate and budget.
+describe("draft order documents", () => {
+  it("prices the single draft like one draft of the page", () => {
+    expect(requestedQueryCost(DRAFT_ORDER_QUERY)).toBe(1 + 18 + 4 * 35);
+    expect(requestedQueryCost(DRAFT_ORDER_QUERY)).toBeLessThanOrEqual(QUERY_COST_BUDGET);
+  });
+
+  it("keeps the approve mutation and its pre-check under budget", () => {
+    // Shopify adds a base cost for a mutation; the selection is the draft
+    // once more plus userErrors.
+    expect(requestedQueryCost(APPROVE_DRAFT_MUTATION)).toBe(1 + (1 + 18 + 4 * 35) + 1);
+    expect(requestedQueryCost(APPROVE_DRAFT_MUTATION) + 10).toBeLessThanOrEqual(QUERY_COST_BUDGET);
+    expect(requestedQueryCost(DRAFT_BEFORE_APPROVE_QUERY)).toBe(1 + 1 + 2);
+    expect(requestedQueryCost(STATUS_TAGS_QUERY)).toBeLessThanOrEqual(10);
+  });
+
+  it("keeps a chunk of the link lookup under budget even if Shopify prices every id", () => {
+    // nodes(ids:) takes a list, not a page size, so the estimator cannot
+    // multiply it. Priced here as one draft object (the draft and its order)
+    // per id, which is what a list of objects costs.
+    const perId = 1 + 1;
+    expect(DRAFT_LINK_CHUNK).toBe(100);
+    expect(DRAFT_LINK_CHUNK * perId + 1).toBeLessThanOrEqual(QUERY_COST_BUDGET);
+    expect(DRAFT_LINKS_QUERY).toContain("nodes(ids: $ids)");
   });
 });
