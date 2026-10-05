@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { guardResponse, requirePlatformAdmin, requireSession } from "@/server/guard";
 import { createWorkspace, listWorkspacesForViewer } from "@/server/workspaces";
 
-// {workspaces: [{id, name, slug, accentColor, role}]}: every workspace for a
+// {workspaces: [{id, name, slug, accentColor, symbol, role}]} (symbol:
+// {light, dark | null} served paths, or null): every workspace for a
 // platform admin (role "platform"), only the caller's memberships otherwise.
 export async function GET() {
   try {

@@ -4,13 +4,17 @@
 // their workspace when they have exactly one (including right after sign-in,
 // since the magic link returns to "/").
 
+import type { BrandImagePaths } from "@/lib/brand-assets";
 import type { Role } from "@/lib/roles";
 
+// symbol: the workspace's uploaded symbol as served paths (light and an
+// optional dark version), or null to show the monogram tile instead.
 export type HubWorkspace = {
   id: string;
   name: string;
   slug: string;
   accentColor: string;
+  symbol: BrandImagePaths | null;
   role: Role;
 };
 

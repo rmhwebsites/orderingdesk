@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { hubView, type HubWorkspace } from "./hub";
 
 function ws(slug: string, role: HubWorkspace["role"] = "staff"): HubWorkspace {
-  return { id: `id_${slug}`, name: `Name ${slug}`, slug, accentColor: "#91d500", role };
+  return { id: `id_${slug}`, name: `Name ${slug}`, slug, accentColor: "#91d500", symbol: null, role };
 }
 
 describe("hubView", () => {

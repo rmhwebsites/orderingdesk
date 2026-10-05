@@ -2,6 +2,8 @@ import { asc, eq } from "drizzle-orm";
 import type { Db } from "@/db";
 import { applyBatch } from "@/db/batch";
 import { statuses, workspaceMembers, workspaces, workspaceSettings } from "@/db/schema";
+import { brandImages } from "@/lib/brand-assets";
+import type { WorkspaceBranding } from "@/lib/branding";
 import type { Role } from "@/lib/roles";
 import { isRecord } from "./desk/shapes";
 import type { HubWorkspace } from "./hub";
@@ -24,7 +26,8 @@ export const DEFAULT_STATUSES = [
 // The workspaces a viewer may see, by name. Shared by the hub page and GET
 // /api/workspaces so the two cannot drift. A platform admin sees every
 // workspace, each with the effective role "platform"; anyone else sees only
-// their memberships, with their own role.
+// their memberships, with their own role. Each carries its symbol's served
+// paths (public already, through /api/branding), never the branding itself.
 export async function listWorkspacesForViewer(
   db: Db,
   viewer: { userId: string; platformAdmin: boolean },
@@ -34,17 +37,25 @@ export async function listWorkspacesForViewer(
     name: workspaces.name,
     slug: workspaces.slug,
     accentColor: workspaces.accentColor,
+    branding: workspaces.branding,
   };
+  type Row = { id: string; name: string; slug: string; accentColor: string; branding: WorkspaceBranding | null };
+  const toHub = ({ branding, ...row }: Row, role: Role): HubWorkspace => ({
+    ...row,
+    symbol: brandImages(row.id, branding).symbol,
+    role,
+  });
   if (viewer.platformAdmin) {
     const rows = await db.select(fields).from(workspaces).orderBy(asc(workspaces.name), asc(workspaces.id));
-    return rows.map((row) => ({ ...row, role: "platform" as Role }));
+    return rows.map((row) => toHub(row, "platform"));
   }
-  return db
+  const rows = await db
     .select({ ...fields, role: workspaceMembers.role })
     .from(workspaceMembers)
     .innerJoin(workspaces, eq(workspaceMembers.workspaceId, workspaces.id))
     .where(eq(workspaceMembers.userId, viewer.userId))
     .orderBy(asc(workspaces.name), asc(workspaces.id));
+  return rows.map(({ role, ...row }) => toHub(row, role));
 }
 
 function slugify(name: string): string {

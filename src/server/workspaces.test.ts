@@ -14,8 +14,8 @@ describe("listWorkspacesForViewer", () => {
     await seedWorkspace(db, "ws_a");
     await seedMember(db, "ws_a", "u_admin", "staff");
     expect(await listWorkspacesForViewer(db, admin)).toEqual([
-      { id: "ws_a", name: "Workspace ws_a", slug: "ws_a", accentColor: "#91d500", role: "platform" },
-      { id: "ws_b", name: "Workspace ws_b", slug: "ws_b", accentColor: "#91d500", role: "platform" },
+      { id: "ws_a", name: "Workspace ws_a", slug: "ws_a", accentColor: "#91d500", symbol: null, role: "platform" },
+      { id: "ws_b", name: "Workspace ws_b", slug: "ws_b", accentColor: "#91d500", symbol: null, role: "platform" },
     ]);
   });
 
@@ -28,8 +28,36 @@ describe("listWorkspacesForViewer", () => {
     await seedMember(db, "ws_a", "u_client", "manager");
     await seedMember(db, "ws_b", "u_someone", "manager");
     expect(await listWorkspacesForViewer(db, client)).toEqual([
-      { id: "ws_a", name: "Workspace ws_a", slug: "ws_a", accentColor: "#91d500", role: "manager" },
-      { id: "ws_c", name: "Workspace ws_c", slug: "ws_c", accentColor: "#91d500", role: "staff" },
+      { id: "ws_a", name: "Workspace ws_a", slug: "ws_a", accentColor: "#91d500", symbol: null, role: "manager" },
+      { id: "ws_c", name: "Workspace ws_c", slug: "ws_c", accentColor: "#91d500", symbol: null, role: "staff" },
+    ]);
+  });
+
+  it("carries each workspace's uploaded symbol, with its dark version, as served paths", async () => {
+    const { db } = openTestDb();
+    await seedWorkspace(db, "ws_a");
+    await seedWorkspace(db, "ws_b");
+    const asset = (key: string) => ({ key, contentType: "image/png" as const, pngKey: null });
+    await db
+      .update(schema.workspaces)
+      .set({
+        branding: {
+          symbol: { light: asset("branding/ws_a/symbol-light-1.png"), dark: asset("branding/ws_a/symbol-dark-2.png") },
+        },
+      })
+      .where(eq(schema.workspaces.id, "ws_a"));
+    await db
+      .update(schema.workspaces)
+      .set({ branding: { symbol: { light: asset("branding/ws_b/symbol-light-3.png"), dark: null } } })
+      .where(eq(schema.workspaces.id, "ws_b"));
+    await seedMember(db, "ws_a", "u_client", "staff");
+    const symbols = (list: { symbol: unknown }[]) => list.map((workspace) => workspace.symbol);
+    expect(symbols(await listWorkspacesForViewer(db, admin))).toEqual([
+      { light: "/api/branding/ws_a/symbol-light-1.png", dark: "/api/branding/ws_a/symbol-dark-2.png" },
+      { light: "/api/branding/ws_b/symbol-light-3.png", dark: null },
+    ]);
+    expect(symbols(await listWorkspacesForViewer(db, client))).toEqual([
+      { light: "/api/branding/ws_a/symbol-light-1.png", dark: "/api/branding/ws_a/symbol-dark-2.png" },
     ]);
   });
 
