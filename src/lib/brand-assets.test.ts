@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { brandImages, workspaceIcons } from "./brand-assets";
+import { APP_ICON_APPLE, brandImages, workspaceIcons } from "./brand-assets";
 
 const asset = (key: string, contentType: "image/svg+xml" | "image/png" = "image/svg+xml") => ({ key, contentType, pngKey: null });
 
@@ -31,10 +31,18 @@ describe("workspaceIcons", () => {
         { url: "/api/branding/ws_1/symbol-light-cc.svg", type: "image/svg+xml", media: "(prefers-color-scheme: light)" },
         { url: "/api/branding/ws_1/symbol-dark-dd.svg", type: "image/svg+xml", media: "(prefers-color-scheme: dark)" },
       ],
+      apple: APP_ICON_APPLE,
     });
     expect(workspaceIcons("ws_1", { symbol: { light: asset("branding/ws_1/symbol-light-cc.png", "image/png"), dark: null } })).toEqual({
       icon: [{ url: "/api/branding/ws_1/symbol-light-cc.png", type: "image/png" }],
+      apple: APP_ICON_APPLE,
     });
+  });
+
+  // A page's icons replace the root layout's, so the iPhone home screen
+  // icon (/app-icon/apple-180.png, decided by host) rides along.
+  it("keeps the iPhone home screen icon next to the symbol", () => {
+    expect(APP_ICON_APPLE).toBe("/app-icon/apple-180.png");
   });
 
   it("is undefined without a symbol", () => {

@@ -1,6 +1,8 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Sora, Red_Hat_Display, Red_Hat_Mono } from "next/font/google";
 import { APP_NAME } from "@/lib/brand";
+import { APP_ICON_APPLE } from "@/lib/brand-assets";
+import { DEFAULT_DARK_PALETTE, DEFAULT_LIGHT_PALETTE } from "@/lib/brand-theme";
 import "./globals.css";
 
 const sora = Sora({
@@ -18,8 +20,23 @@ const redHatMono = Red_Hat_Mono({
   variable: "--font-red-hat-mono",
 });
 
+// The installable app: the manifest and the iPhone home screen icon are
+// the same paths on every host, and their routes answer for the host they
+// are asked on (src/server/pwa/manifest.ts). No apple-mobile-web-app-title:
+// iPhone then takes the name from the host's manifest.
 export const metadata: Metadata = {
   title: { default: APP_NAME, template: `%s | ${APP_NAME}` },
+  manifest: "/site.webmanifest",
+  appleWebApp: { capable: true, statusBarStyle: "default" },
+  icons: { apple: APP_ICON_APPLE },
+};
+
+// The browser and installed-app chrome follow the default surfaces.
+export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: DEFAULT_LIGHT_PALETTE.surface },
+    { media: "(prefers-color-scheme: dark)", color: DEFAULT_DARK_PALETTE.surface },
+  ],
 };
 
 export default function RootLayout({

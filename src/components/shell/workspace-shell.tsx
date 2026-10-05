@@ -1,6 +1,7 @@
 import { brandImages } from "@/lib/brand-assets";
 import type { WorkspaceBranding } from "@/lib/branding";
 import type { Role } from "@/lib/roles";
+import { DevicePushSetup, InstallHint } from "./app-install";
 import { BrandScope } from "./brand-scope";
 import { SyncBanner } from "./sync-banner";
 import { TopBar } from "./top-bar";
@@ -51,9 +52,12 @@ export function WorkspaceShell({
           <div id="workspace-main" className="flex min-h-dvh flex-col">
             <TopBar name={workspace.name} images={brandImages(workspace.id, workspace.branding)} />
             <SyncBanner />
+            <InstallHint />
             <div className="flex-1">{children}</div>
           </div>
           <div id="workspace-overlays" />
+          {/* The service worker for push notifications (public/sw.js). */}
+          <DevicePushSetup />
         </WorkspaceProvider>
       </ToastProvider>
     </BrandScope>
