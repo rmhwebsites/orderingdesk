@@ -1615,3 +1615,70 @@ request, never a real employee's first.
   Local sample data (local D1 only): requests #D31, #D30 ($48, custom
   item), #D28 (deleted), #D27 (rejected), order #1015 from #D26, and a
   sample store connection with an unreadable token.
+
+## STATE UPDATE, 2026-10-05 draft orders review repairs (supersedes above)
+
+- Branch build/m1-core, on top of the draft orders build above (3c61659).
+  Commits: eef7ea2, 15d5273, c906521, de98d64, plus this docs commit. NOT
+  pushed, NOT deployed. The deploy order above is unchanged (migrate
+  first, then deploy).
+- Approve (eef7ea2): the read before the one "not finished calculating"
+  retry now runs every check the first read runs (OPEN or INVOICE_SENT, a
+  total of exactly 0, ready). Before, a draft repriced in Shopify admin
+  while a manager pressed Approve could be completed and marked paid. A
+  completion Shopify still reports with a non-zero total is recorded (it
+  cannot be undone) and logged as `[review] {... completedTotal: "not
+  zero"}` with ids only: if that line ever appears in `wrangler tail`,
+  check that order in Shopify at once.
+- Sync (15d5273): when orders/create and orders/updated race on a
+  completed draft, the losing job now writes the order onto the card as
+  an update, and an order insert that loses never leaves a "New order"
+  entry behind (no ghost unread item in the bell).
+- Drawer and desk (c906521): a platform admin who is not a member is
+  named in the timeline and in "Status set by" (the timeline read joins
+  the user table, like the bell; Approve and Reject put the name on the
+  entries they broadcast). A request whose draft Shopify deleted shows
+  only "Deleted in Shopify", never "Open" next to it. The empty list
+  follows the All / Drafts / Orders / Deleted filter ("No requests
+  waiting", "No requests are in New.", "No orders have this status") and
+  says Clear filters goes back to All. Checked by render tests; not
+  re-checked in a browser this round.
+- Webhooks (de98d64): Shopify names the store in X-Shopify-Shop-Domain by
+  its own myshopify domain. IMPACT is connected as
+  impactrentals.myshopify.com, an alias of 40kra0-b6.myshopify.com, so
+  every IMPACT delivery was refused with 401 (fail closed). Saving the
+  connection and Refresh connection now record shop.myshopifyDomain in
+  the new column store_connections.canonical_shop_domain, and the
+  receiver accepts exactly the stored domain or that one (HMAC still
+  first; never any other host). Until Refresh connection runs, behavior
+  is as before.
+- MIGRATION 0010 CHANGED (still the only new migration, production still
+  at 0009): it also adds `canonical_shop_domain text` (nullable) to
+  store_connections. Regenerated with drizzle-kit (`drizzle-kit drop` of
+  0010, then `npm run db:generate -- --name draft_orders`); the hand edits
+  (defer_foreign_keys, the eleven-column copy) and the data steps are
+  unchanged, and `drizzle-kit check` and a fresh generate report no
+  drift. Re-proven on production-shaped data (backup
+  orderingdesk-before-0007-0009-2026-10-05.sql loaded on 0000 to 0009,
+  plus one synthetic purchase order to exercise that table): every table
+  keeps its rows (statuses +1 for Rejected), orders' eleven columns,
+  events, purchase orders and the old connection columns are identical
+  by digest, no event or purchase order points at a missing order,
+  foreign_key_check is empty, the five orders indexes exist, and all 9
+  orders open through the app's read model with their timelines.
+- Local dev only: a local D1 that already applied the earlier 0010 lacks
+  the new column (wrangler records 0010 as applied by name). Add it with
+  `npx wrangler d1 execute orderingdesk --local --command "ALTER TABLE
+  store_connections ADD canonical_shop_domain text"` or reset the local
+  state. Never needed on production.
+
+### Ryan's one step (updated)
+
+- Settings > Store connection > **Refresh connection**, once, after the
+  deploy. It registers the draft order webhooks AND records the store's
+  own domain (40kra0-b6.myshopify.com), which is what makes Shopify's
+  deliveries accepted. Operator check afterwards: `wrangler tail` shows
+  no 401 on `/api/webhooks/shopify/...` for IMPACT, and a request
+  submitted from the storefront arrives within seconds (Stage 0's first
+  item). Optional read-only check of the row:
+  `SELECT shop_domain, canonical_shop_domain FROM store_connections`.
