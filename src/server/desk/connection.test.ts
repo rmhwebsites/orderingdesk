@@ -235,6 +235,34 @@ describe("saveConnection", () => {
     expect(await decryptSecret(row.encryptedToken, KEY, WS)).toBe(NEW_TOKEN);
   });
 
+  // An order history import belongs to the store it started on: its cursor
+  // means nothing on another store.
+  it("clears an order history import when the shop domain changes, and keeps it for new credentials", async () => {
+    const running = {
+      backfillStatus: "running" as const,
+      backfillSince: null,
+      backfillCursor: "h:40",
+      backfillImported: 0,
+      backfillStartedAt: 1_759_000_000_000,
+    };
+    const moved = await setup();
+    await seedConnection(moved, running);
+    await saveConnection(moved, ctx(okShop().impl), { shopDomain: "impact-two", token: NEW_TOKEN });
+    expect(await connectionRow(moved)).toMatchObject({
+      backfillStatus: null,
+      backfillCursor: null,
+      backfillImported: 0,
+      backfillStartedAt: null,
+      backfillFinishedAt: null,
+      backfillError: null,
+    });
+
+    const same = await setup();
+    await seedConnection(same, running);
+    await saveConnection(same, ctx(okShop().impl), { shopDomain: "impactrentals.myshopify.com", token: NEW_TOKEN });
+    expect(await connectionRow(same)).toMatchObject(running);
+  });
+
   it("keeps lastSyncAt and the cursor when only the token changes, orders or not", async () => {
     const db = await setup();
     await seedConnection(db);

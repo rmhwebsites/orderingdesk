@@ -27,6 +27,9 @@ export type LiveOrderStatus = {
 export type LiveEvent =
   // A sync run landed orders: new rows and refreshed snapshots, by order id.
   | { kind: "orders.synced"; addedOrderIds: string[]; updatedOrderIds: string[] }
+  // The order history import stored this many older orders: refresh the
+  // list, announce nothing.
+  | { kind: "orders.imported"; count: number }
   // An order's status changed (a member, or Shopify); event is the timeline
   // entry.
   | { kind: "order.status"; event: EventView; order: LiveOrderStatus }
@@ -93,6 +96,10 @@ export function parseLiveEvent(raw: string): LiveEvent | null {
     case "orders.synced":
       return isStringArray(data.addedOrderIds) && isStringArray(data.updatedOrderIds)
         ? { kind: "orders.synced", addedOrderIds: data.addedOrderIds, updatedOrderIds: data.updatedOrderIds }
+        : null;
+    case "orders.imported":
+      return typeof data.count === "number" && Number.isSafeInteger(data.count) && data.count > 0
+        ? { kind: "orders.imported", count: data.count }
         : null;
     case "order.status":
       return isOrderEvent(data.event) && isOrderStatus(data.order)

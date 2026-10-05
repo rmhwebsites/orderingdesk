@@ -241,9 +241,10 @@ function parseCredentials(fields: Record<string, unknown>): Credentials | { erro
 // clears the other's, and records the verified shop name and scopes.
 //
 // On save the connection is marked ok with no last error. A new row, or a
-// row whose shop domain changed, also starts over: lastSyncAt 0 and no sync
-// cursor, so the next sync opens a fresh first-sync window for that store. A
-// credentials-only change keeps lastSyncAt and any cursor. Either way the
+// row whose shop domain changed, also starts over: lastSyncAt 0, no sync
+// cursor and no order history import, so the next sync opens a fresh
+// first-sync window for that store. A credentials-only change keeps
+// lastSyncAt, any cursor and any import (which carries on next tick). Either way the
 // sync lease is released (runningUntil 0). What that buys: a run still
 // holding the lease started under the old settings, so its fenced
 // connection writes (lastSyncAt, cursor, status) match nothing from here on,
@@ -394,6 +395,15 @@ export async function saveConnection(
           lastSyncAt: sql`case when ${sameShop} then ${storeConnections.lastSyncAt} else 0 end`,
           syncCursor: sql`case when ${sameShop} then ${storeConnections.syncCursor} else null end`,
           syncCursorSince: sql`case when ${sameShop} then ${storeConnections.syncCursorSince} else null end`,
+          // An order history import (src/server/sync/backfill.ts) belongs to
+          // its store: another store starts with none.
+          backfillStatus: sql`case when ${sameShop} then ${storeConnections.backfillStatus} else null end`,
+          backfillSince: sql`case when ${sameShop} then ${storeConnections.backfillSince} else null end`,
+          backfillCursor: sql`case when ${sameShop} then ${storeConnections.backfillCursor} else null end`,
+          backfillImported: sql`case when ${sameShop} then ${storeConnections.backfillImported} else 0 end`,
+          backfillStartedAt: sql`case when ${sameShop} then ${storeConnections.backfillStartedAt} else null end`,
+          backfillFinishedAt: sql`case when ${sameShop} then ${storeConnections.backfillFinishedAt} else null end`,
+          backfillError: sql`case when ${sameShop} then ${storeConnections.backfillError} else null end`,
         },
         // An existing row is only updated for the same shop, or for another
         // shop while the workspace has no orders. Otherwise the update is

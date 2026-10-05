@@ -308,6 +308,16 @@ export function StoreConnectionSection({
       lastSyncAt: next.lastSyncAt,
       lastError: next.lastError,
       catchingUp: connection?.catchingUp ?? false,
+      backfill: connection?.backfill ?? {
+        status: "idle",
+        since: null,
+        imported: 0,
+        startedAt: null,
+        finishedAt: null,
+        error: null,
+        paused: null,
+        canReadAllOrders: false,
+      },
     });
     setResult(
       warning

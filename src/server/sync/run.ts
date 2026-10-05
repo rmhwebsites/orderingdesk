@@ -44,11 +44,15 @@ export type SyncOptions = {
   now?: () => number;
 };
 
-const LEASE_MS = 120000;
+// Exported for the order history import (backfill.ts), which takes the same
+// lease so it never runs at the same time as a sync of the same workspace.
+export const LEASE_MS = 120000;
 // Re-fetch a 5 minute overlap so clock skew between this worker and Shopify
 // cannot drop orders updated right around the previous lastSyncAt.
 const OVERLAP_MS = 300000;
-const FIRST_SYNC_WINDOW_MS = 60 * 24 * 60 * 60 * 1000;
+// Also how far back Shopify lets an app read orders without the
+// read_all_orders scope (the order history import checks against it).
+export const FIRST_SYNC_WINDOW_MS = 60 * 24 * 60 * 60 * 1000;
 const LAST_ERROR_MAX = 300;
 const SYNC_ERROR_EVENT_WINDOW_MS = 3600000;
 // D1 allows at most 100 bound parameters per statement; each chunk binds its
@@ -227,6 +231,60 @@ export type OrderWriteOutcome =
   | { kind: "updated"; orderId: string; before: unknown }
   | { kind: "none" };
 
+// Inserts an order the app has never stored, with its initial status
+// (initialStatusFor: its one status tag, else the status linked to its
+// Shopify state, else the first status) and its order_new event. Both
+// inserts are conflict no-ops and the event id is deterministic across runs
+// (workspace + Shopify order), so a racing run that lost inserts nothing;
+// inserted is rows-affected truth. Nothing is written to Shopify.
+//
+// imported: the order comes from the order history import (backfill.ts).
+// Its notification is claimed at once (notified_at set), so no path ever
+// announces it as a new order, and its order_new event says it was
+// imported and carries meta.imported, which keeps it out of the bell.
+export async function insertNewOrder(
+  db: Db,
+  workspaceId: string,
+  order: NormalizedOrder,
+  now: number,
+  statusRows: readonly StatusRow[],
+  opts?: { imported?: boolean },
+): Promise<{ inserted: boolean; orderId: string }> {
+  const orderId = crypto.randomUUID();
+  const imported = opts?.imported === true;
+  const insertOrder = db
+    .insert(orders)
+    .values({
+      id: orderId,
+      workspaceId,
+      shopifyOrderId: order.shopifyOrderId,
+      name: order.name,
+      shopify: order,
+      statusKey: initialStatusFor(order, statusRows, statusRows[0]?.key ?? "new"),
+      createdAt: order.createdAt || now,
+      syncedAt: now,
+      ...(imported ? { notifiedAt: now } : {}),
+    })
+    .onConflictDoNothing();
+  const insertEvent = db
+    .insert(events)
+    .values({
+      id: `evt-order-new-${workspaceId}-${order.shopifyOrderId}`,
+      workspaceId,
+      orderId,
+      type: "order_new",
+      text: imported
+        ? `Order ${order.name} imported from the store's order history`
+        : `New order ${order.name}${order.customerName ? " from " + order.customerName : ""}`,
+      meta: imported ? { orderName: order.name, imported: true } : { orderName: order.name },
+      createdAt: now,
+      source: "shopify",
+    })
+    .onConflictDoNothing();
+  const [orderInsertResult] = await applyPair(db, insertOrder, insertEvent);
+  return { inserted: changesOf(orderInsertResult) === 1, orderId };
+}
+
 // Writes one fetched order under the claim rule (see claimAndLoad and the
 // fence comment above), the one write path for the sync and for webhooks:
 // - not known: insert it with its initial status (initialStatusFor: its one
@@ -250,38 +308,10 @@ export async function writeOrderSnapshot(
   let existing = known.get(order.shopifyOrderId);
 
   if (!existing) {
-    const orderId = crypto.randomUUID();
-    // Both inserts are conflict no-ops and the event id is deterministic
-    // across runs (workspace + Shopify order), so a racing run that lost
-    // inserts nothing and is detected by rows-affected below.
-    const insertOrder = db
-      .insert(orders)
-      .values({
-        id: orderId,
-        workspaceId,
-        shopifyOrderId: order.shopifyOrderId,
-        name: order.name,
-        shopify: order,
-        statusKey: initialStatusFor(order, statusRows, statusRows[0]?.key ?? "new"),
-        createdAt: order.createdAt || now,
-        syncedAt: now,
-      })
-      .onConflictDoNothing();
-    const insertEvent = db
-      .insert(events)
-      .values({
-        id: `evt-order-new-${workspaceId}-${order.shopifyOrderId}`,
-        workspaceId,
-        orderId,
-        type: "order_new",
-        text: `New order ${order.name}${order.customerName ? " from " + order.customerName : ""}`,
-        meta: { orderName: order.name },
-        createdAt: now,
-        source: "shopify",
-      })
-      .onConflictDoNothing();
-    const [orderInsertResult] = await applyPair(db, insertOrder, insertEvent);
-    if (changesOf(orderInsertResult) === 1) {
+    // A racing run that stored this order first is detected by
+    // rows-affected (see insertNewOrder).
+    const { inserted, orderId } = await insertNewOrder(db, workspaceId, order, now, statusRows);
+    if (inserted) {
       known.set(order.shopifyOrderId, { id: orderId, shopify: order });
       return { kind: "added", orderId };
     }

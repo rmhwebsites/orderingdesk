@@ -67,6 +67,21 @@ describe("loadActivityFeed unread count", () => {
     expect(feed.unread).toBe(1);
   });
 
+  it("leaves orders brought in by the order history import out of the feed and the count", async () => {
+    await event({ createdAt: 10, type: "order_new", text: "New order #1001", meta: { orderName: "#1001" }, source: "shopify" });
+    await event({
+      createdAt: 20,
+      type: "order_new",
+      text: "Order #900 imported from the store's order history",
+      meta: { orderName: "#900", imported: true },
+      source: "shopify",
+    });
+    await event({ createdAt: 30, type: "order_new", text: "New order #1002", meta: null, source: "shopify" });
+    const feed = await loadActivityFeed(db, WS, "u_me");
+    expect(feed.items.map((item) => item.text)).toEqual(["New order #1002", "New order #1001"]);
+    expect(feed.unread).toBe(2);
+  });
+
   it(`stops counting at ${UNREAD_CAP + 1} so the badge can say ${UNREAD_CAP}+`, async () => {
     for (let i = 0; i < UNREAD_CAP + 20; i++) {
       await event({ createdAt: 1000 + i, actorId: "u_other" });

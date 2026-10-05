@@ -171,6 +171,39 @@ describe("schema migrations", () => {
     expect(() => insert.run("ps3", "user2", "https://push.example/1", "{}", 1, null)).toThrow(/UNIQUE/);
   });
 
+  // Migration 0008: a store connection starts with no order history import
+  // (status null, nothing imported), and rows written before it read the
+  // same way.
+  it("starts store connections with no order history import", () => {
+    db.prepare("INSERT INTO workspaces (id, name, slug, created_by, created_at) VALUES (?, ?, ?, ?, ?)").run(
+      "ws_backfill",
+      "Backfill",
+      "backfill",
+      "user1",
+      1,
+    );
+    db.prepare("INSERT INTO store_connections (workspace_id, shop_domain, encrypted_token) VALUES (?, ?, ?)").run(
+      "ws_backfill",
+      "backfill.myshopify.com",
+      "v1.x",
+    );
+    expect(
+      db
+        .prepare(
+          "SELECT backfill_status, backfill_since, backfill_cursor, backfill_imported, backfill_started_at, backfill_finished_at, backfill_error FROM store_connections WHERE workspace_id = ?",
+        )
+        .get("ws_backfill"),
+    ).toEqual({
+      backfill_status: null,
+      backfill_since: null,
+      backfill_cursor: null,
+      backfill_imported: 0,
+      backfill_started_at: null,
+      backfill_finished_at: null,
+      backfill_error: null,
+    });
+  });
+
   it("keeps custom domains unique and allows any number of workspaces without one", () => {
     const insert = db.prepare(
       "INSERT INTO workspaces (id, name, slug, created_by, created_at, custom_domain) VALUES (?, ?, ?, ?, ?, ?)",
@@ -358,7 +391,7 @@ describe("platform migration of existing rows", () => {
     expect(
       db
         .prepare(
-          "SELECT shop_domain, encrypted_token, auth_mode, encrypted_access_token, last_sync_at FROM store_connections",
+          "SELECT shop_domain, encrypted_token, auth_mode, encrypted_access_token, last_sync_at, backfill_status, backfill_imported FROM store_connections",
         )
         .all(),
     ).toEqual([
@@ -368,6 +401,8 @@ describe("platform migration of existing rows", () => {
         auth_mode: "legacy_token",
         encrypted_access_token: null,
         last_sync_at: 1234,
+        backfill_status: null,
+        backfill_imported: 0,
       },
     ]);
   });

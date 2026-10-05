@@ -1,10 +1,11 @@
 import { lt, ne } from "drizzle-orm";
 import { getDbFromEnv, type Db } from "../../db";
 import { storeConnections, webhookDeliveries } from "../../db/schema";
-import { broadcastSync, kickUsers } from "../broadcast";
+import { broadcastImported, broadcastSync, kickUsers } from "../broadcast";
 import { notifyNewOrders } from "../notify";
 import { shareShopifyMoves } from "../shopify/fanout";
 import { syncRoster } from "../shopify/roster-sync";
+import { runBackfillTick } from "./backfill";
 import { runSync, type SyncOptions } from "./run";
 
 // Webhook ids are kept this long for dedupe. Shopify retries a failed
@@ -70,6 +71,29 @@ export async function runAllSyncs(db: Db, env: CloudflareEnv, opts?: SyncOptions
       }
     } catch (e) {
       console.log("[roster] " + JSON.stringify({ workspaceId, error: e instanceof Error ? e.name : "failed" }));
+    }
+
+    // A running order history import advances a bounded stretch, last, so
+    // it never delays the regular sync or the roster (and waits while the
+    // regular sync is catching up). Its orders are old: open desks refresh,
+    // nobody is notified, nothing goes back to Shopify.
+    try {
+      const imported = await runBackfillTick(db, env, workspaceId, opts);
+      if (imported.skipped !== "idle") {
+        await broadcastImported(env, workspaceId, imported.importedOrderIds);
+        console.log(
+          "[backfill] " +
+            JSON.stringify({
+              workspaceId,
+              imported: imported.imported,
+              skipped: imported.skipped,
+              finished: imported.finished,
+              error: imported.error,
+            }),
+        );
+      }
+    } catch (e) {
+      console.log("[backfill] " + JSON.stringify({ workspaceId, error: e instanceof Error ? e.name : "failed" }));
     }
   }
 

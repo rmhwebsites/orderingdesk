@@ -72,6 +72,20 @@ export async function broadcastSync(
   });
 }
 
+// After an order history import tick (src/server/sync/backfill.ts) landed
+// orders: one orders.imported event, so open desks refresh. Old orders are
+// not arrivals, so no ids travel (nothing to announce or flash).
+export async function broadcastImported(
+  env: CloudflareEnv,
+  workspaceId: string,
+  importedOrderIds: readonly string[],
+): Promise<void> {
+  if (importedOrderIds.length === 0) {
+    return;
+  }
+  await broadcast(env, workspaceId, { kind: "orders.imported", count: importedOrderIds.length });
+}
+
 // Closes the open sockets of people who just lost access to the workspace
 // (removed, their Shopify tag revoked, or platform admin access revoked):
 // the room closes every socket tagged with each user id. Best effort like

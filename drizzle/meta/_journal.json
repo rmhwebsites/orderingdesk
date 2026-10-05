@@ -57,6 +57,13 @@
       "when": 1791160687488,
       "tag": "0007_notifications",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1791163460812,
+      "tag": "0008_order_history_import",
+      "breakpoints": true
     }
   ]
 }

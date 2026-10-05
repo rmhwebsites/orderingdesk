@@ -5,6 +5,7 @@
 import { eq } from "drizzle-orm";
 import type { Db } from "@/db";
 import { storeConnections } from "@/db/schema";
+import { backfillViewOf, type BackfillView } from "@/server/sync/backfill";
 import { missingScopes } from "./connection";
 
 export type ConnectionSettingsView = {
@@ -24,6 +25,8 @@ export type ConnectionSettingsView = {
   lastError: string | null;
   // A first sync or a backlog is still draining.
   catchingUp: boolean;
+  // The order history import (never its Shopify cursor).
+  backfill: BackfillView;
 };
 
 export async function getConnectionSettings(db: Db, workspaceId: string): Promise<ConnectionSettingsView | null> {
@@ -38,6 +41,12 @@ export async function getConnectionSettings(db: Db, workspaceId: string): Promis
       lastSyncAt: storeConnections.lastSyncAt,
       lastError: storeConnections.lastError,
       syncCursor: storeConnections.syncCursor,
+      backfillStatus: storeConnections.backfillStatus,
+      backfillSince: storeConnections.backfillSince,
+      backfillImported: storeConnections.backfillImported,
+      backfillStartedAt: storeConnections.backfillStartedAt,
+      backfillFinishedAt: storeConnections.backfillFinishedAt,
+      backfillError: storeConnections.backfillError,
     })
     .from(storeConnections)
     .where(eq(storeConnections.workspaceId, workspaceId))
@@ -58,5 +67,6 @@ export async function getConnectionSettings(db: Db, workspaceId: string): Promis
     lastSyncAt: row.lastSyncAt,
     lastError: row.lastError ?? null,
     catchingUp: row.syncCursor !== null,
+    backfill: backfillViewOf(row),
   };
 }

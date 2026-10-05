@@ -48,6 +48,16 @@ describe("getConnectionSettings", () => {
       lastSyncAt: 900,
       lastError: "Shopify answered 401",
       catchingUp: true,
+      backfill: {
+        status: "idle",
+        since: null,
+        imported: 0,
+        startedAt: null,
+        finishedAt: null,
+        error: null,
+        paused: null,
+        canReadAllOrders: false,
+      },
     });
     const text = JSON.stringify(view);
     for (const secret of ["cipher", "client-id-visible-to-nobody"]) {
@@ -71,5 +81,34 @@ describe("getConnectionSettings", () => {
       shopName: null,
       catchingUp: false,
     });
+  });
+
+  it("shows a running order history import, paused while the regular sync catches up", async () => {
+    const db = await setup();
+    await db.insert(schema.storeConnections).values({
+      workspaceId: WS,
+      shopDomain: "impact-rentals.myshopify.com",
+      encryptedToken: "v1.cipher",
+      scopes: ["write_orders", "read_all_orders"],
+      syncCursor: "100|abc",
+      backfillStatus: "running",
+      backfillSince: 5000,
+      backfillCursor: "cursor-not-shown",
+      backfillImported: 140,
+      backfillStartedAt: 9000,
+      backfillError: "Shopify responded with HTTP 503",
+    });
+    const view = await getConnectionSettings(db, WS);
+    expect(view?.backfill).toEqual({
+      status: "running",
+      since: 5000,
+      imported: 140,
+      startedAt: 9000,
+      finishedAt: null,
+      error: "Shopify responded with HTTP 503",
+      paused: "sync",
+      canReadAllOrders: true,
+    });
+    expect(JSON.stringify(view)).not.toContain("cursor-not-shown");
   });
 });

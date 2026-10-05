@@ -111,6 +111,17 @@ describe("applyLiveEvent: orders.synced", () => {
   });
 });
 
+describe("applyLiveEvent: orders.imported", () => {
+  // Older orders from the order history import: the list refreshes, but
+  // nothing is announced as new or flashed.
+  it("asks for a refetch and announces nothing", () => {
+    const before = state();
+    const { state: after, effects } = applyLiveEvent(before, { kind: "orders.imported", count: 40 }, ME);
+    expect(after).toBe(before);
+    expect(effects).toEqual({ refetch: true, reloadOpenOrder: false, announceOrderIds: [], flashOrderIds: [] });
+  });
+});
+
 describe("applyLiveEvent: order.status", () => {
   it("moves the row and the counts, and flashes a change made by someone else", () => {
     const { state: after, effects } = applyLiveEvent(state(), statusEvent("o1", "new", "shipped", 4000), ME);

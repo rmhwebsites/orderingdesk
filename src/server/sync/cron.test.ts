@@ -4,7 +4,14 @@ import { openTestDb, seedWorkspace } from "../desk/test-helpers";
 import type { SyncResult } from "./run";
 
 vi.mock("./run", () => ({ runSync: vi.fn() }));
-vi.mock("../broadcast", () => ({ broadcastSync: vi.fn(async () => undefined), kickUsers: vi.fn(async () => undefined) }));
+vi.mock("./backfill", () => ({
+  runBackfillTick: vi.fn(async () => ({ imported: 0, importedOrderIds: [], skipped: "idle" })),
+}));
+vi.mock("../broadcast", () => ({
+  broadcastSync: vi.fn(async () => undefined),
+  broadcastImported: vi.fn(async () => undefined),
+  kickUsers: vi.fn(async () => undefined),
+}));
 vi.mock("../notify", () => ({
   notifyNewOrders: vi.fn(async () => ({ claimed: 0, announced: [], pushed: 0, emailed: 0 })),
   notifyActivity: vi.fn(async () => ({ pushed: 0 })),
@@ -14,7 +21,8 @@ vi.mock("../shopify/roster-sync", () => ({
 }));
 
 const { runSync } = await import("./run");
-const { broadcastSync, kickUsers } = await import("../broadcast");
+const { runBackfillTick } = await import("./backfill");
+const { broadcastSync, broadcastImported, kickUsers } = await import("../broadcast");
 const { syncRoster } = await import("../shopify/roster-sync");
 const { notifyNewOrders } = await import("../notify");
 const { runAllSyncs, WEBHOOK_DELIVERY_RETENTION_MS } = await import("./cron");
@@ -45,6 +53,8 @@ beforeEach(() => {
   vi.mocked(kickUsers).mockClear();
   vi.mocked(syncRoster).mockClear();
   vi.mocked(notifyNewOrders).mockClear();
+  vi.mocked(runBackfillTick).mockClear();
+  vi.mocked(broadcastImported).mockClear();
   vi.spyOn(console, "log").mockImplementation(() => undefined);
 });
 
@@ -143,5 +153,37 @@ describe("runAllSyncs roster and housekeeping", () => {
     await runAllSyncs(db, env, { now: () => now });
     const left = await db.select().from(schema.webhookDeliveries);
     expect(left.map((row) => row.id)).toEqual(["ws_a:kept"]);
+  });
+});
+
+describe("runAllSyncs order history import", () => {
+  // The import (backfill.ts) advances after the regular sync and the
+  // roster, so it never delays them. Its orders are old: the desk refreshes,
+  // nobody is notified.
+  it("advances each connected workspace's import after its sync and never announces what it imported", async () => {
+    const db = await setup();
+    vi.mocked(runSync).mockResolvedValue(result());
+    vi.mocked(runBackfillTick).mockImplementation(async (_db, _env, workspaceId) =>
+      workspaceId === "ws_a" ? { imported: 2, importedOrderIds: ["h1", "h2"] } : { imported: 0, importedOrderIds: [], skipped: "idle" },
+    );
+    await runAllSyncs(db, env);
+    expect(vi.mocked(runBackfillTick).mock.calls.map((call) => call[2]).sort()).toEqual(["ws_a", "ws_b"]);
+    const syncOrder = vi.mocked(runSync).mock.invocationCallOrder;
+    const rosterOrder = vi.mocked(syncRoster).mock.invocationCallOrder;
+    const importOrder = vi.mocked(runBackfillTick).mock.invocationCallOrder;
+    expect(importOrder[0]).toBeGreaterThan(syncOrder[0]);
+    expect(importOrder[0]).toBeGreaterThan(rosterOrder[0]);
+    expect(vi.mocked(broadcastImported).mock.calls).toEqual([[env, "ws_a", ["h1", "h2"]]]);
+    const announced = vi.mocked(notifyNewOrders).mock.calls.flatMap((call) => [...call[3]]);
+    expect(announced).not.toContain("h1");
+    expect(announced).not.toContain("h2");
+  });
+
+  it("keeps going when an import tick throws", async () => {
+    const db = await setup();
+    vi.mocked(runSync).mockResolvedValue(result());
+    vi.mocked(runBackfillTick).mockRejectedValueOnce(new Error("boom"));
+    await runAllSyncs(db, env);
+    expect(vi.mocked(runBackfillTick)).toHaveBeenCalledTimes(2);
   });
 });

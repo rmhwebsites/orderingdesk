@@ -89,6 +89,11 @@ export function applyLiveEvent(
       };
     }
 
+    // Older orders from the order history import: reload the list, but they
+    // are not arrivals, so nothing is announced or flashed.
+    case "orders.imported":
+      return { state, effects: { ...NO_EFFECTS, refetch: true } };
+
     case "order.status": {
       const change = event.order;
       const byOther = event.event.actorId !== selfUserId;

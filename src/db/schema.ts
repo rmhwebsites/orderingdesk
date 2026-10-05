@@ -88,6 +88,22 @@ export const storeConnections = sqliteTable("store_connections", {
   // (which livelocks when 500+ orders share one updatedAt second).
   syncCursor: text("sync_cursor"),
   syncCursorSince: integer("sync_cursor_since"),
+  // Order history import (src/server/sync/backfill.ts): a platform admin's
+  // one-off import of orders the regular sync never fetched, advanced a few
+  // pages per cron tick with its own cursor so the regular sync's cursor
+  // and last_sync_at are never touched. Null status: never started.
+  backfillStatus: text("backfill_status", { enum: ["running", "done", "cancelled", "failed"] }),
+  // Orders created at or after this time (ms); null imports all orders.
+  backfillSince: integer("backfill_since"),
+  // The Shopify cursor the next tick resumes from (null before the first
+  // page and once finished).
+  backfillCursor: text("backfill_cursor"),
+  // Orders this import inserted (orders already stored are not counted).
+  backfillImported: integer("backfill_imported").notNull().default(0),
+  // When the import was started; also tells one import from the next.
+  backfillStartedAt: integer("backfill_started_at"),
+  backfillFinishedAt: integer("backfill_finished_at"),
+  backfillError: text("backfill_error"),
 });
 
 export const statuses = sqliteTable("statuses", {

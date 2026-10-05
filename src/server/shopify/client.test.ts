@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   FULFILLMENTS_PER_ORDER,
+  fetchOrderHistory,
   fetchOrdersUpdatedSince,
   MAX_PAGES,
   ORDERS_PER_PAGE,
@@ -622,5 +623,74 @@ describe("fetchOrdersUpdatedSince", () => {
       expect(result.detail).not.toContain(TOKEN);
       expect(result.detail).toContain("rejected token");
     }
+  });
+});
+
+// The order history import (src/server/sync/backfill.ts) pages through a
+// store's orders by creation date, newest first, a few pages per cron tick.
+describe("fetchOrderHistory", () => {
+  const UNTIL = "2026-10-03T12:00:00.000Z";
+
+  it("asks for orders created in the range, newest first, with the sync's order fields", async () => {
+    const nodes = [{ id: "gid://shopify/Order/7", updatedAt: "2026-05-01T00:00:00Z" }];
+    const { impl, calls } = stubFetch([ordersPage(nodes, { hasNextPage: false, endCursor: null })]);
+    const result = await fetchOrderHistory(DOMAIN, TOKEN, { sinceIso: SINCE, untilIso: UNTIL }, impl, { maxPages: 20 });
+    expect(result).toEqual({ kind: "ok", nodes, truncated: false, maxUpdatedAt: "2026-05-01T00:00:00Z", endCursor: null });
+    const query = String(calls[0].body.query);
+    expect(query).toContain("orders(first: 5,");
+    expect(query).toContain("sortKey: CREATED_AT");
+    expect(query).toContain("reverse: true");
+    expect(query).toContain("lineItems(first: 48)");
+    expect(query).toContain("fulfillments(first: 3) { displayStatus }");
+    expect(variablesOf(calls[0])).toEqual({
+      cursor: null,
+      search: `created_at:>='${SINCE}' created_at:<'${UNTIL}'`,
+    });
+  });
+
+  it("asks for every order created before the end of the range when there is no start", async () => {
+    const { impl, calls } = stubFetch([ordersPage([], { hasNextPage: false, endCursor: null })]);
+    await fetchOrderHistory(DOMAIN, TOKEN, { sinceIso: null, untilIso: UNTIL }, impl, { maxPages: 20 });
+    expect(variablesOf(calls[0]).search).toBe(`created_at:<'${UNTIL}'`);
+  });
+
+  it("resumes from a cursor and stops after the page budget with the cursor to resume from", async () => {
+    const script = Array.from({ length: 5 }, (_, i) =>
+      ordersPage([{ id: `gid://shopify/Order/${i}`, updatedAt: "2026-05-01T00:00:00Z" }], {
+        hasNextPage: true,
+        endCursor: `history-${i}`,
+      }),
+    );
+    const { impl, calls } = stubFetch(script);
+    const result = await fetchOrderHistory(DOMAIN, TOKEN, { sinceIso: null, untilIso: UNTIL }, impl, {
+      startCursor: "history-start",
+      maxPages: 3,
+    });
+    expect(calls).toHaveLength(3);
+    expect(calls.map((call) => variablesOf(call).cursor)).toEqual(["history-start", "history-0", "history-1"]);
+    expect(result).toMatchObject({ kind: "ok", truncated: true, endCursor: "history-2" });
+  });
+
+  it("rejects a malformed range without ever calling fetch", async () => {
+    for (const range of [
+      { sinceIso: "2026-08-01", untilIso: UNTIL },
+      { sinceIso: null, untilIso: "yesterday" },
+      { sinceIso: "2026-08-01T00:00:00Z' OR id:>0 '", untilIso: UNTIL },
+    ]) {
+      const { impl, calls } = stubFetch([]);
+      const result = await fetchOrderHistory(DOMAIN, TOKEN, range, impl, { maxPages: 20 });
+      expect(result.kind).toBe("fatal");
+      expect(calls).toHaveLength(0);
+    }
+  });
+
+  it("costs exactly what the sync's orders query costs", async () => {
+    const history = stubFetch([ordersPage([], { hasNextPage: false, endCursor: null })]);
+    await fetchOrderHistory(DOMAIN, TOKEN, { sinceIso: null, untilIso: UNTIL }, history.impl, { maxPages: 20 });
+    const sync = stubFetch([ordersPage([], { hasNextPage: false, endCursor: null })]);
+    await fetchOrdersUpdatedSince(DOMAIN, TOKEN, SINCE, sync.impl);
+    const cost = requestedQueryCost(String(history.calls[0].body.query));
+    expect(cost).toBe(requestedQueryCost(String(sync.calls[0].body.query)));
+    expect(cost).toBeLessThanOrEqual(QUERY_COST_BUDGET);
   });
 });

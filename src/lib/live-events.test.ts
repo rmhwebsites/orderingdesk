@@ -43,6 +43,14 @@ describe("parseLiveEvent", () => {
     expect(parseLiveEvent(JSON.stringify({ kind: "order.activity" }))).toBeNull();
   });
 
+  // The order history import's refresh: a count, never ids to announce.
+  it("accepts an import refresh with a positive whole count only", () => {
+    expect(parseLiveEvent(JSON.stringify({ kind: "orders.imported", count: 12 }))).toEqual({ kind: "orders.imported", count: 12 });
+    for (const count of [0, -1, 1.5, "12", null]) {
+      expect(parseLiveEvent(JSON.stringify({ kind: "orders.imported", count }))).toBeNull();
+    }
+  });
+
   it("returns null for pongs, garbage and unknown kinds", () => {
     for (const raw of ["pong", "", "{", "null", "[]", '{"kind":"order.deleted"}', "42"]) {
       expect(parseLiveEvent(raw)).toBeNull();

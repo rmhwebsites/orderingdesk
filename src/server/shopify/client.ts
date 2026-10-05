@@ -38,6 +38,11 @@ export type FetchOrdersOptions = {
   startCursor?: string;
 };
 
+export type FetchHistoryOptions = FetchOrdersOptions & {
+  // Pages to read before stopping with the cursor to resume from.
+  maxPages: number;
+};
+
 // Anchored allowlist for the host that receives the token. Anything else is
 // rejected before fetch, so a tampered shop_domain row cannot exfiltrate the
 // token to an arbitrary host.
@@ -113,6 +118,19 @@ query OrdersUpdatedSince($cursor: String, $search: String) {
   }
 }`;
 
+// The order history import (src/server/sync/backfill.ts): the same page
+// size and order fields as the sync, so the same cost, but sorted by
+// creation date, newest first. Creation dates never change, so a cursor
+// held across many cron ticks keeps its place.
+const ORDER_HISTORY_QUERY = `
+query OrderHistory($cursor: String, $search: String) {
+  orders(first: ${ORDERS_PER_PAGE}, after: $cursor, sortKey: CREATED_AT, reverse: true, query: $search) {
+    nodes {${ORDER_FIELDS}
+    }
+    pageInfo { hasNextPage endCursor }
+  }
+}`;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -145,13 +163,57 @@ export async function fetchOrdersUpdatedSince(
   if (!SINCE_ISO.test(sinceIso)) {
     return { kind: "fatal", detail: "invalid since timestamp" };
   }
+  return fetchOrderPages(shopDomain, token, ORDERS_QUERY, `updated_at:>='${sinceIso}'`, fetchImpl, {
+    startCursor: opts?.startCursor,
+    maxPages: MAX_PAGES,
+  });
+}
 
+// One stretch of the order history import: orders created in
+// [sinceIso, untilIso) (every order before untilIso when sinceIso is null),
+// newest first, at most opts.maxPages pages from opts.startCursor. The same
+// results, failure kinds and protections as fetchOrdersUpdatedSince; a
+// truncated result's endCursor is where the next stretch resumes.
+export async function fetchOrderHistory(
+  shopDomain: string,
+  token: string,
+  range: { sinceIso: string | null; untilIso: string },
+  fetchImpl: typeof fetch = fetch,
+  opts: FetchHistoryOptions = { maxPages: MAX_PAGES },
+): Promise<ShopifyFetchResult> {
+  if (!SHOP_DOMAIN.test(shopDomain)) {
+    return { kind: "fatal", detail: "invalid shop domain" };
+  }
+  if ((range.sinceIso !== null && !SINCE_ISO.test(range.sinceIso)) || !SINCE_ISO.test(range.untilIso)) {
+    return { kind: "fatal", detail: "invalid order history range" };
+  }
+  const search = [
+    range.sinceIso !== null ? `created_at:>='${range.sinceIso}'` : null,
+    `created_at:<'${range.untilIso}'`,
+  ]
+    .filter((part) => part !== null)
+    .join(" ");
+  return fetchOrderPages(shopDomain, token, ORDER_HISTORY_QUERY, search, fetchImpl, {
+    startCursor: opts.startCursor,
+    maxPages: Math.max(1, Math.min(Math.trunc(opts.maxPages), MAX_PAGES)),
+  });
+}
+
+// The page loop both queries share. shopDomain and the search string are
+// already validated by the caller.
+async function fetchOrderPages(
+  shopDomain: string,
+  token: string,
+  query: string,
+  search: string,
+  fetchImpl: typeof fetch,
+  opts: { startCursor?: string; maxPages: number },
+): Promise<ShopifyFetchResult> {
   const url = `https://${shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`;
-  const search = `updated_at:>='${sinceIso}'`;
   const nodes: unknown[] = [];
   // The cursor the next request is sent with: the caller's resume point at
   // first, then the endCursor of the last page read.
-  let cursor: string | null = opts?.startCursor ?? null;
+  let cursor: string | null = opts.startCursor ?? null;
   let pagesRead = 0;
   let maxUpdatedAt: string | null = null;
   let maxUpdatedAtMs = -Infinity;
@@ -185,7 +247,7 @@ export async function fetchOrdersUpdatedSince(
       ? truncatedAt(cursor)
       : { kind: "transient", detail };
 
-  while (pagesRead < MAX_PAGES) {
+  while (pagesRead < opts.maxPages) {
     let response: Response;
     try {
       response = await fetchImpl(url, {
@@ -194,7 +256,7 @@ export async function fetchOrdersUpdatedSince(
           "X-Shopify-Access-Token": token,
           "content-type": "application/json",
         },
-        body: JSON.stringify({ query: ORDERS_QUERY, variables: { cursor, search } }),
+        body: JSON.stringify({ query, variables: { cursor, search } }),
         // Never follow a redirect: the default would re-send the access token
         // to whatever host the redirect names.
         redirect: "manual",
@@ -279,7 +341,8 @@ export async function fetchOrdersUpdatedSince(
 
   // Page cap reached with more pages remaining: the caller persists endCursor
   // and resumes this exact window next tick, so dense updatedAt clusters
-  // (hundreds of orders sharing one second) cannot livelock the sync.
+  // (hundreds of orders sharing one second) cannot livelock the sync, and
+  // the order history import advances a bounded stretch per tick.
   return truncatedAt(cursor);
 }
 
