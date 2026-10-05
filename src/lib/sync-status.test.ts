@@ -7,6 +7,7 @@ const NOW = Date.parse("2026-10-02T12:00:00.000Z");
 function connection(overrides: Partial<SyncConnectionView> = {}): SyncConnectionView {
   return {
     shopDomain: "impact-rentals.myshopify.com",
+    adminShopDomain: "impact-rentals.myshopify.com",
     status: "ok",
     lastSyncAt: NOW - 4 * 60000,
     lastError: null,

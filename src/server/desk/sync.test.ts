@@ -61,11 +61,21 @@ describe("getSyncConnection", () => {
     const db = await setup({ status: "error", lastSyncAt: NOW - 60000, lastError: "Shopify said no" });
     expect(await getSyncConnection(db, WS)).toEqual({
       shopDomain: "impact-rentals.myshopify.com",
+      adminShopDomain: "impact-rentals.myshopify.com",
       status: "error",
       lastSyncAt: NOW - 60000,
       lastError: "Shopify said no",
       catchingUp: false,
     });
+  });
+
+  it("links to Shopify admin through the store's canonical domain once it is known", async () => {
+    // A store saved under an alias (impactrentals.myshopify.com) has its admin
+    // at the canonical handle (admin.shopify.com/store/40kra0-b6).
+    const db = await setup({ shopDomain: "impactrentals.myshopify.com", canonicalShopDomain: "40kra0-b6.myshopify.com" });
+    const connection = await getSyncConnection(db, WS);
+    expect(connection?.shopDomain).toBe("impactrentals.myshopify.com");
+    expect(connection?.adminShopDomain).toBe("40kra0-b6.myshopify.com");
   });
 
   it("reports catchingUp while a cursor chain is still draining", async () => {

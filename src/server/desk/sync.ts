@@ -13,6 +13,11 @@ export const MANUAL_SYNC_COOLDOWN_MS = 30000;
 
 export type SyncConnectionView = {
   shopDomain: string;
+  // The domain whose handle Shopify admin links use: the store's canonical
+  // myshopify domain once a save or Refresh connection recorded it (a store
+  // saved under an alias has its admin at the canonical handle), else the
+  // saved domain.
+  adminShopDomain: string;
   status: "ok" | "error" | "disabled";
   lastSyncAt: number;
   lastError: string | null;
@@ -31,6 +36,7 @@ export async function getSyncConnection(
   const rows = await db
     .select({
       shopDomain: storeConnections.shopDomain,
+      canonicalShopDomain: storeConnections.canonicalShopDomain,
       status: storeConnections.status,
       lastSyncAt: storeConnections.lastSyncAt,
       lastError: storeConnections.lastError,
@@ -45,6 +51,7 @@ export async function getSyncConnection(
   }
   return {
     shopDomain: row.shopDomain,
+    adminShopDomain: row.canonicalShopDomain ?? row.shopDomain,
     status: row.status,
     lastSyncAt: row.lastSyncAt,
     lastError: row.lastError,

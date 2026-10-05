@@ -750,7 +750,7 @@ export function Desk() {
             members={members}
             selfUserId={userId}
             role={role}
-            shopDomain={connection?.shopDomain ?? null}
+            shopDomain={connection?.adminShopDomain ?? null}
             drafts={{ draftsEnabled: drafts.enabled }}
             onChangeStatus={(statusKey) => void changeStatus(drawerOrderId, statusKey)}
             onAddNote={(text) => addNote(drawerOrderId, text)}

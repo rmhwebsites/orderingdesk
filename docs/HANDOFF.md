@@ -1574,10 +1574,11 @@ request, never a real employee's first.
       else changed, nobody was emailed.
 - [ ] Complete a test draft with Mark as paid in Shopify: the card follows
       (Approved, "completed in Shopify" entry) with no new-order alert.
-- [ ] Open in Shopify links: they use the connected domain's handle
-      (impactrentals); the store's canonical myshopify domain is
-      40kra0-b6.myshopify.com. Check both an order and a draft link open
-      the right admin page (this predates drafts for order links).
+- [ ] Open in Shopify links: since 1ed99c4 they use the canonical
+      myshopify domain's handle (40kra0-b6, recorded in
+      canonical_shop_domain; set in production on Oct 5) instead of the
+      saved alias (impactrentals). Check an order and a draft link both
+      open the right admin page.
 
 ### Known limits and things not verified live
 

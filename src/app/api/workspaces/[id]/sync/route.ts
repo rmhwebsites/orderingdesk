@@ -8,8 +8,8 @@ import { shareShopifyMoves } from "@/server/shopify/fanout";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
-// Connection card data: {connection: {shopDomain, status, lastSyncAt,
-// lastError, catchingUp} | null}. Never the token.
+// Connection card data: {connection: {shopDomain, adminShopDomain, status,
+// lastSyncAt, lastError, catchingUp} | null}. Never the token.
 export async function GET(_request: Request, context: RouteContext) {
   try {
     const { id } = await context.params;
