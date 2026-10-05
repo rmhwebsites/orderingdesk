@@ -52,6 +52,19 @@ describe("parseLiveEvent", () => {
     }
   });
 
+  // Draft orders spec section 11.6 and 11.7.
+  it("accepts request entries and a card folded into its request", () => {
+    for (const type of ["draft_completed", "draft_deleted"]) {
+      const activity = { kind: "order.activity", event: { ...event, type, actorId: null, text: "Order #1234 created from draft #D12" } };
+      expect(parseLiveEvent(JSON.stringify(activity))).toEqual(activity);
+    }
+    const merged = { kind: "order.merged", fromId: "o9", toId: "d1" };
+    expect(parseLiveEvent(JSON.stringify(merged))).toEqual(merged);
+    expect(parseLiveEvent(JSON.stringify({ kind: "order.merged", fromId: "o9" }))).toBeNull();
+    expect(parseLiveEvent(JSON.stringify({ kind: "order.merged", fromId: 4, toId: "d1" }))).toBeNull();
+    expect(parseLiveEvent(JSON.stringify({ kind: "order.merged", fromId: "", toId: "d1" }))).toBeNull();
+  });
+
   // The order history import's refresh: a count, never ids to announce.
   it("accepts an import refresh with a positive whole count only", () => {
     expect(parseLiveEvent(JSON.stringify({ kind: "orders.imported", count: 12 }))).toEqual({ kind: "orders.imported", count: 12 });

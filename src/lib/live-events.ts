@@ -41,7 +41,6 @@ export type LiveEvent =
   | { kind: "order.activity"; event: EventView }
   // An order card was folded into the draft card it came from (draft orders
   // spec section 6.4): fromId no longer exists, toId carries its history.
-  // Sent by the server; the desk's parser learns it with the desk UI work.
   | { kind: "order.merged"; fromId: string; toId: string };
 
 const EVENT_TYPES = new Set([
@@ -53,6 +52,8 @@ const EVENT_TYPES = new Set([
   "po_failed",
   "sync_error",
   "shopify_write",
+  "draft_completed",
+  "draft_deleted",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -115,6 +116,10 @@ export function parseLiveEvent(raw: string): LiveEvent | null {
       return isOrderEvent(data.event) ? { kind: "order.note", event: data.event } : null;
     case "order.activity":
       return isOrderEvent(data.event) ? { kind: "order.activity", event: data.event } : null;
+    case "order.merged":
+      return typeof data.fromId === "string" && data.fromId.length > 0 && typeof data.toId === "string" && data.toId.length > 0
+        ? { kind: "order.merged", fromId: data.fromId, toId: data.toId }
+        : null;
     default:
       return null;
   }

@@ -85,9 +85,18 @@ const LEGACY_ID = /^[0-9]+$/;
 // connected shop or the id is not a Shopify order number, so the link is
 // left out rather than pointing somewhere wrong.
 export function shopifyAdminOrderUrl(shopDomain: string | null, legacyOrderId: string): string | null {
+  return adminUrl(shopDomain, "orders", legacyOrderId);
+}
+
+// The same for a draft order: .../draft_orders/<legacy draft id>.
+export function shopifyAdminDraftUrl(shopDomain: string | null, legacyDraftId: string | null): string | null {
+  return adminUrl(shopDomain, "draft_orders", legacyDraftId);
+}
+
+function adminUrl(shopDomain: string | null, section: "orders" | "draft_orders", legacyId: string | null): string | null {
   const match = typeof shopDomain === "string" ? shopDomain.toLowerCase().match(SHOP_DOMAIN) : null;
-  if (!match || !LEGACY_ID.test(legacyOrderId)) {
+  if (!match || legacyId === null || !LEGACY_ID.test(legacyId)) {
     return null;
   }
-  return `https://admin.shopify.com/store/${match[1]}/orders/${legacyOrderId}`;
+  return `https://admin.shopify.com/store/${match[1]}/${section}/${legacyId}`;
 }

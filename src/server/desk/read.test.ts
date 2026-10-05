@@ -9,7 +9,7 @@ import {
   listEvents,
   loadDesk,
 } from "./read";
-import { openTestDb, seedOrder, seedWorkspace, snapshotOf } from "./test-helpers";
+import { draftSnapshotOf, openTestDb, seedDraft, seedOrder, seedWorkspace, snapshotOf } from "./test-helpers";
 
 const WS = "ws_impact";
 const OTHER = "ws_other";
@@ -116,9 +116,87 @@ describe("loadDesk", () => {
         // Every title, so a desk search covers items past the preview.
         itemTitles: ["Hard Hat", "Safety Vest", "Caster Wheel", "Ladder"],
         itemsTruncated: false,
+        kind: "order",
+        draftName: null,
+        draftStatus: null,
+        draftDeleted: false,
+        company: "",
+        location: "",
+        requestFor: "",
+        branch: "",
+        searchText: [],
       },
     ]);
     expect(JSON.stringify(desk)).not.toContain("shipping");
+  });
+
+  // Draft orders spec section 11.1.
+  it("summarizes a request and an order that came from one, keeping the draft name and request fields", async () => {
+    const db = await setup();
+    const attributes = [
+      { key: "For Employee Name", value: "Casey Lin" },
+      { key: "Ship to Branch", value: "Buford HQ" },
+    ];
+    await seedDraft(db, WS, {
+      id: "d1",
+      draftId: "12",
+      name: "#D12",
+      createdAt: 3000,
+      shopify: draftSnapshotOf({ name: "#D12", attributes }),
+    });
+    await seedDraft(db, WS, { id: "d2", draftId: "13", name: "#D13", createdAt: 2500, draftDeletedAt: 2600 });
+    await seedOrder(db, WS, { id: "o1", name: "#1234", createdAt: 2000, shopify: { ...snapshotOf({ name: "#1234" }), kind: "order" } });
+    await db
+      .update(schema.orders)
+      .set({ shopifyDraftId: "11", draftName: "#D11", draftSnapshot: draftSnapshotOf({ name: "#D11", status: "completed", attributes }) })
+      .where(eq(schema.orders.id, "o1"));
+
+    const desk = await loadDesk(db, WS);
+    const byId = new Map(desk!.orders.map((order) => [order.id, order]));
+    expect(byId.get("d1")).toMatchObject({
+      kind: "draft",
+      name: "#D12",
+      draftName: "#D12",
+      draftStatus: "open",
+      draftDeleted: false,
+      customerName: "Jordan Vale",
+      financialStatus: "",
+      company: "Impact Rentals",
+      location: "Buford, GA",
+      requestFor: "Casey Lin",
+      branch: "Buford HQ",
+      searchText: ["#D12", "Impact Rentals", "Buford, GA", "Casey Lin", "Buford HQ"],
+    });
+    expect(byId.get("d2")).toMatchObject({ kind: "draft", draftDeleted: true, branch: "Buford, GA" });
+    expect(byId.get("o1")).toMatchObject({
+      kind: "order",
+      name: "#1234",
+      draftName: "#D11",
+      draftStatus: "completed",
+      draftDeleted: false,
+      company: "Impact Rentals",
+      requestFor: "Casey Lin",
+    });
+    // Open requests, and requests whose draft Shopify deleted.
+    expect(desk!.draftCount).toBe(1);
+    expect(desk!.deletedDraftCount).toBe(1);
+  });
+
+  it("says whether draft orders sync for the store, from the stored grant", async () => {
+    const db = await setup();
+    expect((await loadDesk(db, WS))!.drafts).toEqual({ enabled: false, missingScopes: [] });
+    await db.insert(schema.storeConnections).values({
+      workspaceId: WS,
+      shopDomain: "impact-rentals.myshopify.com",
+      encryptedToken: "x",
+      scopes: ["read_orders", "write_orders"],
+    });
+    expect((await loadDesk(db, WS))!.drafts).toEqual({
+      enabled: false,
+      missingScopes: ["read_draft_orders", "write_draft_orders"],
+    });
+    await db.update(schema.storeConnections).set({ scopes: ["read_orders", "write_draft_orders"] });
+    expect((await loadDesk(db, WS))!.drafts).toEqual({ enabled: true, missingScopes: [] });
   });
 
   // The sync marks an order whose line items did not fit the fetched page;

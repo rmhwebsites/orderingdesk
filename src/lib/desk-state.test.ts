@@ -3,6 +3,8 @@ import type { OrderSummary } from "@/server/desk/read";
 import type { EventView, StatusView } from "@/server/desk/shapes";
 import {
   applyLiveEvent,
+  arrivalNotice,
+  deskKindCounts,
   optimisticStatus,
   rollbackStatus,
   selectOrders,
@@ -34,6 +36,15 @@ function order(id: string, overrides: Partial<OrderSummary> = {}): OrderSummary 
     itemsPreview: ["1 x Hard Hat"],
     itemTitles: ["Hard Hat"],
     itemsTruncated: false,
+    kind: "order",
+    draftName: null,
+    draftStatus: null,
+    draftDeleted: false,
+    company: "",
+    location: "",
+    requestFor: "",
+    branch: "",
+    searchText: [],
     ...overrides,
   };
 }
@@ -330,6 +341,69 @@ describe("selectOrders", () => {
 
   it("filters by status key, including unknown keys", () => {
     expect(selectOrders(orders, { query: "", statusKey: "shipped", sort: "newest" }).map((o) => o.id)).toEqual(["b"]);
+  });
+});
+
+// Draft orders spec sections 11.2 and 11.7, and section 18 item 7.
+describe("requests in the list", () => {
+  const list = [
+    order("o1", { createdAt: 4 }),
+    order("d1", { name: "#D12", kind: "draft", draftName: "#D12", createdAt: 3, searchText: ["#D12", "Impact Rentals", "Casey Lin", "Buford HQ"] }),
+    order("d2", { name: "#D13", kind: "draft", draftName: "#D13", draftDeleted: true, createdAt: 2 }),
+    order("o2", { name: "#1234", draftName: "#D11", draftStatus: "completed", createdAt: 1, searchText: ["#D11"] }),
+  ];
+  const ids = (kind: "all" | "drafts" | "orders" | "deleted", query = "") =>
+    selectOrders(list, { query, statusKey: null, sort: "newest", kind }).map((row) => row.id);
+
+  it("filters requests and orders, keeping deleted drafts out of everything but their own filter", () => {
+    expect(ids("all")).toEqual(["o1", "d1", "o2"]);
+    expect(ids("drafts")).toEqual(["d1"]);
+    expect(ids("orders")).toEqual(["o1", "o2"]);
+    expect(ids("deleted")).toEqual(["d2"]);
+    // No kind given reads as all.
+    expect(selectOrders(list, { query: "", statusKey: null, sort: "newest" }).map((row) => row.id)).toEqual(["o1", "d1", "o2"]);
+  });
+
+  it("searches the draft name, company and request fields too", () => {
+    expect(ids("all", "casey")).toEqual(["d1"]);
+    expect(ids("all", "buford hq")).toEqual(["d1"]);
+    expect(ids("all", "#d11")).toEqual(["o2"]);
+  });
+
+  it("counts the loaded requests, orders and deleted drafts", () => {
+    expect(deskKindCounts(list)).toEqual({ drafts: 1, orders: 2, deleted: 1 });
+  });
+
+  it("announces requests as requests and a mixed batch as both", () => {
+    expect(arrivalNotice([order("d1", { name: "#D12", kind: "draft", customerName: "Jordan Vale" })])).toEqual({
+      title: "New request #D12 from Jordan Vale",
+    });
+    expect(arrivalNotice([order("o1", { name: "#1001" })])).toEqual({ title: "New order #1001 from Riley Oakes", body: "CA$120.00" });
+    expect(arrivalNotice([order("d1", { kind: "draft" }), order("d2", { kind: "draft" })]).title).toBe("2 new requests");
+    expect(arrivalNotice([order("d1", { kind: "draft" }), order("o1")])).toEqual({
+      title: "2 new orders and requests",
+      body: "#d1, #o1",
+    });
+    expect(arrivalNotice([order("o1"), order("o2"), order("o3"), order("o4")])).toEqual({
+      title: "4 new orders",
+      body: "#o1, #o2, #o3 and 1 more",
+    });
+  });
+
+  it("drops an order card folded into its request card, with its count, and says where it went", () => {
+    const merged = state({
+      orders: [order("o1"), order("d1", { statusKey: "processing", kind: "draft" })],
+      statusCounts: { new: 1, processing: 1 },
+      timeline: { orderId: "o1", events: [] },
+    });
+    const { state: next, effects } = applyLiveEvent(merged, { kind: "order.merged", fromId: "o1", toId: "d1" }, ME);
+    expect(next.orders.map((row) => row.id)).toEqual(["d1"]);
+    expect(next.statusCounts).toEqual({ new: 0, processing: 1 });
+    expect(effects).toMatchObject({ refetch: true, merged: { fromId: "o1", toId: "d1" } });
+    // An id this desk never loaded changes nothing but still refetches.
+    const unknown = applyLiveEvent(state(), { kind: "order.merged", fromId: "zz", toId: "d1" }, ME);
+    expect(unknown.state.orders).toHaveLength(2);
+    expect(unknown.effects.refetch).toBe(true);
   });
 });
 

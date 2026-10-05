@@ -2,9 +2,11 @@
 // full, and the activity feed. Callers authorize first (route guards); every
 // query here is still scoped to the workspace it is given.
 
-import { and, asc, count, desc, eq } from "drizzle-orm";
+import { and, asc, count, desc, eq, isNotNull, isNull } from "drizzle-orm";
 import type { Db } from "@/db";
-import { events, orders, statuses, workspaceSettings, workspaces } from "@/db/schema";
+import { events, orders, statuses, storeConnections, workspaceSettings, workspaces } from "@/db/schema";
+import { requestFieldsOf } from "@/lib/request-fields";
+import { draftsEnabled, missingDraftScopes } from "@/server/shopify/admin";
 import {
   eventView,
   isRecord,
@@ -44,7 +46,29 @@ export type OrderSummary = {
   // (see itemsTruncated in normalize.ts). When true, itemCount, the preview
   // and itemTitles cover only the items the sync fetched.
   itemsTruncated: boolean;
+  // Draft orders spec section 11.1. A draft card has no Shopify order yet.
+  kind: "draft" | "order";
+  // A draft's name, or the draft an order came from ("#D12").
+  draftName: string | null;
+  // The draft's own status: open or invoice_sent while a request,
+  // completed on an order card that was one; null for other orders.
+  draftStatus: "open" | "invoice_sent" | "completed" | null;
+  // Shopify reported the request's draft deleted (the card is kept).
+  draftDeleted: boolean;
+  // Request fields (src/lib/request-fields.ts): the current snapshot, then
+  // the draft snapshot an order card keeps.
+  company: string;
+  location: string;
+  requestFor: string;
+  branch: string;
+  // What a desk search matches besides the name, customer, email and items.
+  searchText: string[];
 };
+
+function draftStatusOf(snapshot: unknown): OrderSummary["draftStatus"] {
+  const status = isRecord(snapshot) ? snapshot.status : undefined;
+  return status === "invoice_sent" || status === "completed" ? status : "open";
+}
 
 // Only an explicit false counts as complete; a snapshot stored before the
 // marker existed has no key and stays unconfirmed. One rule for the list
@@ -60,6 +84,13 @@ export type DeskPayload = {
   statusCounts: Record<string, number>;
   orders: OrderSummary[];
   hasMore: boolean;
+  // Requests waiting as drafts (not deleted in Shopify), over every card.
+  draftCount: number;
+  // Requests whose draft Shopify deleted (shown under their own filter).
+  deletedDraftCount: number;
+  // Whether draft orders sync for the store, from the stored grant;
+  // missingScopes is empty when there is no store or the grant is unknown.
+  drafts: { enabled: boolean; missingScopes: string[] };
 };
 
 function text(value: unknown): string {
@@ -79,6 +110,8 @@ function quantity(item: Record<string, unknown>): number {
 function summarize(row: typeof orders.$inferSelect): OrderSummary {
   const snapshot = isRecord(row.shopify) ? row.shopify : {};
   const items = Array.isArray(snapshot.items) ? snapshot.items.filter(isRecord) : [];
+  const kind = row.shopifyOrderId === null ? "draft" : "order";
+  const request = requestFieldsOf(row.shopify, row.draftSnapshot);
   return {
     id: row.id,
     name: row.name,
@@ -99,6 +132,18 @@ function summarize(row: typeof orders.$inferSelect): OrderSummary {
       .map((item) => `${quantity(item)} x ${text(item.title) || "Untitled item"}`),
     itemTitles: items.map((item) => text(item.title)).filter((title) => title.length > 0),
     itemsTruncated: itemsTruncatedOf(row.shopify),
+    kind,
+    draftName: row.draftName ?? null,
+    draftStatus:
+      kind === "draft" ? draftStatusOf(row.shopify) : row.draftSnapshot !== null || row.draftName !== null ? "completed" : null,
+    draftDeleted: kind === "draft" && row.draftDeletedAt !== null,
+    company: request.company,
+    location: request.location,
+    requestFor: request.requestFor,
+    branch: request.branch,
+    searchText: [row.draftName ?? "", request.company, request.location, request.requestFor, request.branch].filter(
+      (part) => part.length > 0,
+    ),
   };
 }
 
@@ -108,7 +153,7 @@ export async function loadDesk(
   opts?: { limit?: number },
 ): Promise<DeskPayload | null> {
   const limit = opts?.limit ?? ORDER_LIST_CAP;
-  const [workspaceRows, statusRows, settingsRows, countRows, orderRows] = await Promise.all([
+  const [workspaceRows, statusRows, settingsRows, countRows, orderRows, draftRows, connectionRows] = await Promise.all([
     db
       .select({
         id: workspaces.id,
@@ -142,6 +187,17 @@ export async function loadDesk(
       .where(eq(orders.workspaceId, workspaceId))
       .orderBy(desc(orders.createdAt), desc(orders.id))
       .limit(limit + 1),
+    // Draft cards over every card, split by whether Shopify deleted them.
+    db
+      .select({ deleted: isNotNull(orders.draftDeletedAt), count: count() })
+      .from(orders)
+      .where(and(eq(orders.workspaceId, workspaceId), isNull(orders.shopifyOrderId)))
+      .groupBy(isNotNull(orders.draftDeletedAt)),
+    db
+      .select({ scopes: storeConnections.scopes })
+      .from(storeConnections)
+      .where(eq(storeConnections.workspaceId, workspaceId))
+      .limit(1),
   ]);
 
   const workspace = workspaceRows[0];
@@ -160,6 +216,9 @@ export async function loadDesk(
     statusCounts[row.statusKey] = Number(row.count);
   }
 
+  const scopes = Array.isArray(connectionRows[0]?.scopes) ? connectionRows[0].scopes : null;
+  const draftsCounted = (deleted: boolean) =>
+    Number(draftRows.find((row) => Boolean(row.deleted) === deleted)?.count ?? 0);
   return {
     workspace,
     statuses: statusRows.map(statusView),
@@ -167,6 +226,9 @@ export async function loadDesk(
     statusCounts,
     orders: orderRows.slice(0, limit).map(summarize),
     hasMore: orderRows.length > limit,
+    draftCount: draftsCounted(false),
+    deletedDraftCount: draftsCounted(true),
+    drafts: { enabled: draftsEnabled(scopes), missingScopes: scopes ? missingDraftScopes(scopes) : [] },
   };
 }
 

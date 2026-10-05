@@ -5,6 +5,7 @@ import {
   formatTime,
   relativeTime,
   sentenceCase,
+  shopifyAdminDraftUrl,
   shopifyAdminOrderUrl,
 } from "./format";
 
@@ -69,5 +70,16 @@ describe("shopifyAdminOrderUrl", () => {
     expect(shopifyAdminOrderUrl("impact.example.com", "1")).toBeNull();
     expect(shopifyAdminOrderUrl("impact-rentals.myshopify.com", "")).toBeNull();
     expect(shopifyAdminOrderUrl("impact-rentals.myshopify.com", "sample-1001")).toBeNull();
+  });
+});
+
+describe("shopifyAdminDraftUrl", () => {
+  it("builds the admin link to a draft order, or null when it cannot", () => {
+    expect(shopifyAdminDraftUrl("impact-rentals.myshopify.com", "1180123")).toBe(
+      "https://admin.shopify.com/store/impact-rentals/draft_orders/1180123",
+    );
+    expect(shopifyAdminDraftUrl(null, "1")).toBeNull();
+    expect(shopifyAdminDraftUrl("impact-rentals.myshopify.com", "d-12")).toBeNull();
+    expect(shopifyAdminDraftUrl("impact-rentals.myshopify.com", null)).toBeNull();
   });
 });

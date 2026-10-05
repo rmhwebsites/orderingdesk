@@ -5,6 +5,7 @@
 
 import type { OrderSummary } from "@/server/desk/read";
 import type { EventView, StatusView } from "@/server/desk/shapes";
+import { formatMoney } from "./format";
 import type { LiveEvent } from "./live-events";
 
 // The open drawer's activity timeline, newest first.
@@ -27,6 +28,9 @@ export type LiveEffects = {
   announceOrderIds: string[];
   // Rows to flash, now or once reloaded.
   flashOrderIds: string[];
+  // An order card folded into its request card: a drawer open on fromId
+  // moves to toId.
+  merged?: { fromId: string; toId: string };
 };
 
 const NO_EFFECTS: LiveEffects = {
@@ -94,12 +98,24 @@ export function applyLiveEvent(
     case "orders.imported":
       return { state, effects: { ...NO_EFFECTS, refetch: true } };
 
-    // An order card folded into its draft card: reload the list. (Dropping
-    // the old id and moving an open drawer to the new one comes with the
-    // desk's draft order work; until then parseLiveEvent does not pass this
-    // kind on.)
-    case "order.merged":
-      return { state, effects: { ...NO_EFFECTS, refetch: true } };
+    // An order card folded into its request card (draft orders spec section
+    // 11.7): the old row and its count go at once, the list reloads, and a
+    // drawer open on the old card moves to the request card.
+    case "order.merged": {
+      const gone = state.orders.find((row) => row.id === event.fromId);
+      const merged = { fromId: event.fromId, toId: event.toId };
+      if (!gone) {
+        return { state, effects: { ...NO_EFFECTS, refetch: true, merged } };
+      }
+      return {
+        state: {
+          ...state,
+          orders: state.orders.filter((row) => row.id !== event.fromId),
+          statusCounts: { ...state.statusCounts, [gone.statusKey]: Math.max(0, (state.statusCounts[gone.statusKey] ?? 0) - 1) },
+        },
+        effects: { ...NO_EFFECTS, refetch: true, merged },
+      };
+    }
 
     case "order.status": {
       const change = event.order;
@@ -248,7 +264,59 @@ export function totalOrders(counts: Record<string, number>): number {
 
 export type SortKey = "newest" | "oldest" | "total";
 
-export type DeskFilter = { query: string; statusKey: string | null; sort: SortKey };
+// All: every card except requests whose draft Shopify deleted (section 18
+// item 7: they leave the default view and have their own filter).
+export type DeskKind = "all" | "drafts" | "orders" | "deleted";
+
+export type DeskFilter = { query: string; statusKey: string | null; sort: SortKey; kind?: DeskKind };
+
+function kindMatches(row: OrderSummary, kind: DeskKind): boolean {
+  switch (kind) {
+    case "all":
+      return !row.draftDeleted;
+    case "drafts":
+      return row.kind === "draft" && !row.draftDeleted;
+    case "orders":
+      return row.kind === "order";
+    case "deleted":
+      return row.draftDeleted;
+  }
+}
+
+// The loaded cards per kind filter (the server's counts cover every card;
+// these are for what this desk has).
+export function deskKindCounts(orders: OrderSummary[]): { drafts: number; orders: number; deleted: number } {
+  return {
+    drafts: orders.filter((row) => kindMatches(row, "drafts")).length,
+    orders: orders.filter((row) => kindMatches(row, "orders")).length,
+    deleted: orders.filter((row) => kindMatches(row, "deleted")).length,
+  };
+}
+
+// The live toast for cards that just arrived: "New request #D12 from
+// Jordan Vale", "New order #1001 from Riley Oakes" with its total, or a
+// count ("3 new requests", "2 new orders", "5 new orders and requests").
+export function arrivalNotice(orders: OrderSummary[]): { title: string; body?: string } {
+  if (orders.length === 1) {
+    const [row] = orders;
+    const who = row.customerName ? ` from ${row.customerName}` : "";
+    if (row.kind === "draft") {
+      return { title: `New request ${row.name}${who}` };
+    }
+    const total = formatMoney(row.total, row.currency);
+    return total ? { title: `New order ${row.name}${who}`, body: total } : { title: `New order ${row.name}${who}` };
+  }
+  const requests = orders.filter((row) => row.kind === "draft").length;
+  const names = orders.slice(0, 3).map((row) => row.name);
+  const rest = orders.length - names.length;
+  const title =
+    requests === orders.length
+      ? `${orders.length} new requests`
+      : requests === 0
+        ? `${orders.length} new orders`
+        : `${orders.length} new orders and requests`;
+  return { title, body: rest > 0 ? `${names.join(", ")} and ${rest} more` : names.join(", ") };
+}
 
 function amount(total: string): number {
   const value = Number(total);
@@ -257,7 +325,11 @@ function amount(total: string): number {
 
 export function selectOrders(orders: OrderSummary[], filter: DeskFilter): OrderSummary[] {
   const query = filter.query.trim().toLowerCase();
+  const kind = filter.kind ?? "all";
   const matches = orders.filter((row) => {
+    if (!kindMatches(row, kind)) {
+      return false;
+    }
     if (filter.statusKey !== null && row.statusKey !== filter.statusKey) {
       return false;
     }
@@ -268,7 +340,8 @@ export function selectOrders(orders: OrderSummary[], filter: DeskFilter): OrderS
       row.name.toLowerCase().includes(query) ||
       row.customerName.toLowerCase().includes(query) ||
       row.email.toLowerCase().includes(query) ||
-      row.itemTitles.some((title) => title.toLowerCase().includes(query))
+      row.itemTitles.some((title) => title.toLowerCase().includes(query)) ||
+      row.searchText.some((text) => text.toLowerCase().includes(query))
     );
   });
   const newest = (a: OrderSummary, b: OrderSummary) =>
