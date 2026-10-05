@@ -180,6 +180,14 @@ describe("a confirmed send", () => {
     expect(sent[1].html).toContain("Oct 5, 2026");
   });
 
+  // Settings > Workspace email > From name is "the sender name for purchase
+  // order email".
+  it("uses the workspace's From name as the sender name when one is set", async () => {
+    await db.update(schema.workspaceSettings).set({ fromName: "IMPACT Purchasing" }).where(eq(schema.workspaceSettings.workspaceId, WS));
+    await send(confirmed());
+    expect(sent[0].from).toEqual({ name: "IMPACT Purchasing", email: "orders@orderingdesk.com" });
+  });
+
   it("sends from the workspace's own verified address when it has one", async () => {
     await db
       .update(schema.workspaces)

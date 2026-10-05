@@ -7,6 +7,7 @@ import {
   ORDERS_PER_PAGE,
   SHOPIFY_API_VERSION,
 } from "./client";
+import { ORDER_LINE_ITEMS_QUERY } from "./admin";
 
 const DOMAIN = "impact-rentals.myshopify.com";
 const TOKEN = "shpat_super_secret_value_9f3a";
@@ -691,6 +692,16 @@ describe("fetchOrderHistory", () => {
     await fetchOrdersUpdatedSince(DOMAIN, TOKEN, SINCE, sync.impl);
     const cost = requestedQueryCost(String(history.calls[0].body.query));
     expect(cost).toBe(requestedQueryCost(String(sync.calls[0].body.query)));
+    expect(cost).toBeLessThanOrEqual(QUERY_COST_BUDGET);
+  });
+});
+
+// The purchase order prefill's full line item query (src/server/shopify/
+// admin.ts fetchAllLineItems) under the same estimate and budget.
+describe("ORDER_LINE_ITEMS_QUERY", () => {
+  it("stays within the query cost budget", () => {
+    const cost = requestedQueryCost(ORDER_LINE_ITEMS_QUERY);
+    expect(cost).toBe(304);
     expect(cost).toBeLessThanOrEqual(QUERY_COST_BUDGET);
   });
 });

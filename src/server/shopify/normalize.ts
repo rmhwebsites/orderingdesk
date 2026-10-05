@@ -112,7 +112,14 @@ function statusText(value: unknown, fallback: string): string {
 }
 
 function itemsOf(order: Dict): NormalizedOrder["items"] {
-  const lineItems = isDict(order.lineItems) ? nodesOrEdges(order.lineItems) : [];
+  return normalizeLineItems(order.lineItems);
+}
+
+// A line item connection (nodes or edges) as stored items. Also used for
+// the full line item list a purchase order prefill fetches
+// (src/server/shopify/admin.ts fetchAllLineItems).
+export function normalizeLineItems(connection: unknown): NormalizedOrder["items"] {
+  const lineItems = isDict(connection) ? nodesOrEdges(connection) : [];
   return lineItems.filter(isDict).map((item) => ({
     title: str(item.title),
     qty: typeof item.quantity === "number" && Number.isFinite(item.quantity) ? item.quantity : 1,

@@ -9,7 +9,8 @@
 // One send, in order: claim the PO (the send lease, so overlapping requests
 // cannot both send), mint its number if it has none yet, render the PDF,
 // store it in R2 under pos/<workspaceId>/<poId>-<random>.pdf, email the
-// vendor from the workspace sender (senderFor) with the branded body
+// vendor from the workspace sender (senderFor, named by the From name
+// setting when there is one) with the branded body
 // (renderEmail), the PDF attached, copies to the vendor's other addresses
 // and the workspace notification list, and the workspace reply-to; then
 // mark the PO sent with a po_sent event. The caller broadcasts the event
@@ -43,7 +44,7 @@ import {
   loadPoRow,
   loadPoView,
   notificationEmailsOf,
-  poPrefixOf,
+  poSettingsOf,
   readLines,
   readShipTo,
   sendLeaseActive,
@@ -170,14 +171,14 @@ export async function sendPurchaseOrder(
     return { kind: "unchanged", reason: "already-sent", po: await view() };
   }
 
-  const [vendorRows, notificationEmails, prefix, mail, orderRows] = await Promise.all([
+  const [vendorRows, notificationEmails, poSettings, mail, orderRows] = await Promise.all([
     db
       .select()
       .from(vendors)
       .where(and(eq(vendors.id, row.vendorId), eq(vendors.workspaceId, ctx.workspaceId)))
       .limit(1),
     notificationEmailsOf(db, ctx.workspaceId),
-    poPrefixOf(db, ctx.workspaceId),
+    poSettingsOf(db, ctx.workspaceId),
     loadMailWorkspace(db, ctx.workspaceId),
     db
       .select({ name: orders.name })
@@ -245,7 +246,7 @@ export async function sendPurchaseOrder(
   let storedKey: string | null = null;
   try {
     try {
-      number = await nextPoNumber(db, { workspaceId: ctx.workspaceId, poId: row.id, prefix, now: claimedAt });
+      number = await nextPoNumber(db, { workspaceId: ctx.workspaceId, poId: row.id, prefix: poSettings.prefix, now: claimedAt });
     } catch (e) {
       throw new SendFailure(e instanceof PoNumberError ? e.message : plainReason("No purchase order number could be assigned", e));
     }
@@ -311,7 +312,10 @@ export async function sendPurchaseOrder(
       date: poDate,
       timeZone: request.timeZone,
     });
-    const sender = senderFor(deps.env, mail);
+    // The From name, when set, names the sender of PO email; the address
+    // is still senderFor's (the workspace's verified one, else the
+    // platform's).
+    const sender = senderFor(deps.env, poSettings.fromName ? { ...mail, name: poSettings.fromName } : mail);
     try {
       await sendEmail(deps.env, {
         from: sender.from,

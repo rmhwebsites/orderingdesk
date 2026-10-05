@@ -170,12 +170,18 @@ export async function notificationEmailsOf(db: Db, workspaceId: string): Promise
 }
 
 export async function poPrefixOf(db: Db, workspaceId: string): Promise<string> {
+  return (await poSettingsOf(db, workspaceId)).prefix;
+}
+
+// The PO prefix and the From name (Settings > Workspace email: "the sender
+// name for purchase order email").
+export async function poSettingsOf(db: Db, workspaceId: string): Promise<{ prefix: string; fromName: string | null }> {
   const rows = await db
-    .select({ prefix: workspaceSettings.poPrefix })
+    .select({ prefix: workspaceSettings.poPrefix, fromName: workspaceSettings.fromName })
     .from(workspaceSettings)
     .where(eq(workspaceSettings.workspaceId, workspaceId))
     .limit(1);
-  return rows[0]?.prefix ?? "PO";
+  return { prefix: rows[0]?.prefix ?? "PO", fromName: rows[0]?.fromName ?? null };
 }
 
 async function vendorsById(db: Db, workspaceId: string, ids: string[]): Promise<Map<string, VendorRow>> {

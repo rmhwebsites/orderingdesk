@@ -58,8 +58,13 @@ function formLine(line: PoLine): PoFormLine {
   };
 }
 
-export function formFromOrder(snapshot: OrderSnapshot): PoForm {
-  const lines = linesFromOrderItems(snapshot.items).map(formLine);
+// lines: the full line list to start from (the po-lines route); omitted,
+// the snapshot's own items; null, it could not be read (the snapshot is
+// partial), so the form starts with one empty line and never with a partial
+// list.
+export function formFromOrder(snapshot: OrderSnapshot, given?: PoLine[] | null): PoForm {
+  const source = given === undefined ? linesFromOrderItems(snapshot.items) : (given ?? []);
+  const lines = source.map(formLine);
   return {
     vendorId: "",
     lines: lines.length > 0 ? lines : [emptyLine()],

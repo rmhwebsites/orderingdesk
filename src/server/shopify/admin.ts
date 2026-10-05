@@ -7,6 +7,7 @@
 // Callers always get a typed result, never an exception.
 
 import { ORDER_FIELDS, shopifyGraphql, type GraphqlResult } from "./client";
+import { normalizeLineItems, type NormalizedOrder } from "./normalize";
 
 export type AdminFailure =
   | { kind: "auth" }
@@ -171,6 +172,57 @@ export async function fetchOrderNode(
     return failed(result);
   }
   return { kind: "ok", node: isRecord(result.data.order) ? result.data.order : null };
+}
+
+// ---------------------------------------------------------------------------
+// Every line item of one order (a purchase order prefill): the sync stores
+// only the first 48 and marks the rest as missing (itemsTruncated). 100 a
+// page costs about 304 points by the client.test.ts estimator; at most 10
+// pages (1,000 line items) are read.
+
+export const LINE_ITEM_PAGE = 100;
+export const MAX_LINE_ITEM_PAGES = 10;
+
+export const ORDER_LINE_ITEMS_QUERY = `query OrderLineItems($id: ID!, $cursor: String) {
+  order(id: $id) {
+    lineItems(first: ${LINE_ITEM_PAGE}, after: $cursor) {
+      nodes { title quantity sku variantTitle originalUnitPriceSet { shopMoney { amount } } }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`;
+
+// items null: Shopify has no such order. complete false: more line items
+// exist than were read (the page cap, or a page without a cursor).
+export async function fetchAllLineItems(
+  shopDomain: string,
+  token: string,
+  orderGid: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ kind: "ok"; items: NormalizedOrder["items"] | null; complete: boolean } | AdminFailure> {
+  const items: NormalizedOrder["items"] = [];
+  let cursor: string | null = null;
+  for (let page = 0; page < MAX_LINE_ITEM_PAGES; page++) {
+    const result = await shopifyGraphql(shopDomain, token, ORDER_LINE_ITEMS_QUERY, { id: orderGid, cursor }, fetchImpl);
+    if (result.kind !== "ok") {
+      return failed(result);
+    }
+    const order = result.data.order;
+    if (!isRecord(order)) {
+      return { kind: "ok", items: null, complete: true };
+    }
+    const connection = isRecord(order.lineItems) ? order.lineItems : {};
+    items.push(...normalizeLineItems(connection));
+    const pageInfo = isRecord(connection.pageInfo) ? connection.pageInfo : {};
+    if (pageInfo.hasNextPage === false) {
+      return { kind: "ok", items, complete: true };
+    }
+    if (typeof pageInfo.endCursor !== "string" || pageInfo.endCursor.length === 0) {
+      return { kind: "ok", items, complete: false };
+    }
+    cursor = pageInfo.endCursor;
+  }
+  return { kind: "ok", items, complete: false };
 }
 
 // ---------------------------------------------------------------------------

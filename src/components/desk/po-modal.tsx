@@ -5,7 +5,10 @@
 // (Create purchase order, Review and send, Edit) or when a status change
 // answers triggersPo. The vendor is picked from the workspace list (or
 // added inline), the lines are prefilled from the order and editable (the
-// unit cost is the reviewer's), the ship-to is prefilled and editable, and
+// unit cost is the reviewer's; an order whose stored item list is partial
+// is prefilled from the full list read from Shopify, and when that cannot
+// be read the lines start empty and Send to vendor stays blocked), the
+// ship-to is prefilled and editable, and
 // notes are optional. Save draft keeps it; Send to vendor saves it, then
 // shows the confirmation step naming every recipient, and only Send to
 // vendor there sends it. Nothing is ever sent from here without that step.
@@ -20,7 +23,7 @@ import { createPortal } from "react-dom";
 import { PlusIcon } from "@phosphor-icons/react/Plus";
 import { TrashIcon } from "@phosphor-icons/react/Trash";
 import { XIcon } from "@phosphor-icons/react/X";
-import { formatCents } from "@/lib/po";
+import { formatCents, type PoLine } from "@/lib/po";
 import { savePoDraft } from "@/lib/po-client";
 import { emptyLine, formFromOrder, formFromPo, formTotals, readForm, sameForm, type PoForm, type PoFormErrors, type PoFormLine } from "@/lib/po-form";
 import { readSnapshot } from "@/lib/order-snapshot";
@@ -354,6 +357,11 @@ export function PoModal({
   const [saved, setSaved] = useState<string | null>(null);
   const [askDiscard, setAskDiscard] = useState(false);
   const [addingVendor, setAddingVendor] = useState(false);
+  // A new PO whose order's full item list could not be read (the stored
+  // list is partial): the lines start empty and Send to vendor stays
+  // blocked until the list loads.
+  const [linesProblem, setLinesProblem] = useState<string | null>(null);
+  const [linesRetrying, setLinesRetrying] = useState(false);
 
   const flow = useSendFlow({
     onSent: (sentPo) => {
@@ -372,19 +380,26 @@ export function PoModal({
   const load = useCallback(async () => {
     setLoaded({ status: "loading" });
     try {
-      const [orderResponse, vendorsResponse, listResponse] = await Promise.all([
+      const [orderResponse, vendorsResponse, listResponse, linesResponse] = await Promise.all([
         fetch(`/api/orders/${encodeURIComponent(orderId)}`, { cache: "no-store" }),
         fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/vendors`, { cache: "no-store" }),
         fetch(`/api/orders/${encodeURIComponent(orderId)}/pos`, { cache: "no-store" }),
+        initialPo ? Promise.resolve(null) : fetch(`/api/orders/${encodeURIComponent(orderId)}/po-lines`, { cache: "no-store" }),
       ]);
-      if (!orderResponse.ok || !vendorsResponse.ok || !listResponse.ok) {
+      if (!orderResponse.ok || !vendorsResponse.ok || !listResponse.ok || (linesResponse && !linesResponse.ok && linesResponse.status !== 502)) {
         throw new Error("load");
       }
       const order = (await orderResponse.json()) as { order: { name: string; shopify: unknown } };
       const vendorList = (await vendorsResponse.json()) as { vendors: VendorView[] };
       const list = (await listResponse.json()) as { nextNumber: string | null };
       const snapshot = readSnapshot(order.order.shopify);
-      const first = initialPo ? formFromPo(initialPo) : formFromOrder(snapshot);
+      let lines: PoLine[] | null = null;
+      if (linesResponse) {
+        const body = (await linesResponse.json().catch(() => null)) as { lines?: PoLine[]; error?: string } | null;
+        lines = linesResponse.ok && Array.isArray(body?.lines) ? body.lines : null;
+        setLinesProblem(lines ? null : (body?.error ?? "The order's full item list did not load."));
+      }
+      const first = initialPo ? formFromPo(initialPo) : formFromOrder(snapshot, lines);
       setVendors(vendorList.vendors);
       setForm(first);
       setBaseline(first);
@@ -409,6 +424,28 @@ export function PoModal({
       setErrors(read.ok ? null : read.errors);
     }
   }, [form, checkMode]);
+
+  // Tries the order's full item list again; on success it replaces the
+  // (empty) lines it could not fill.
+  async function retryLines() {
+    setLinesRetrying(true);
+    try {
+      const response = await fetch(`/api/orders/${encodeURIComponent(orderId)}/po-lines`, { cache: "no-store" });
+      const body = (await response.json().catch(() => null)) as { lines?: PoLine[]; error?: string } | null;
+      if (response.ok && Array.isArray(body?.lines)) {
+        const lines = formFromOrder(readSnapshot(null), body.lines).lines;
+        setForm((current) => (current ? { ...current, lines } : current));
+        setBaseline((current) => (current ? { ...current, lines } : current));
+        setLinesProblem(null);
+      } else {
+        setLinesProblem(body?.error ?? "The order's full item list did not load.");
+      }
+    } catch {
+      setLinesProblem("Could not reach the server. Check your connection and try again.");
+    } finally {
+      setLinesRetrying(false);
+    }
+  }
 
   const dirty = form !== null && baseline !== null && !sameForm(form, baseline);
   const totals = useMemo(() => (form ? formTotals(form) : null), [form]);
@@ -523,6 +560,10 @@ export function PoModal({
   }
 
   async function startSend() {
+    if (linesProblem) {
+      setMessage({ tone: "warn", text: "Sending waits until the order's full item list loads. Try loading it again above." });
+      return;
+    }
     const result = await save(true);
     if (!result) {
       return;
@@ -640,9 +681,20 @@ export function PoModal({
 
             <div className="flex flex-col gap-3">
               <h3 className="font-display text-sm font-semibold text-ink">Lines</h3>
-              <p className="-mt-2 text-sm text-ink-2">
-                Copied from the order. Enter what the vendor charges for each; you can change, add or remove lines.
-              </p>
+              {linesProblem ? (
+                <div className="flex flex-col items-start gap-2">
+                  <InlineMessage tone="warn">
+                    {linesProblem} Sending is blocked until the full list loads, so no item is left out by mistake.
+                  </InlineMessage>
+                  <button type="button" onClick={() => void retryLines()} disabled={linesRetrying} className={ui.buttonSecondary}>
+                    {linesRetrying ? "Loading" : "Load the full list again"}
+                  </button>
+                </div>
+              ) : (
+                <p className="-mt-2 text-sm text-ink-2">
+                  Copied from the order. Enter what the vendor charges for each; you can change, add or remove lines.
+                </p>
+              )}
               <div
                 aria-hidden
                 className="hidden gap-2 text-xs font-medium text-ink-2 sm:grid sm:grid-cols-[minmax(0,1fr)_8rem_4.5rem_6.5rem_6rem_2.5rem]"
@@ -779,7 +831,13 @@ export function PoModal({
                   <button type="button" onClick={() => void saveDraft()} disabled={locked} className={ui.buttonSecondary}>
                     {saving ? "Saving" : "Save draft"}
                   </button>
-                  <button id="po-send" type="button" onClick={() => void startSend()} disabled={locked} className={ui.buttonPrimary}>
+                  <button
+                    id="po-send"
+                    type="button"
+                    onClick={() => void startSend()}
+                    disabled={locked || linesProblem !== null}
+                    className={ui.buttonPrimary}
+                  >
                     Send to vendor
                   </button>
                 </>

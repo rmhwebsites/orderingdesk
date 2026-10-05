@@ -46,6 +46,7 @@ const { GET: LIST, POST: CREATE } = await import("../orders/[orderId]/pos/route"
 const { PATCH } = await import("./[poId]/route");
 const { POST: SEND } = await import("./[poId]/send/route");
 const { GET: PDF } = await import("./[poId]/pdf/route");
+const { GET: LINES } = await import("../orders/[orderId]/po-lines/route");
 const { broadcast } = await import("@/server/broadcast");
 const { notifyPoSent } = await import("@/server/notify");
 
@@ -154,6 +155,37 @@ describe("POST /api/orders/[orderId]/pos", () => {
     const response = await CREATE(json("POST", draftBody({ lines: [] })), orderContext);
     expect(response.status).toBe(400);
     expect(((await response.json()) as { error: string }).error).toContain("lines");
+  });
+});
+
+describe("GET /api/orders/[orderId]/po-lines", () => {
+  it("gives managers and platform admins the prefill, and 404 to staff and outsiders", async () => {
+    expect((await LINES(new Request("https://x/"), orderContext)).status).toBe(401);
+    for (const session of [STAFF, STRANGER]) {
+      state.session = session;
+      expect((await LINES(new Request("https://x/"), orderContext)).status).toBe(404);
+    }
+    await db
+      .update(schema.orders)
+      .set({ shopify: { items: [{ title: "Hard Hat", qty: 2, price: "10.00", sku: "HH-1", variant: "" }], itemsTruncated: false } })
+      .where(eq(schema.orders.id, ORDER));
+    for (const session of [MANAGER, ADMIN]) {
+      state.session = session;
+      const response = await LINES(new Request("https://x/"), orderContext);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        lines: [{ description: "Hard Hat", sku: "HH-1", quantity: 2, unitCost: null }],
+        source: "stored",
+      });
+    }
+  });
+
+  it("answers 502 with the reason when a partial list cannot be completed", async () => {
+    state.session = MANAGER;
+    await db.update(schema.orders).set({ shopify: { items: [], itemsTruncated: true } }).where(eq(schema.orders.id, ORDER));
+    const response = await LINES(new Request("https://x/"), orderContext);
+    expect(response.status).toBe(502);
+    expect(((await response.json()) as { error: string }).error).toContain("more items than Ordering Desk stores");
   });
 });
 

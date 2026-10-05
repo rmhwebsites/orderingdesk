@@ -31,6 +31,15 @@ describe("formFromOrder", () => {
     expect(new Set(prefilled.lines.map((line) => line.key)).size).toBe(2);
   });
 
+  it("takes the full line list when given one, or starts empty when it could not be read", () => {
+    const full = formFromOrder(snapshot, [{ description: "From Shopify", sku: "X", quantity: 3, unitCost: null }]);
+    expect(full.lines.map(({ description, quantity }) => [description, quantity])).toEqual([["From Shopify", "3"]]);
+    const unreadable = formFromOrder(snapshot, null);
+    expect(unreadable.lines).toHaveLength(1);
+    expect(unreadable.lines[0]).toMatchObject({ description: "", sku: "" });
+    expect(unreadable.shipTo).toBe("Riley Oakes\n12 Harbour St\nHalifax NS B3H 1A1\nCanada");
+  });
+
   it("starts with one empty line for an order without items", () => {
     const prefilled = formFromOrder(readSnapshot({ items: [] }));
     expect(prefilled.lines).toHaveLength(1);
