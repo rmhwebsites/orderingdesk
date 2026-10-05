@@ -1,20 +1,24 @@
 // Sending a purchase order to its vendor. NOTHING is sent without an
-// explicit confirmation of the exact recipients: the request must carry
-// confirm: true and the To and CC lists the reviewer was shown, and they
-// must equal who the PO would go to now (the vendor's addresses and the
-// workspace notification list). A missing confirmation, or recipients that
-// changed since the review (a vendor edited meanwhile), sends nothing and
-// answers the current recipients so the page can ask again.
+// explicit confirmation of exactly what goes out: the request must carry
+// confirm: true, the To and CC lists the reviewer was shown, and the
+// contentVersion of the PO the review step showed (PoView.contentVersion:
+// the vendor, recipients, lines, ship-to, notes and currency). They must
+// equal what the PO would send now. A missing confirmation, recipients that
+// changed since the review (a vendor edited meanwhile) or content that
+// changed (another manager saved the PO) sends nothing and answers the PO
+// as it would go out now, so the page can show it and ask again.
 //
 // One send, in order: claim the PO (the send lease, so overlapping requests
-// cannot both send), mint its number if it has none yet, render the PDF,
-// store it in R2 under pos/<workspaceId>/<poId>-<random>.pdf, email the
-// vendor from the workspace sender (senderFor, named by the From name
-// setting when there is one) with the branded body
-// (renderEmail), the PDF attached, copies to the vendor's other addresses
-// and the workspace notification list, and the workspace reply-to; then
-// mark the PO sent with a po_sent event. The caller broadcasts the event
-// and calls notifyPoSent.
+// cannot both send and no save can land), read the PO again under the
+// claim and go on only if that is still what was confirmed (a save that
+// landed between the check and the claim is refused, not sent unseen),
+// mint its number if it has none yet, render the PDF from that read, store
+// it in R2 under pos/<workspaceId>/<poId>-<random>.pdf, email the vendor
+// from the workspace sender (senderFor, named by the From name setting when
+// there is one) with the branded body (renderEmail), the PDF attached,
+// copies to the vendor's other addresses and the workspace notification
+// list, and the workspace reply-to; then mark the PO sent with a po_sent
+// event. The caller broadcasts the event and calls notifyPoSent.
 //
 // Never twice by accident, never silent:
 // - every request carries a requestId; the same request again (a lost
@@ -29,9 +33,9 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "@/db";
 import { applyBatch } from "@/db/batch";
-import { events, orders, purchaseOrders, vendors } from "@/db/schema";
+import { events, orders, purchaseOrders } from "@/db/schema";
 import { brandHex } from "@/lib/branding";
-import { recipientsFor, sameRecipients, subtotalCents, type PoRecipients } from "@/lib/po";
+import { sameRecipients, subtotalCents, type PoRecipients } from "@/lib/po";
 import { eventView, isRecord, type EventView } from "@/server/desk/shapes";
 import { sendEmail, senderFor } from "@/server/email/send";
 import { loadMailWorkspace } from "@/server/email/workspace";
@@ -39,17 +43,7 @@ import type { PoSentNotice } from "@/server/notify";
 import { vendorPoEmail } from "./email";
 import { nextPoNumber, PoNumberError } from "./number";
 import { renderPoPdf } from "./pdf";
-import {
-  leaseFree,
-  loadPoRow,
-  loadPoView,
-  notificationEmailsOf,
-  poSettingsOf,
-  readLines,
-  readShipTo,
-  sendLeaseActive,
-  type PoView,
-} from "./service";
+import { leaseFree, loadPoState, loadPoView, poSettingsOf, sendLeaseActive, type PoView } from "./service";
 import { loadLogoBytes, poPdfKey, toBase64, type PoBucket } from "./storage";
 
 // Well under the Email Service message limit once base64 grows it by a
@@ -57,6 +51,14 @@ import { loadLogoBytes, poPdfKey, toBase64, type PoBucket } from "./storage";
 export const PO_PDF_MAX_BYTES = 5 * 1024 * 1024;
 const REASON_MAX = 300;
 const REQUEST_ID = /^[A-Za-z0-9_-]{8,64}$/;
+const CONTENT_VERSION_MAX = 128;
+
+const VENDOR_REMOVED = "This purchase order's vendor was removed. Edit it and pick another vendor.";
+const CONFIRM_REQUIRED = "Confirm what this purchase order says and who it goes to before it is sent.";
+const RECIPIENTS_CHANGED =
+  "Who this purchase order goes to changed since you reviewed it. Check the recipients and confirm again.";
+const CONTENT_CHANGED =
+  "This purchase order changed since you reviewed it. Check what will go out now and confirm again.";
 
 export type SendDeps = {
   env: CloudflareEnv;
@@ -64,12 +66,17 @@ export type SendDeps = {
   now?: () => number;
 };
 
+// Nothing was sent: there was no confirmation, or it was not of what the PO
+// would send now. po is what it would send now (with its contentVersion and
+// recipients) for the page to show and confirm again.
+type AskAgain = { error: string; recipients: PoRecipients; po: PoView };
+
 export type SendResult =
   | { kind: "invalid"; error: string }
   | { kind: "not-found" }
-  // No confirmation, or not of these recipients: nothing was sent.
-  | { kind: "confirm-required"; error: string; recipients: PoRecipients }
-  | { kind: "recipients-changed"; error: string; recipients: PoRecipients }
+  | ({ kind: "confirm-required" } & AskAgain)
+  | ({ kind: "recipients-changed" } & AskAgain)
+  | ({ kind: "content-changed" } & AskAgain)
   // Another send attempt holds the PO right now.
   | { kind: "busy"; error: string; po: PoView }
   // Nothing sent by this request: the PO was already sent, or this exact
@@ -82,6 +89,8 @@ type SendRequest = {
   requestId: string;
   confirm: boolean;
   recipients: PoRecipients | null;
+  // PoView.contentVersion of the PO the reviewer confirmed.
+  contentVersion: string | null;
   resend: boolean;
   // The sender's IANA time zone, for the date on the PDF and in the email
   // (UTC without a real one).
@@ -121,6 +130,10 @@ function parseRequest(body: unknown): SendRequest | string {
     requestId: body.requestId,
     confirm: body.confirm === true,
     recipients: parseRecipients(body.recipients),
+    contentVersion:
+      typeof body.contentVersion === "string" && body.contentVersion.length > 0 && body.contentVersion.length <= CONTENT_VERSION_MAX
+        ? body.contentVersion
+        : null,
     resend: body.resend === true,
     timeZone: parseTimeZone(body.timeZone),
   };
@@ -150,10 +163,11 @@ export async function sendPurchaseOrder(
   if (typeof request === "string") {
     return { kind: "invalid", error: request };
   }
-  const row = await loadPoRow(db, ctx.workspaceId, ctx.poId);
-  if (!row) {
+  const state = await loadPoState(db, ctx.workspaceId, ctx.poId, now());
+  if (!state) {
     return { kind: "not-found" };
   }
+  const { row, view: current } = state;
   const view = async () => (await loadPoView(db, ctx.workspaceId, ctx.poId, now()))!;
 
   // The same request again sends nothing: it answers how that attempt went
@@ -171,13 +185,7 @@ export async function sendPurchaseOrder(
     return { kind: "unchanged", reason: "already-sent", po: await view() };
   }
 
-  const [vendorRows, notificationEmails, poSettings, mail, orderRows] = await Promise.all([
-    db
-      .select()
-      .from(vendors)
-      .where(and(eq(vendors.id, row.vendorId), eq(vendors.workspaceId, ctx.workspaceId)))
-      .limit(1),
-    notificationEmailsOf(db, ctx.workspaceId),
+  const [poSettings, mail, orderRows] = await Promise.all([
     poSettingsOf(db, ctx.workspaceId),
     loadMailWorkspace(db, ctx.workspaceId),
     db
@@ -186,33 +194,24 @@ export async function sendPurchaseOrder(
       .where(and(eq(orders.id, row.orderId), eq(orders.workspaceId, ctx.workspaceId)))
       .limit(1),
   ]);
-  const vendor = vendorRows[0];
-  if (!vendor || vendor.archived) {
-    return { kind: "invalid", error: "This purchase order's vendor was removed. Edit it and pick another vendor." };
+  if (!current.vendor || current.vendor.archived || !current.recipients) {
+    return { kind: "invalid", error: VENDOR_REMOVED };
   }
   if (!mail || !orderRows[0]) {
     return { kind: "not-found" };
   }
 
-  const recipients = recipientsFor({ email: vendor.email, cc: Array.isArray(vendor.cc) ? vendor.cc : [] }, notificationEmails);
-  if (!request.confirm || !request.recipients) {
-    return {
-      kind: "confirm-required",
-      error: "Confirm who this purchase order goes to before it is sent.",
-      recipients,
-    };
+  if (!request.confirm || !request.recipients || !request.contentVersion) {
+    return { kind: "confirm-required", error: CONFIRM_REQUIRED, recipients: current.recipients, po: current };
   }
-  if (!sameRecipients(request.recipients, recipients)) {
-    return {
-      kind: "recipients-changed",
-      error: "Who this purchase order goes to changed since you reviewed it. Check the recipients and confirm again.",
-      recipients,
-    };
+  if (!sameRecipients(request.recipients, current.recipients)) {
+    return { kind: "recipients-changed", error: RECIPIENTS_CHANGED, recipients: current.recipients, po: current };
+  }
+  if (request.contentVersion !== current.contentVersion) {
+    return { kind: "content-changed", error: CONTENT_CHANGED, recipients: current.recipients, po: current };
   }
 
-  const lines = readLines(row.lineItems);
-  const subtotal = subtotalCents(lines);
-  if (lines.length === 0 || subtotal === null) {
+  if (current.lines.length === 0 || subtotalCents(current.lines) === null) {
     return { kind: "invalid", error: "Enter a unit cost for every line before sending." };
   }
 
@@ -232,16 +231,36 @@ export async function sendPurchaseOrder(
     )
     .returning({ id: purchaseOrders.id });
   if (claimed.length === 0) {
-    const current = await view();
-    if (!request.resend && current.state === "sent") {
-      return { kind: "unchanged", reason: "already-sent", po: current };
+    const latest = await view();
+    if (!request.resend && latest.state === "sent") {
+      return { kind: "unchanged", reason: "already-sent", po: latest };
     }
-    return { kind: "busy", error: "This purchase order is being sent right now.", po: current };
+    return { kind: "busy", error: "This purchase order is being sent right now.", po: latest };
   }
 
   const fence = and(eq(purchaseOrders.id, row.id), eq(purchaseOrders.sendAttempt, request.requestId));
+
+  // Under the claim no save can land (saving needs the lease free), so this
+  // read is what goes out. A save that landed after the check above and
+  // before the claim (or a vendor edited meanwhile) shows here: the claim
+  // is handed back as it was and nothing is sent.
+  const held = await loadPoState(db, ctx.workspaceId, ctx.poId, now());
+  const po = held?.view;
+  if (!held || !po || po.contentVersion !== request.contentVersion || !po.vendor || po.vendor.archived || !po.recipients) {
+    await db.update(purchaseOrders).set({ sendStartedAt: row.sendStartedAt, sendAttempt: row.sendAttempt }).where(fence);
+    console.warn("[po] " + JSON.stringify({ workspaceId: ctx.workspaceId, poId: row.id, sent: false, changedUnderClaim: true }));
+    const latest = await view();
+    if (!latest.recipients) {
+      return { kind: "invalid", error: VENDOR_REMOVED };
+    }
+    return { kind: "content-changed", error: CONTENT_CHANGED, recipients: latest.recipients, po: latest };
+  }
+  const vendor = po.vendor;
+  const recipients = po.recipients;
+  const lines = po.lines;
+  const subtotal = subtotalCents(lines) as number;
   // The PO's date: when it first went out (a resend keeps it), else now.
-  const poDate = request.resend && row.sentAt ? row.sentAt : claimedAt;
+  const poDate = request.resend && held.row.sentAt ? held.row.sentAt : claimedAt;
   let number: string | null = null;
   let storedKey: string | null = null;
   try {
@@ -254,11 +273,12 @@ export async function sendPurchaseOrder(
     // A resend carries the PDF the vendor already has; anything else is
     // rendered now (a failed PO may have been edited since).
     let pdf: Uint8Array | null = null;
-    if (request.resend && row.pdfKey) {
+    const previousKey = held.row.pdfKey;
+    if (request.resend && previousKey) {
       try {
-        const object = await deps.bucket.get(row.pdfKey);
+        const object = await deps.bucket.get(previousKey);
         pdf = object ? new Uint8Array(await object.arrayBuffer()) : null;
-        storedKey = pdf ? row.pdfKey : null;
+        storedKey = pdf ? previousKey : null;
       } catch {
         pdf = null;
       }
@@ -275,10 +295,10 @@ export async function sendPurchaseOrder(
           timeZone: request.timeZone,
           orderName: orderRows[0].name,
           vendor: { name: vendor.name, email: vendor.email },
-          shipTo: readShipTo(row.shipTo),
+          shipTo: po.shipTo,
           lines,
-          currency: row.currency,
-          notes: row.notes ?? null,
+          currency: po.currency,
+          notes: po.notes,
         });
       } catch (e) {
         throw new SendFailure(plainReason("The PDF could not be made", e));
@@ -295,8 +315,8 @@ export async function sendPurchaseOrder(
       storedKey = key;
       // From here the PO points at this PDF whatever the email does.
       await db.update(purchaseOrders).set({ pdfKey: key }).where(fence);
-      if (row.pdfKey && row.pdfKey !== key) {
-        await deps.bucket.delete(row.pdfKey).catch(() => undefined);
+      if (previousKey && previousKey !== key) {
+        await deps.bucket.delete(previousKey).catch(() => undefined);
       }
     }
 
@@ -305,10 +325,10 @@ export async function sendPurchaseOrder(
       orderName: orderRows[0].name,
       vendorName: vendor.name,
       lines,
-      currency: row.currency,
+      currency: po.currency,
       subtotalCents: subtotal,
-      shipTo: readShipTo(row.shipTo),
-      notes: row.notes ?? null,
+      shipTo: po.shipTo,
+      notes: po.notes,
       date: poDate,
       timeZone: request.timeZone,
     });

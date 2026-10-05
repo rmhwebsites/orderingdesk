@@ -4,7 +4,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ToastProvider } from "@/components/toasts";
 import { PurchaseOrders } from "./po-history";
 import { DraftActions, PoModalBody, PoModalFooter } from "./po-modal";
-import { CONFIRM_ARM_MS, confirmArmed, confirmFocus, SendConfirm } from "./po-send-confirm";
+import { CONFIRM_ARM_MS, confirmArmed, confirmFocus, pendingFromPo, reconfirmPending, SendConfirm, type PendingSend } from "./po-send-confirm";
+import type { PoView } from "@/server/po/service";
 
 // Staff never see the create or send controls (the server refuses them
 // anyway), and the confirmation step names every recipient before the
@@ -36,24 +37,110 @@ describe("PurchaseOrders", () => {
   });
 });
 
+const NORTH = { to: ["orders@northline.example"], cc: ["rep@northline.example", "office@impact.example"] };
+
+function poFixture(overrides: Partial<PoView> = {}): PoView {
+  return {
+    id: "po1",
+    orderId: "o1",
+    number: "IMP-2026-0042",
+    state: "draft",
+    interrupted: false,
+    vendor: { id: "v_north", name: "Northline Supply", email: "orders@northline.example", cc: ["rep@northline.example"], archived: false },
+    lines: [
+      { description: "Hard Hat (White)", sku: "HH-1", quantity: 2, unitCost: "10.00" },
+      { description: "Hi-vis vest", sku: "", quantity: 1, unitCost: "5.50" },
+    ],
+    shipTo: ["Riley Oakes", "12 Harbour St", "Halifax NS B3H 1A1"],
+    notes: "Deliver before noon",
+    currency: "CAD",
+    subtotal: "25.50",
+    lastError: null,
+    sentAt: null,
+    sentTo: null,
+    sendCount: 0,
+    createdAt: 1,
+    createdBy: "u_manager",
+    updatedAt: 1,
+    pdfUrl: null,
+    recipients: NORTH,
+    contentVersion: "1.aaaa",
+    ...overrides,
+  };
+}
+
+function pendingOf(overrides: Partial<PendingSend> = {}, po: PoView = poFixture()): PendingSend {
+  const pending = pendingFromPo(po, { label: "purchase order IMP-2026-0042", resend: false }, "request-1");
+  if (!pending) {
+    throw new Error("no pending send");
+  }
+  return { ...pending, ...overrides };
+}
+
+function confirmStep(pending: PendingSend, busy = false): string {
+  return renderToStaticMarkup(createElement(SendConfirm, { pending, busy, onConfirm: () => {}, onCancel: () => {} }));
+}
+
+describe("pendingFromPo", () => {
+  it("takes who it goes to, what it says and that content's version from the PO the step opens on", () => {
+    expect(pendingFromPo(poFixture(), { label: "purchase order IMP-2026-0042", resend: false }, "request-1")).toEqual({
+      poId: "po1",
+      label: "purchase order IMP-2026-0042",
+      vendorName: "Northline Supply",
+      recipients: NORTH,
+      content: {
+        lines: poFixture().lines,
+        shipTo: ["Riley Oakes", "12 Harbour St", "Halifax NS B3H 1A1"],
+        notes: "Deliver before noon",
+        currency: "CAD",
+        subtotal: "25.50",
+      },
+      contentVersion: "1.aaaa",
+      resend: false,
+      requestId: "request-1",
+      message: null,
+    });
+  });
+
+  it("opens no step for a PO without a vendor to send to", () => {
+    expect(pendingFromPo(poFixture({ recipients: null }), { label: "x", resend: false }, "r")).toBeNull();
+    expect(pendingFromPo(poFixture({ vendor: null }), { label: "x", resend: false }, "r")).toBeNull();
+  });
+});
+
+describe("reconfirmPending", () => {
+  it("shows what would go out now, under a new request, after the PO changed since the review", () => {
+    const fresh = poFixture({
+      notes: "Leave at the side door",
+      lines: [{ description: "Hard Hat (Orange)", sku: "HH-2", quantity: 40, unitCost: "12.00" }],
+      subtotal: "480.00",
+      contentVersion: "2.bbbb",
+    });
+    const next = reconfirmPending(pendingOf(), { recipients: NORTH, message: "This purchase order changed.", po: fresh }, "request-2");
+    expect(next).toMatchObject({
+      label: "purchase order IMP-2026-0042",
+      resend: false,
+      requestId: "request-2",
+      contentVersion: "2.bbbb",
+      message: "This purchase order changed.",
+      content: { notes: "Leave at the side door", subtotal: "480.00", lines: fresh.lines },
+    });
+  });
+
+  it("takes the fresh recipients and vendor name", () => {
+    const fresh = poFixture({
+      vendor: { id: "v_south", name: "Southline", email: "orders@southline.example", cc: [], archived: false },
+      recipients: { to: ["orders@southline.example"], cc: [] },
+      contentVersion: "3.cccc",
+    });
+    const next = reconfirmPending(pendingOf(), { recipients: fresh.recipients!, message: "Changed", po: fresh }, "request-3");
+    expect(next).toMatchObject({ vendorName: "Southline", recipients: { to: ["orders@southline.example"], cc: [] }, contentVersion: "3.cccc" });
+  });
+});
+
 describe("SendConfirm", () => {
   it("names the vendor and every address before the explicit send", () => {
-    const html = renderToStaticMarkup(
-      createElement(SendConfirm, {
-        pending: {
-          poId: "po1",
-          label: "purchase order IMP-2026-0042",
-          vendorName: "Northline Supply",
-          recipients: { to: ["orders@northline.example"], cc: ["rep@northline.example", "office@impact.example"] },
-          resend: false,
-          requestId: "request-1",
-          message: null,
-        },
-        busy: false,
-        onConfirm: () => {},
-        onCancel: () => {},
-      }),
-    );
+    const html = confirmStep(pendingOf());
     expect(html).toContain("Send purchase order IMP-2026-0042 to Northline Supply?");
     expect(html).toContain("orders@northline.example");
     expect(html).toContain("rep@northline.example, office@impact.example");
@@ -62,21 +149,8 @@ describe("SendConfirm", () => {
   });
 
   it("says Send again for a resend", () => {
-    const html = renderToStaticMarkup(
-      createElement(SendConfirm, {
-        pending: {
-          poId: "po1",
-          label: "purchase order IMP-2026-0042",
-          vendorName: "Northline Supply",
-          recipients: { to: ["orders@northline.example"], cc: [] },
-          resend: true,
-          requestId: "request-2",
-          message: "Who it goes to changed.",
-        },
-        busy: false,
-        onConfirm: () => {},
-        onCancel: () => {},
-      }),
+    const html = confirmStep(
+      pendingOf({ recipients: { to: ["orders@northline.example"], cc: [] }, resend: true, requestId: "request-2", message: "Who it goes to changed." }),
     );
     expect(html).toContain("again to Northline Supply?");
     expect(html).toContain("No copies");
@@ -84,25 +158,50 @@ describe("SendConfirm", () => {
     expect(html).toContain("Who it goes to changed.");
   });
 
+  // What the reviewer confirms is what goes out: every line, the total, the
+  // ship-to and the notes, as the server last described them.
+  it("shows what goes out: each line, the total, the ship-to and the notes", () => {
+    const html = confirmStep(pendingOf());
+    expect(html).toContain("Hard Hat (White)");
+    expect(html).toContain("HH-1");
+    expect(html).toContain("2 × CA$10.00");
+    expect(html).toContain("CA$20.00");
+    expect(html).toContain("Hi-vis vest");
+    expect(html).toContain("CA$25.50");
+    expect(html).toContain("2 lines");
+    expect(html).toContain("Riley Oakes");
+    expect(html).toContain("Halifax NS B3H 1A1");
+    expect(html).toContain("Deliver before noon");
+  });
+
+  it("re-renders with the content that will actually go out after a change", () => {
+    const fresh = poFixture({
+      notes: "Leave at the side door",
+      lines: [{ description: "Hard Hat (Orange)", sku: "HH-2", quantity: 40, unitCost: "12.00" }],
+      subtotal: "480.00",
+      contentVersion: "2.bbbb",
+    });
+    const html = confirmStep(reconfirmPending(pendingOf(), { recipients: NORTH, message: "This purchase order changed since you reviewed it.", po: fresh }, "request-9"));
+    expect(html).toContain("Hard Hat (Orange)");
+    expect(html).toContain("40 × CA$12.00");
+    expect(html).toContain("CA$480.00");
+    expect(html).toContain("Leave at the side door");
+    expect(html).not.toContain("Hard Hat (White)");
+    expect(html).not.toContain("Deliver before noon");
+    expect(html).toContain("This purchase order changed since you reviewed it.");
+  });
+
+  it("will not send content with a line that has no cost", () => {
+    const unpriced = poFixture({ lines: [{ description: "Gloves", sku: "", quantity: 3, unitCost: null }], subtotal: null });
+    const html = confirmStep(pendingOf({}, unpriced));
+    expect(html).toContain("Not priced");
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*aria-describedby="[^"]*"[^>]*>.*Send to vendor/);
+  });
+
   // The step opens on its question, not on the irreversible send: a double
   // Enter or a held Enter from the button that opened it must not send.
   it("can take focus on its question, which labels the step", () => {
-    const html = renderToStaticMarkup(
-      createElement(SendConfirm, {
-        pending: {
-          poId: "po1",
-          label: "purchase order IMP-2026-0042",
-          vendorName: "Northline Supply",
-          recipients: { to: ["orders@northline.example"], cc: [] },
-          resend: false,
-          requestId: "request-3",
-          message: null,
-        },
-        busy: false,
-        onConfirm: () => {},
-        onCancel: () => {},
-      }),
-    );
+    const html = confirmStep(pendingOf({ recipients: { to: ["orders@northline.example"], cc: [] }, requestId: "request-3" }));
     const labelledBy = html.match(/role="group" aria-labelledby="([^"]+)"/)?.[1];
     expect(labelledBy).toBeTruthy();
     const question = html.match(new RegExp(`<p id="${labelledBy}"[^>]*>`))?.[0] ?? "";

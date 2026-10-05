@@ -8,9 +8,24 @@ describe("interpretSendResponse", () => {
   it("reads every answer the send route gives", () => {
     expect(interpretSendResponse(200, { po })).toEqual({ kind: "sent", po });
     expect(interpretSendResponse(200, { po, unchanged: "already-sent" })).toEqual({ kind: "unchanged", po, reason: "already-sent" });
-    expect(interpretSendResponse(400, { error: "Confirm who", recipients })).toEqual({ kind: "recipients", recipients, message: "Confirm who" });
-    expect(interpretSendResponse(409, { error: "Changed", recipients })).toEqual({ kind: "recipients", recipients, message: "Changed" });
+    expect(interpretSendResponse(400, { error: "Confirm who", recipients })).toEqual({ kind: "reconfirm", recipients, message: "Confirm who", po: null });
+    expect(interpretSendResponse(409, { error: "Changed", recipients })).toEqual({ kind: "reconfirm", recipients, message: "Changed", po: null });
     expect(interpretSendResponse(409, { error: "Being sent", po })).toEqual({ kind: "busy", message: "Being sent", po });
+    // The recipients or the content changed since the review: the PO as it
+    // would go out now comes back for a fresh confirmation.
+    const fresh = { ...po, state: "draft", notes: "Changed", recipients, contentVersion: "2.abc" };
+    expect(interpretSendResponse(409, { error: "Content changed", recipients, contentVersion: "2.abc", po: fresh })).toEqual({
+      kind: "reconfirm",
+      recipients,
+      message: "Content changed",
+      po: fresh,
+    });
+    expect(interpretSendResponse(400, { error: "Confirm what", recipients, contentVersion: "2.abc", po: fresh })).toEqual({
+      kind: "reconfirm",
+      recipients,
+      message: "Confirm what",
+      po: fresh,
+    });
     expect(interpretSendResponse(502, { error: "The email was not sent: refused", po })).toEqual({
       kind: "failed",
       message: "The email was not sent: refused",

@@ -67,6 +67,10 @@ export type PoView = {
   // Who a send would go to now (the vendor's current addresses and the
   // workspace notification list), or null without an active vendor.
   recipients: PoRecipients | null;
+  // What a send would carry now, as one value (poContentVersion). The review
+  // step hands it back with Send to vendor; a send of anything else is
+  // refused with what would go out instead.
+  contentVersion: string;
 };
 
 export type PoDraftInput = { vendorId: string; lines: PoLine[]; shipTo: string[]; notes: string | null };
@@ -131,20 +135,66 @@ function vendorView(row: VendorRow): PoVendorView {
   return { id: row.id, name: row.name, email: row.email, cc: Array.isArray(row.cc) ? row.cc : [], archived: row.archived };
 }
 
-export function poView(row: PoRow, vendor: VendorRow | undefined, notificationEmails: string[], now: number): PoView {
+export type PoContent = {
+  updatedAt: number | null;
+  vendor: { id: string; name: string; email: string } | null;
+  recipients: PoRecipients | null;
+  lines: PoLine[];
+  shipTo: string[];
+  notes: string | null;
+  currency: string;
+};
+
+function hex(bytes: ArrayBuffer): string {
+  return Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+// The version of what a send of the PO would carry: the PO's updated_at and
+// a SHA-256 of the vendor, the recipients, the lines, the ship-to, the notes
+// and the currency. Any save moves updated_at; the hash also catches a save
+// in the same millisecond and a change made outside the PO (the vendor
+// renamed or readdressed, the workspace notification list edited).
+export async function poContentVersion(content: PoContent): Promise<string> {
+  const sorted = (list: string[]) => list.map((email) => email.trim().toLowerCase()).sort();
+  const canonical = JSON.stringify([
+    content.vendor ? [content.vendor.id, content.vendor.name, content.vendor.email] : null,
+    content.recipients ? [sorted(content.recipients.to), sorted(content.recipients.cc)] : null,
+    content.lines.map((line) => [line.description, line.sku, line.quantity, line.unitCost]),
+    content.shipTo,
+    content.notes,
+    content.currency,
+  ]);
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
+  return `${content.updatedAt ?? 0}.${hex(digest)}`;
+}
+
+export async function poView(row: PoRow, vendor: VendorRow | undefined, notificationEmails: string[], now: number): Promise<PoView> {
   const lines = readLines(row.lineItems);
   const subtotal = subtotalCents(lines);
   const leased = sendLeaseActive(row, now);
+  const vendorShown = vendor ? vendorView(vendor) : null;
+  const recipients = vendor && !vendor.archived ? recipientsFor(vendorView(vendor), notificationEmails) : null;
+  const shipTo = readShipTo(row.shipTo);
+  const notes = row.notes ?? null;
+  const contentVersion = await poContentVersion({
+    updatedAt: row.updatedAt ?? null,
+    vendor: vendorShown,
+    recipients,
+    lines,
+    shipTo,
+    notes,
+    currency: row.currency,
+  });
   return {
     id: row.id,
     orderId: row.orderId,
     number: isMintedPoNumber(row.poNumber) ? row.poNumber : null,
     state: leased ? "sending" : row.status,
     interrupted: row.sendStartedAt !== null && !leased,
-    vendor: vendor ? vendorView(vendor) : null,
+    vendor: vendorShown,
     lines,
-    shipTo: readShipTo(row.shipTo),
-    notes: row.notes ?? null,
+    shipTo,
+    notes,
     currency: row.currency,
     subtotal: subtotal === null || lines.length === 0 ? null : centsToDecimal(subtotal),
     lastError: row.lastError ?? null,
@@ -155,7 +205,8 @@ export function poView(row: PoRow, vendor: VendorRow | undefined, notificationEm
     createdBy: row.createdBy,
     updatedAt: row.updatedAt ?? null,
     pdfUrl: row.pdfKey ? `/api/pos/${encodeURIComponent(row.id)}/pdf` : null,
-    recipients: vendor && !vendor.archived ? recipientsFor(vendorView(vendor), notificationEmails) : null,
+    recipients,
+    contentVersion,
   };
 }
 
@@ -205,13 +256,19 @@ export async function loadPoRow(db: Db, workspaceId: string, poId: string): Prom
   return rows[0];
 }
 
-export async function loadPoView(db: Db, workspaceId: string, poId: string, now: number): Promise<PoView | null> {
+// The PO's row and how it reads, from one read of the row, its vendor and
+// the workspace notification list.
+export async function loadPoState(db: Db, workspaceId: string, poId: string, now: number): Promise<{ row: PoRow; view: PoView } | null> {
   const row = await loadPoRow(db, workspaceId, poId);
   if (!row) {
     return null;
   }
   const [vendorMap, emails] = await Promise.all([vendorsById(db, workspaceId, [row.vendorId]), notificationEmailsOf(db, workspaceId)]);
-  return poView(row, vendorMap.get(row.vendorId), emails, now);
+  return { row, view: await poView(row, vendorMap.get(row.vendorId), emails, now) };
+}
+
+export async function loadPoView(db: Db, workspaceId: string, poId: string, now: number): Promise<PoView | null> {
+  return (await loadPoState(db, workspaceId, poId, now))?.view ?? null;
 }
 
 // An order's purchase orders, newest first. null when the order is not in
@@ -237,7 +294,7 @@ export async function listOrderPurchaseOrders(
     vendorsById(db, input.workspaceId, rows.map((row) => row.vendorId)),
     notificationEmailsOf(db, input.workspaceId),
   ]);
-  return rows.map((row) => poView(row, vendorMap.get(row.vendorId), emails, input.now));
+  return Promise.all(rows.map((row) => poView(row, vendorMap.get(row.vendorId), emails, input.now)));
 }
 
 // The stored PDF of a PO in this workspace, for the PDF route: only a key

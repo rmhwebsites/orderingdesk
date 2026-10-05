@@ -13,9 +13,10 @@ export type SendOutcome =
   | { kind: "sent"; po: PoView }
   // Nothing sent by this request (already sent, or the same request ran).
   | { kind: "unchanged"; po: PoView; reason: string }
-  // Confirm again: no confirmation reached the server, or who it goes to
-  // changed since the review.
-  | { kind: "recipients"; recipients: PoRecipients; message: string }
+  // Confirm again: no confirmation reached the server, or who it goes to or
+  // what it says changed since the review. po is the PO as it would go out
+  // now (its content and contentVersion), for the step to show and confirm.
+  | { kind: "reconfirm"; recipients: PoRecipients; message: string; po: PoView | null }
   | { kind: "busy"; message: string; po: PoView }
   | { kind: "failed"; message: string; po: PoView }
   | { kind: "error"; message: string }
@@ -40,7 +41,8 @@ export function interpretSendResponse(status: number, body: Body): SendOutcome {
     return typeof body?.unchanged === "string" ? { kind: "unchanged", po, reason: body.unchanged } : { kind: "sent", po };
   }
   if ((status === 400 || status === 409) && isRecipients(body?.recipients)) {
-    return { kind: "recipients", recipients: body.recipients as PoRecipients, message };
+    const fresh = po && typeof po.contentVersion === "string" && isRecipients(po.recipients) ? po : null;
+    return { kind: "reconfirm", recipients: body.recipients as PoRecipients, message, po: fresh };
   }
   if (status === 409 && po) {
     return { kind: "busy", message, po };
@@ -73,9 +75,11 @@ export function recipientSummary(recipients: PoRecipients): { to: string; copies
   };
 }
 
+// The explicit send: the recipients and the contentVersion of what the step
+// showed, so the server sends nothing else.
 export async function sendPo(
   poId: string,
-  request: { requestId: string; recipients: PoRecipients; resend: boolean },
+  request: { requestId: string; recipients: PoRecipients; contentVersion: string; resend: boolean },
 ): Promise<SendOutcome> {
   let response: Response;
   try {
@@ -86,6 +90,7 @@ export async function sendPo(
         requestId: request.requestId,
         confirm: true,
         recipients: request.recipients,
+        contentVersion: request.contentVersion,
         resend: request.resend,
         timeZone: browserTimeZone(),
       }),

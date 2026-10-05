@@ -10,8 +10,11 @@
 // be read the lines start empty and sending stays blocked), the ship-to is
 // prefilled and editable, and notes are optional. Save draft keeps it;
 // Review and send saves it, then shows the confirmation step naming every
-// recipient, and only Send to vendor there sends it. Nothing is ever sent
-// from here without that step, and "Send to vendor" names nothing else.
+// recipient and what goes out, and only Send to vendor there sends it,
+// bound to that exact content (when someone changed the PO meanwhile,
+// nothing is sent: the step and the form show the PO as it would go out now
+// and ask again). Nothing is ever sent from here without that step, and
+// "Send to vendor" names nothing else.
 //
 // Full screen on phones, a centered panel from sm. The footer scrolls on
 // its own, so its buttons stay reachable in a short window. The rest of
@@ -434,6 +437,29 @@ export function PoModal({
       }
       // The step closed while focus was on its (disabled) send button.
       focusFooter("po-send");
+    },
+    // Someone changed the PO since this review (another manager saved it,
+    // or its vendor was edited): nothing was sent. The step now shows what
+    // would go out, and the form behind it shows the same.
+    onChanged: (fresh) => {
+      const next = formFromPo(fresh);
+      setPo(fresh);
+      setForm(next);
+      setBaseline(next);
+      setErrors(null);
+      setCheckMode(null);
+      setSaved(null);
+      const shown = fresh.vendor && !fresh.vendor.archived ? fresh.vendor : null;
+      if (shown) {
+        setVendors((current) => {
+          const entry = { id: shown.id, name: shown.name, email: shown.email, cc: shown.cc };
+          const known = current.find((vendor) => vendor.id === shown.id);
+          return known
+            ? current.map((vendor) => (vendor.id === shown.id ? { ...vendor, ...entry } : vendor))
+            : [...current, { ...entry, notes: null }].sort((a, b) => a.name.localeCompare(b.name));
+        });
+      }
+      onSaved(fresh);
     },
   });
 

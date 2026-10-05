@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import type { Db } from "@/db";
 import * as schema from "@/db/schema";
 import { openTestDb, seedUser } from "@/server/desk/test-helpers";
+import { loadPoView } from "@/server/po/service";
 import {
   draftBody,
   fakeBucket,
@@ -65,10 +66,13 @@ const poContext = () => ({ params: Promise.resolve({ poId }) });
 const json = (method: string, body: unknown) =>
   new Request("https://orderingdesk.test/x", { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 let counter = 0;
-const confirmed = (overrides: Record<string, unknown> = {}) => ({
+// A confirmation of exactly what the PO says now (as the review step shows
+// it) and who it goes to.
+const confirmed = async (overrides: Record<string, unknown> = {}) => ({
   requestId: `route-request-${++counter}`,
   confirm: true,
   recipients: NORTH_RECIPIENTS,
+  contentVersion: (await loadPoView(db, WS, poId, Date.now()))!.contentVersion,
   ...overrides,
 });
 
@@ -206,7 +210,7 @@ describe("PATCH /api/pos/[poId]", () => {
 
   it("answers 409 once the PO was sent", async () => {
     state.session = MANAGER;
-    expect((await SEND(json("POST", confirmed()), poContext())).status).toBe(200);
+    expect((await SEND(json("POST", await confirmed()), poContext())).status).toBe(200);
     const response = await PATCH(json("PATCH", draftBody({ notes: "Too late" })), poContext());
     expect(response.status).toBe(409);
   });
@@ -214,14 +218,14 @@ describe("PATCH /api/pos/[poId]", () => {
 
 describe("POST /api/pos/[poId]/send", () => {
   it("answers 401 signed out and 404 to staff and outsiders, sending nothing", async () => {
-    expect((await SEND(json("POST", confirmed()), poContext())).status).toBe(401);
+    expect((await SEND(json("POST", await confirmed()), poContext())).status).toBe(401);
     for (const session of [STAFF, STRANGER]) {
       state.session = session;
-      expect((await SEND(json("POST", confirmed()), poContext())).status).toBe(404);
+      expect((await SEND(json("POST", await confirmed()), poContext())).status).toBe(404);
     }
     state.host = "orders.client.example";
     state.session = ADMIN;
-    expect((await SEND(json("POST", confirmed()), poContext())).status).toBe(404);
+    expect((await SEND(json("POST", await confirmed()), poContext())).status).toBe(404);
     expect(sent).toHaveLength(0);
   });
 
@@ -231,19 +235,53 @@ describe("POST /api/pos/[poId]/send", () => {
     expect(unconfirmed.status).toBe(400);
     expect(((await unconfirmed.json()) as { recipients: unknown }).recipients).toEqual(NORTH_RECIPIENTS);
 
-    const wrong = await SEND(json("POST", confirmed({ recipients: { to: ["orders@northline.example"], cc: [] } })), poContext());
+    const wrong = await SEND(json("POST", await confirmed({ recipients: { to: ["orders@northline.example"], cc: [] } })), poContext());
     expect(wrong.status).toBe(409);
     expect(((await wrong.json()) as { recipients: unknown }).recipients).toEqual(NORTH_RECIPIENTS);
 
     expect((await SEND(json("POST", { recipients: NORTH_RECIPIENTS }), poContext())).status).toBe(400);
     expect((await SEND(new Request("https://x/", { method: "POST", body: "not json" }), poContext())).status).toBe(400);
+
+    // Recipients alone do not confirm what the PO says.
+    const versionless = await SEND(json("POST", { requestId: "route-versionless-1", confirm: true, recipients: NORTH_RECIPIENTS }), poContext());
+    expect(versionless.status).toBe(400);
+    const asked = (await versionless.json()) as { contentVersion: string; po: { contentVersion: string; notes: string } };
+    expect(asked.contentVersion).toBe(asked.po.contentVersion);
+    expect(asked.po.notes).toBe("Deliver before noon");
     expect(sent).toHaveLength(0);
     expect(vi.mocked(notifyPoSent)).not.toHaveBeenCalled();
   });
 
+  it("answers 409 with what would go out now when another manager saved after the review, then sends it once confirmed", async () => {
+    state.session = MANAGER;
+    const reviewed = await confirmed();
+    const saved = await PATCH(json("PATCH", draftBody({ notes: "Second manager's notes" })), poContext());
+    expect(saved.status).toBe(200);
+
+    const refused = await SEND(json("POST", reviewed), poContext());
+    expect(refused.status).toBe(409);
+    const body = (await refused.json()) as {
+      error: string;
+      recipients: unknown;
+      contentVersion: string;
+      po: { notes: string; contentVersion: string; recipients: unknown };
+    };
+    expect(body.error).toContain("changed since you reviewed it");
+    expect(body.recipients).toEqual(NORTH_RECIPIENTS);
+    expect(body.po).toMatchObject({ notes: "Second manager's notes", recipients: NORTH_RECIPIENTS });
+    expect(body.contentVersion).toBe(body.po.contentVersion);
+    expect(body.contentVersion).not.toBe(reviewed.contentVersion);
+    expect(sent).toHaveLength(0);
+
+    const response = await SEND(json("POST", { ...reviewed, requestId: "route-reconfirmed-1", contentVersion: body.contentVersion }), poContext());
+    expect(response.status).toBe(200);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].html).toContain("Second manager");
+  });
+
   it("sends once with the PDF attached, then broadcasts and notifies the team, skipping addresses already emailed", async () => {
     state.session = MANAGER;
-    const body = confirmed();
+    const body = await confirmed();
     const response = await SEND(json("POST", body), poContext());
     expect(response.status).toBe(200);
     const { po } = (await response.json()) as { po: { state: string; number: string } };
@@ -263,17 +301,17 @@ describe("POST /api/pos/[poId]/send", () => {
     // The same request again, and a new send, both send nothing.
     const replay = await SEND(json("POST", body), poContext());
     expect(((await replay.json()) as { unchanged: string }).unchanged).toBe("replayed");
-    const again = await SEND(json("POST", confirmed()), poContext());
+    const again = await SEND(json("POST", await confirmed()), poContext());
     expect(((await again.json()) as { unchanged: string }).unchanged).toBe("already-sent");
     expect(sent).toHaveLength(1);
   });
 
   it("resends only on request, without notifying the team again", async () => {
     state.session = MANAGER;
-    await SEND(json("POST", confirmed()), poContext());
+    await SEND(json("POST", await confirmed()), poContext());
     await Promise.all(state.after);
     vi.mocked(notifyPoSent).mockClear();
-    const response = await SEND(json("POST", confirmed({ resend: true })), poContext());
+    const response = await SEND(json("POST", await confirmed({ resend: true })), poContext());
     expect(response.status).toBe(200);
     await Promise.all(state.after);
     expect(sent).toHaveLength(2);
@@ -286,7 +324,7 @@ describe("POST /api/pos/[poId]/send", () => {
     email.send.mockImplementationOnce(async () => {
       throw new Error("sending domain not onboarded");
     });
-    const response = await SEND(json("POST", confirmed()), poContext());
+    const response = await SEND(json("POST", await confirmed()), poContext());
     expect(response.status).toBe(502);
     const body = (await response.json()) as { error: string; po: { state: string; lastError: string } };
     expect(body.error).toContain("sending domain not onboarded");
@@ -295,7 +333,7 @@ describe("POST /api/pos/[poId]/send", () => {
     expect(vi.mocked(broadcast).mock.calls.map((call) => (call[2] as { event: { type: string } }).event.type)).toEqual(["po_failed"]);
     expect(vi.mocked(notifyPoSent)).not.toHaveBeenCalled();
 
-    expect((await SEND(json("POST", confirmed()), poContext())).status).toBe(200);
+    expect((await SEND(json("POST", await confirmed()), poContext())).status).toBe(200);
     expect(sent).toHaveLength(1);
   });
 });
@@ -303,7 +341,7 @@ describe("POST /api/pos/[poId]/send", () => {
 describe("GET /api/pos/[poId]/pdf", () => {
   it("streams the PDF to anyone in the workspace (staff too), and 404 to everyone else", async () => {
     state.session = MANAGER;
-    await SEND(json("POST", confirmed()), poContext());
+    await SEND(json("POST", await confirmed()), poContext());
 
     state.session = null;
     expect((await PDF(new Request("https://x/"), poContext())).status).toBe(401);

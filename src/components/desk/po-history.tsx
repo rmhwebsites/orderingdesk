@@ -109,6 +109,12 @@ export function PurchaseOrders({
       void load();
       onChanged?.();
     },
+    // The PO changed since its step opened: the step shows what would go
+    // out now; the row follows.
+    onChanged: () => {
+      void load();
+      onChanged?.();
+    },
   });
 
   const pos = list.status === "ready" ? list.pos : [];
