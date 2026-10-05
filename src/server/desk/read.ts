@@ -4,12 +4,13 @@
 
 import { and, asc, count, desc, eq, isNotNull, isNull } from "drizzle-orm";
 import type { Db } from "@/db";
-import { events, orders, statuses, storeConnections, workspaceSettings, workspaces } from "@/db/schema";
+import { events, orders, statuses, storeConnections, user, workspaceSettings, workspaces } from "@/db/schema";
 import { requestFieldsOf } from "@/lib/request-fields";
 import { draftsEnabled, missingDraftScopes } from "@/server/shopify/admin";
 import {
   eventView,
   isRecord,
+  personName,
   settingsView,
   statusView,
   type EventView,
@@ -266,14 +267,21 @@ export async function listEvents(
   workspaceId: string,
   orderId: string | null,
 ): Promise<EventsResult> {
+  // Who did it, member or not (like the bell, src/server/activity.ts).
+  const withActor = (row: { event: typeof events.$inferSelect; name: string | null; email: string | null }): EventView => ({
+    ...eventView(row.event),
+    actorName: row.event.actorId ? personName(row.name, row.email) : null,
+  });
+  const selection = { event: events, name: user.name, email: user.email };
   if (orderId === null) {
     const rows = await db
-      .select()
+      .select(selection)
       .from(events)
+      .leftJoin(user, eq(user.id, events.actorId))
       .where(eq(events.workspaceId, workspaceId))
       .orderBy(desc(events.createdAt), desc(events.id))
       .limit(EVENT_FEED_CAP);
-    return { kind: "ok", events: rows.map(eventView) };
+    return { kind: "ok", events: rows.map(withActor) };
   }
 
   const order = await db
@@ -285,9 +293,10 @@ export async function listEvents(
     return { kind: "not-found" };
   }
   const rows = await db
-    .select()
+    .select(selection)
     .from(events)
+    .leftJoin(user, eq(user.id, events.actorId))
     .where(and(eq(events.workspaceId, workspaceId), eq(events.orderId, orderId)))
     .orderBy(desc(events.createdAt), desc(events.id));
-  return { kind: "ok", events: rows.map(eventView) };
+  return { kind: "ok", events: rows.map(withActor) };
 }

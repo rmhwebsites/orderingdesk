@@ -13,7 +13,7 @@ import {
   REVIEW_RETRY_MS,
   type ReviewDeps,
 } from "./review";
-import { openTestDb, seedDraft, seedDraftStatuses, seedOrder, seedWorkspace, snapshotOf } from "./test-helpers";
+import { openTestDb, seedDraft, seedDraftStatuses, seedOrder, seedUser, seedWorkspace, snapshotOf } from "./test-helpers";
 
 // Approve and Reject (draft orders spec section 9), against the real
 // migrations and a stubbed Shopify. The approve mutation is never sent to a
@@ -276,6 +276,36 @@ describe("approveRequest", () => {
       const result = await approveRequest(db, ctx("platform"), deps(fakeShop()));
       expect(result.kind).toBe("approved");
       expect((await row(db)).statusKey).toBe("approved");
+    }
+  });
+
+  it("names the platform admin who approves or rejects, though not a member, on the entries it returns", async () => {
+    // These entries are shown at once and broadcast to open desks, whose
+    // member lists do not include a platform admin from outside the
+    // workspace (spec section 11.6: "Approved by X").
+    const approve = await setup();
+    await seedUser(approve.db, MANAGER, "ryan@example.com", "Ryan Hale");
+    const approved = await approveRequest(approve.db, ctx("platform"), deps(fakeShop()));
+    expect(approved.kind).toBe("approved");
+    if (approved.kind === "approved") {
+      expect(approved.events.map((event) => [event.type, event.actorName])).toEqual(
+        expect.arrayContaining([
+          ["status", "Ryan Hale"],
+          ["draft_completed", "Ryan Hale"],
+        ]),
+      );
+      expect(approved.follow.statusEvent?.actorName).toBe("Ryan Hale");
+      expect(approved.follow.completedEvent?.actorName).toBe("Ryan Hale");
+    }
+
+    const reject = await setup();
+    await seedUser(reject.db, MANAGER, "ryan@example.com");
+    const rejected = await rejectRequest(reject.db, ctx("platform"), { reason: "Duplicate request" }, deps(fakeShop()));
+    expect(rejected.kind).toBe("rejected");
+    if (rejected.kind === "rejected") {
+      expect(rejected.events.map((event) => event.actorName)).toEqual(["ryan@example.com", "ryan@example.com"]);
+      expect(rejected.statusEvent.actorName).toBe("ryan@example.com");
+      expect(rejected.noteEvent.actorName).toBe("ryan@example.com");
     }
   });
 

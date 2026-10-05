@@ -1,10 +1,12 @@
 "use client";
 
+import { useId } from "react";
 import Link from "next/link";
 import { ListMagnifyingGlassIcon } from "@phosphor-icons/react/ListMagnifyingGlass";
 import { StorefrontIcon } from "@phosphor-icons/react/Storefront";
 import { WarningCircleIcon } from "@phosphor-icons/react/WarningCircle";
 import { ui } from "@/components/ui";
+import type { DeskKind } from "@/lib/desk-state";
 
 function Frame({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
   return (
@@ -34,17 +36,68 @@ export function EmptyDesk({ basePath, canConnect }: { basePath: string; canConne
   );
 }
 
-export function NoMatches({ query, onClear }: { query: string; onClear: () => void }) {
+// What an empty list says, by what emptied it: the search, the status, and
+// the All / Drafts / Orders / Deleted filter. Drafts plus New is the review
+// queue (draft orders spec section 11.2), empty whenever every request has
+// been handled, so it reads as a normal state, not a failed search.
+function noMatchesCopy(query: string, kind: DeskKind, statusLabel: string | null): { title: string; body: string } {
+  if (query.length > 0) {
+    const where = statusLabel ? ` in ${statusLabel}` : "";
+    const title = { all: "No orders match", drafts: "No requests match", orders: "No orders match", deleted: "No deleted requests match" }[kind];
+    return { title, body: `Nothing matches "${query}"${where}.` };
+  }
+  switch (kind) {
+    case "drafts":
+      return statusLabel
+        ? { title: "No requests have this status", body: `No requests are in ${statusLabel}.` }
+        : { title: "No requests waiting", body: "New requests from the store show up here." };
+    case "deleted":
+      return statusLabel
+        ? { title: "No deleted requests have this status", body: `No deleted requests are in ${statusLabel}.` }
+        : { title: "No deleted requests", body: "Requests whose draft was deleted in Shopify show up here." };
+    case "orders":
+      return statusLabel
+        ? { title: "No orders have this status", body: `No orders are in ${statusLabel}.` }
+        : { title: "No orders yet", body: "Orders from the store, and requests once approved, show up here." };
+    case "all":
+      return {
+        title: "No orders match",
+        body: statusLabel ? "No loaded orders have this status." : "Nothing to show with the current filters.",
+      };
+  }
+}
+
+export function NoMatches({
+  query,
+  kind,
+  statusLabel,
+  onClear,
+}: {
+  query: string;
+  kind: DeskKind;
+  // The label of the status picked in the strip, or null for every status.
+  statusLabel: string | null;
+  // Clears the search and the status, and goes back to All.
+  onClear: () => void;
+}) {
+  const copy = noMatchesCopy(query.trim(), kind, statusLabel);
+  const hintId = useId();
   return (
-    <Frame icon={<ListMagnifyingGlassIcon size={24} aria-hidden />} title="No orders match">
-      <p className="max-w-[46ch] break-words text-sm text-ink-2">
-        {query.trim().length > 0
-          ? `Nothing matches "${query.trim()}" with the current status filter.`
-          : "No loaded orders have this status."}
-      </p>
-      <button type="button" onClick={onClear} className={`${ui.buttonSecondary} mt-1`}>
+    <Frame icon={<ListMagnifyingGlassIcon size={24} aria-hidden />} title={copy.title}>
+      <p className="max-w-[46ch] break-words text-sm text-ink-2">{copy.body}</p>
+      <button
+        type="button"
+        onClick={onClear}
+        aria-describedby={kind !== "all" ? hintId : undefined}
+        className={`${ui.buttonSecondary} mt-1`}
+      >
         Clear filters
       </button>
+      {kind !== "all" ? (
+        <p id={hintId} className="max-w-[46ch] text-xs text-ink-2">
+          Clear filters goes back to All, with no search or status.
+        </p>
+      ) : null}
     </Frame>
   );
 }

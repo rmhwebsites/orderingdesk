@@ -202,10 +202,31 @@ function actorName(event: EventView, members: Map<string, MemberView>, selfUserI
     return "You";
   }
   const member = members.get(event.actorId);
-  if (!member) {
-    return "Former member";
+  if (member) {
+    return member.name?.trim() || member.email || "Team member";
   }
-  return member.name?.trim() || member.email || "Team member";
+  // Not a member: a platform admin from outside the workspace (who may
+  // approve and reject), named by the server; else someone who left.
+  return event.actorName?.trim() || "Former member";
+}
+
+// Who set the card's current status, for "Status set by ...": a member by
+// the member list, else the name on the newest status entry that person
+// wrote (a platform admin who is not a member), else a former member.
+function statusSetterName(
+  userId: string,
+  members: Map<string, MemberView>,
+  timeline: EventView[],
+): string {
+  const member = members.get(userId);
+  const fromMembers = member?.name?.trim() || member?.email;
+  if (fromMembers) {
+    return fromMembers;
+  }
+  const entry = timeline
+    .filter((event) => event.type === "status" && event.actorId === userId && event.actorName?.trim())
+    .sort((a, b) => b.createdAt - a.createdAt)[0];
+  return entry?.actorName?.trim() || "a former member";
 }
 
 const EVENT_ICONS: Record<EventView["type"], typeof ChatTextIcon> = {
@@ -498,7 +519,9 @@ export function OrderDrawerContent({
   const fulfillment =
     snapshot && !showsDraft ? snapshot.fulfillmentStatus : kind === "order" ? (summary?.fulfillmentStatus ?? "") : "";
   const deleted = kind === "draft" && (order ? order.draftDeletedAt !== null : (summary?.draftDeleted ?? false));
-  const draftStatus = kind === "draft" ? (snapshot?.draftStatus ?? summary?.draftStatus ?? null) : null;
+  // A draft Shopify deleted keeps its last snapshot (status still "open"):
+  // the Deleted chip carries its state alone, never next to "Open".
+  const draftStatus = kind === "draft" && !deleted ? (snapshot?.draftStatus ?? summary?.draftStatus ?? null) : null;
   // A draft Shopify deleted has no admin page to open.
   const shopifyUrl = order
     ? order.shopifyOrderId !== null
@@ -534,7 +557,7 @@ export function OrderDrawerContent({
   const setBy = statusSetBy
     ? statusSetBy === selfUserId
       ? "you"
-      : members.get(statusSetBy)?.name?.trim() || members.get(statusSetBy)?.email || "a former member"
+      : statusSetterName(statusSetBy, members, timeline)
     : statusSetAt !== null
       ? "Shopify"
       : null;

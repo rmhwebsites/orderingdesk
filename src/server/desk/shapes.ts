@@ -25,7 +25,19 @@ export type EventView = {
   createdAt: number;
   // Where the change came from: a person in the app, Shopify, or the system.
   source: (typeof events.$inferSelect)["source"];
+  // The person who did it, as their name, else their email; null when
+  // nobody (or nobody who still has an account) did it. Set where the
+  // server reads it with the event (the timeline read, Approve and
+  // Reject), so a platform admin who is not a member of the workspace is
+  // named instead of reading as a former member. Absent elsewhere: the
+  // drawer then names workspace members from its member list.
+  actorName?: string | null;
 };
+
+// The name an event's actor goes by (see EventView.actorName).
+export function personName(name: string | null | undefined, email: string | null | undefined): string | null {
+  return name?.trim() || email || null;
+}
 
 export type SettingsView = {
   notificationEmails: string[];

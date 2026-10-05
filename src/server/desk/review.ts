@@ -49,7 +49,7 @@
 import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import type { Db } from "@/db";
 import { applyBatch, rowsAffected } from "@/db/batch";
-import { events, orders, statuses, storeConnections } from "@/db/schema";
+import { events, orders, statuses, storeConnections, user } from "@/db/schema";
 import { formatMoney } from "@/lib/format";
 import { NOTE_MAX } from "@/lib/limits";
 import { roleAtLeast, type Role } from "@/lib/roles";
@@ -80,7 +80,7 @@ import {
   type DraftRow,
   type OrderMerge,
 } from "@/server/sync/drafts";
-import { eventView, isRecord, type EventView } from "./shapes";
+import { eventView, isRecord, personName, type EventView } from "./shapes";
 
 // Times the draft is read again while Shopify is still calculating it, and
 // the wait before each read (and before the one retry of the mutation).
@@ -220,6 +220,14 @@ async function linkedStatus(
     .orderBy(asc(statuses.sort))
     .limit(1);
   return rows[0];
+}
+
+// The acting person's name for the entries Approve and Reject return and
+// broadcast: open desks know only workspace members, and a platform admin
+// who is not one would otherwise read as a former member.
+async function actorNameOf(db: Db, userId: string): Promise<string | null> {
+  const rows = await db.select({ name: user.name, email: user.email }).from(user).where(eq(user.id, userId)).limit(1);
+  return rows[0] ? personName(rows[0].name, rows[0].email) : null;
 }
 
 async function draftsOn(db: Db, workspaceId: string): Promise<boolean> {
@@ -556,7 +564,10 @@ async function commitApproval(
   const statusRow = written.find((event) => event.id === built.statusEventId);
   const completedRow = written.find((event) => event.id === built.completedEventId);
   const order = orderView(fresh);
-  const eventList = [statusRow, completedRow].filter((event) => event !== undefined).map(eventView);
+  const actorName = await actorNameOf(db, ctx.userId);
+  const view = (row: typeof events.$inferSelect): EventView =>
+    row.actorId === ctx.userId ? { ...eventView(row), actorName } : eventView(row);
+  const eventList = [statusRow, completedRow].filter((event) => event !== undefined).map(view);
   return {
     kind: "approved",
     order,
@@ -567,8 +578,8 @@ async function commitApproval(
     ...(merged ? { merged } : {}),
     follow: {
       order,
-      statusEvent: statusRow ? eventView(statusRow) : null,
-      completedEvent: completedRow ? eventView(completedRow) : null,
+      statusEvent: statusRow ? view(statusRow) : null,
+      completedEvent: completedRow ? view(completedRow) : null,
       statusChanges: [],
       merged: merged ?? null,
       pushStatus: true,
@@ -739,12 +750,15 @@ export async function rejectRequest(
     }
     return refused(409, REVIEW_COPY.noRejectedStatus);
   }
+  const actorName = await actorNameOf(db, ctx.userId);
+  const statusView = { ...eventView(statusEvent), actorName };
+  const noteView = { ...eventView(noteEvent), actorName };
   return {
     kind: "rejected",
     order: { id: card.id, statusKey: rejected.key, statusSetBy: ctx.userId, statusSetAt: now },
-    events: [eventView(statusEvent), eventView(noteEvent)],
-    statusEvent: eventView(statusEvent),
-    noteEvent: eventView(noteEvent),
+    events: [statusView, noteView],
+    statusEvent: statusView,
+    noteEvent: noteView,
   };
 }
 

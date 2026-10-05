@@ -9,7 +9,7 @@ import {
   listEvents,
   loadDesk,
 } from "./read";
-import { draftSnapshotOf, openTestDb, seedDraft, seedOrder, seedWorkspace, snapshotOf } from "./test-helpers";
+import { draftSnapshotOf, openTestDb, seedDraft, seedOrder, seedUser, seedWorkspace, snapshotOf } from "./test-helpers";
 
 const WS = "ws_impact";
 const OTHER = "ws_other";
@@ -419,6 +419,7 @@ describe("listEvents", () => {
         meta: null,
         createdAt: 1300,
         source: "system",
+        actorName: null,
       });
       expect(result.events[EVENT_FEED_CAP - 1].id).toBe("e001");
       expect(result.events.map((e) => e.id)).not.toContain("other_newest");
@@ -442,6 +443,39 @@ describe("listEvents", () => {
         expect.objectContaining({ id: "t1", orderId: "o1" }),
       ],
     });
+  });
+
+  it("names who did it, member or not, so a platform admin's approval is not a former member's", async () => {
+    // The drawer knows only workspace members; a platform admin who is not
+    // one may approve or reject (draft orders spec section 9). Like the bell,
+    // the timeline carries the person's name, else their email.
+    const db = await setup();
+    await seedOrder(db, WS, { id: "o1" });
+    await seedUser(db, "u_ryan", "ryan@example.com", "Ryan Hale");
+    await seedUser(db, "u_noname", "Pat@Example.com");
+    await seedUser(db, "u_blank", "blank@example.com", "   ");
+    const base = { workspaceId: WS, orderId: "o1", type: "status" as const, text: "Approved the request. Status set to Approved" };
+    await db.insert(schema.events).values([
+      { ...base, id: "a1", actorId: "u_ryan", createdAt: 50, source: "app" },
+      { ...base, id: "a2", actorId: "u_noname", createdAt: 40, source: "app" },
+      { ...base, id: "a3", actorId: "u_blank", createdAt: 30, source: "app" },
+      { ...base, id: "a4", actorId: "u_gone", createdAt: 20, source: "app" },
+      { ...base, id: "a5", actorId: null, createdAt: 10, source: "shopify" },
+    ]);
+
+    for (const orderId of ["o1", null]) {
+      const result = await listEvents(db, WS, orderId);
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.events.map((event) => [event.id, event.actorId, event.actorName])).toEqual([
+          ["a1", "u_ryan", "Ryan Hale"],
+          ["a2", "u_noname", "pat@example.com"],
+          ["a3", "u_blank", "blank@example.com"],
+          ["a4", "u_gone", null],
+          ["a5", null, null],
+        ]);
+      }
+    }
   });
 
   it("is not-found for an order outside this workspace, or no order at all", async () => {

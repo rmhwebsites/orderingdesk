@@ -344,8 +344,10 @@ export function Desk() {
   // A name we cannot resolve (someone joined since): refresh the list, at
   // most once a minute.
   useEffect(() => {
+    // An entry the server already named (a platform admin who is not a
+    // member) needs no refresh.
     const unknown = (desk.timeline?.events ?? []).some(
-      (event) => event.actorId !== null && event.actorId !== userId && !members.has(event.actorId),
+      (event) => event.actorId !== null && event.actorId !== userId && !members.has(event.actorId) && !event.actorName,
     );
     if (unknown && Date.now() - membersLoadedAt.current > MEMBERS_REFRESH_MS) {
       void loadMembers();
@@ -692,6 +694,12 @@ export function Desk() {
             {visible.length === 0 ? (
               <NoMatches
                 query={filter.query}
+                kind={filter.kind ?? "all"}
+                statusLabel={
+                  filter.statusKey === null
+                    ? null
+                    : (chips.find((chip) => chip.key === filter.statusKey)?.label ?? "this status")
+                }
                 onClear={() => setFilter((current) => ({ ...current, query: "", statusKey: null, kind: "all" }))}
               />
             ) : (
