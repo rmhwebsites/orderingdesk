@@ -12,6 +12,7 @@ import { claimAccessOnSignIn } from "@/server/invites";
 import { requestHost } from "@/server/request-host";
 import { listWorkspacesForViewer } from "@/server/workspaces";
 import { Desk } from "@/components/desk/desk";
+import { ThemedImage } from "@/components/shell/workspace-brand-slot";
 import { WorkspaceShell } from "@/components/shell/workspace-shell";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { ui } from "@/components/ui";
@@ -151,12 +152,18 @@ export default async function Home() {
                   href={`/w/${encodeURIComponent(workspace.slug)}`}
                   className={`${ui.panel} flex items-center gap-3 px-4 py-3 transition-colors hover:border-primary-strong`}
                 >
-                  <span
-                    aria-hidden
-                    className="grid size-9 shrink-0 place-items-center rounded-control bg-primary font-display text-sm font-semibold text-primary-ink"
-                  >
-                    {workspace.name.trim().charAt(0).toUpperCase()}
-                  </span>
+                  {workspace.symbol ? (
+                    <span aria-hidden className="grid size-9 shrink-0 place-items-center">
+                      <ThemedImage paths={workspace.symbol} className="size-9 object-contain" />
+                    </span>
+                  ) : (
+                    <span
+                      aria-hidden
+                      className="grid size-9 shrink-0 place-items-center rounded-control bg-primary font-display text-sm font-semibold text-primary-ink"
+                    >
+                      {workspace.name.trim().charAt(0).toUpperCase()}
+                    </span>
+                  )}
                   <span className="min-w-0 flex-1 truncate font-medium">{workspace.name}</span>
                   {workspace.role === "platform" ? null : (
                     <span className="text-xs font-medium text-ink-2">{roleLabel(workspace.role)}</span>
