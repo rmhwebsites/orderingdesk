@@ -30,7 +30,7 @@
             "city": "Thunder Bay",
             "provinceCode": "ON",
             "zip": "P7B 6T9",
-            "countryCode": "CA"
+            "countryCodeV2": "CA"
           },
           "lineItems": {
             "nodes": [
@@ -65,7 +65,7 @@
             "city": "Halifax",
             "provinceCode": "NS",
             "zip": "B3H 4R2",
-            "countryCode": "CA"
+            "countryCodeV2": "CA"
           },
           "lineItems": {
             "nodes": [

@@ -86,7 +86,7 @@ describe("orderLinesForPo", () => {
       expect(result.lines).toHaveLength(60);
       expect(result.lines[0]).toEqual({ description: "Item 1 (Large)", sku: "S-1", quantity: 2, unitCost: null });
     }
-    expect(requests).toEqual(["https://impact-rentals.myshopify.com/admin/api/2025-07/graphql.json"]);
+    expect(requests).toEqual(["https://impact-rentals.myshopify.com/admin/api/2026-10/graphql.json"]);
   });
 
   it("treats a snapshot without the marker as partial", async () => {

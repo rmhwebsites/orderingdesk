@@ -175,7 +175,8 @@ function shippingOf(order: Dict): NormalizedOrder["shipping"] {
     city: str(address.city),
     prov: str(address.provinceCode),
     zip: str(address.zip),
-    country: str(address.countryCode),
+    // countryCode is deprecated; read for nodes shaped before the switch.
+    country: str(address.countryCodeV2) || str(address.countryCode),
   };
 }
 

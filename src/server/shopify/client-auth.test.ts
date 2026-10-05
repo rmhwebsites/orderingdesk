@@ -1,5 +1,12 @@
-import { describe, it, expect } from "vitest";
-import { SHOPIFY_API_VERSION, mintAccessToken, shopifyGraphql } from "./client";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import {
+  SHOPIFY_API_VERSION,
+  fetchOrdersUpdatedSince,
+  mintAccessToken,
+  resetServedVersionNotice,
+  shopifyGraphql,
+  testShopConnection,
+} from "./client";
 
 // The client credentials grant (platform amendment section 3) and the
 // generic Admin GraphQL request the Shopify stage builds on. Stubbed fetch
@@ -211,5 +218,56 @@ describe("shopifyGraphql", () => {
     const { impl } = stub([json({ errors: [{ message: `Access denied for ${TOKEN}` }] })]);
     const result = await shopifyGraphql(DOMAIN, TOKEN, QUERY, VARIABLES, impl);
     expect(result).toEqual({ kind: "fatal", detail: "Access denied for [redacted]" });
+  });
+});
+
+// The pinned Admin API version and the served-version diagnostic (draft
+// orders spec section 3.1): Shopify answers an unsupported version with an
+// older fallback, so a mismatch is logged, once per isolate.
+describe("Admin API version", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetServedVersionNotice();
+  });
+
+  const served = (version: string | null, body: unknown) =>
+    new Response(JSON.stringify(body), {
+      status: 200,
+      headers: version === null ? { "content-type": "application/json" } : { "content-type": "application/json", "X-Shopify-API-Version": version },
+    });
+  const ok = { data: { order: { id: "gid://shopify/Order/1" } } };
+
+  it("pins 2026-10", () => {
+    expect(SHOPIFY_API_VERSION).toBe("2026-10");
+  });
+
+  it("logs the version Shopify served when it differs, once per isolate", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { impl } = stub([served("2025-10", ok), served("2025-10", ok)]);
+    await shopifyGraphql(DOMAIN, TOKEN, "query { shop { name } }", {}, impl);
+    await shopifyGraphql(DOMAIN, TOKEN, "query { shop { name } }", {}, impl);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toBe('[shopify] {"apiVersionServed":"2025-10"}');
+  });
+
+  it("logs nothing when Shopify serves the pinned version or sends no header", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { impl } = stub([served("2026-10", ok), served(null, ok)]);
+    await shopifyGraphql(DOMAIN, TOKEN, "query { shop { name } }", {}, impl);
+    await shopifyGraphql(DOMAIN, TOKEN, "query { shop { name } }", {}, impl);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("checks the served version on the sync's pages and the connection test too", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const page = { data: { orders: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } };
+    await fetchOrdersUpdatedSince(DOMAIN, TOKEN, "2026-09-01T00:00:00.000Z", stub([served("2026-01", page)]).impl);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toBe('[shopify] {"apiVersionServed":"2026-01"}');
+    resetServedVersionNotice();
+    const shop = { data: { shop: { name: "Impact" }, currentAppInstallation: { accessScopes: [] } } };
+    await testShopConnection(DOMAIN, TOKEN, stub([served("2025-10", shop)]).impl);
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls[1][0]).toBe('[shopify] {"apiVersionServed":"2025-10"}');
   });
 });

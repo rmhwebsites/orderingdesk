@@ -1,8 +1,34 @@
 // Shopify Admin GraphQL client. Callers always get a typed result, never an
 // exception, and the access token is never written into any detail string.
 
-// Pinned Admin API version; bump deliberately (see docs/plans execution notes).
-export const SHOPIFY_API_VERSION = "2025-07";
+// Pinned Admin API version; bump deliberately. Shopify answers a version it
+// no longer serves with the oldest one it still does (2025-07 stopped being
+// served on July 16, 2026), so the pin has to move before each one lapses
+// (draft orders spec section 3.1).
+export const SHOPIFY_API_VERSION = "2026-10";
+
+// Whether this isolate has logged a served version other than the pin.
+let servedVersionNoticed = false;
+
+// Logs the version Shopify actually served when its X-Shopify-API-Version
+// header names another one than the pin, once per isolate: a quiet
+// fallback is otherwise invisible. Only the version string is logged.
+function noticeServedVersion(response: Response): void {
+  if (servedVersionNoticed) {
+    return;
+  }
+  const served = (response.headers?.get("x-shopify-api-version") ?? "").trim();
+  if (served.length === 0 || served === SHOPIFY_API_VERSION) {
+    return;
+  }
+  servedVersionNoticed = true;
+  console.warn("[shopify] " + JSON.stringify({ apiVersionServed: served.slice(0, 40) }));
+}
+
+// Test-only: forget that the served version was logged.
+export function resetServedVersionNotice(): void {
+  servedVersionNoticed = false;
+}
 
 export type ShopifyFetchResult =
   | {
@@ -99,7 +125,7 @@ export const ORDER_FIELDS = `
       currentTotalPriceSet { shopMoney { amount currencyCode } }
       totalPriceSet { shopMoney { amount currencyCode } }
       customer { firstName lastName displayName email }
-      shippingAddress { name firstName lastName address1 address2 city provinceCode zip countryCode }
+      shippingAddress { name firstName lastName address1 address2 city provinceCode zip countryCodeV2 }
       fulfillments(first: ${FULFILLMENTS_PER_ORDER}) { displayStatus }
       lineItems(first: ${LINE_ITEMS_PER_ORDER}) {
         nodes { title quantity sku variantTitle originalUnitPriceSet { shopMoney { amount } } }
@@ -271,6 +297,7 @@ async function fetchOrderPages(
       return retryable(scrub(`network error: ${message}`, token));
     }
 
+    noticeServedVersion(response);
     if (response.status === 401 || response.status === 403) {
       return { kind: "auth" };
     }
@@ -409,6 +436,7 @@ export async function testShopConnection(
     return { kind: "transient", detail: scrub(`network error: ${message}`, token) };
   }
 
+  noticeServedVersion(response);
   if (response.status === 401 || response.status === 403) {
     return { kind: "auth" };
   }
@@ -627,6 +655,7 @@ export async function shopifyGraphql(
     const message = e instanceof Error ? e.message : "fetch threw";
     return { kind: "transient", detail: scrub(`network error: ${message}`, token) };
   }
+  noticeServedVersion(response);
   if (response.status === 401 || response.status === 403) {
     return { kind: "auth" };
   }

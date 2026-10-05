@@ -84,6 +84,17 @@ describe("normalizeOrders", () => {
     });
   });
 
+  it("reads the country from countryCodeV2, falling back to countryCode", () => {
+    const [v2, legacy, both] = normalizeOrders([
+      { id: "gid://shopify/Order/1", shippingAddress: { countryCodeV2: "US" } },
+      { id: "gid://shopify/Order/2", shippingAddress: { countryCode: "CA" } },
+      { id: "gid://shopify/Order/3", shippingAddress: { countryCodeV2: "GB", countryCode: "CA" } },
+    ]);
+    expect(v2.shipping?.country).toBe("US");
+    expect(legacy.shipping?.country).toBe("CA");
+    expect(both.shipping?.country).toBe("GB");
+  });
+
   it("joins array tags and keeps string tags as-is", () => {
     const result = normalizeOrders(fixture);
     expect(byName(result, "#1001").tags).toBe("wholesale, rush");

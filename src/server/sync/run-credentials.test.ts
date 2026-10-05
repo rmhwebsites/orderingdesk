@@ -89,7 +89,7 @@ describe("runSync with client credentials", () => {
     expect(result.added).toBe(1);
     expect(shop.calls.map((call) => new URL(call.url).pathname)).toEqual([
       "/admin/oauth/access_token",
-      "/admin/api/2025-07/graphql.json",
+      "/admin/api/2026-10/graphql.json",
     ]);
     expect((shop.calls[1].init.headers as Record<string, string>)["X-Shopify-Access-Token"]).toBe(MINTED);
     const row = await connection(db);
