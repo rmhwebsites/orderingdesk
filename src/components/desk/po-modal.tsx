@@ -7,16 +7,18 @@
 // added inline), the lines are prefilled from the order and editable (the
 // unit cost is the reviewer's; an order whose stored item list is partial
 // is prefilled from the full list read from Shopify, and when that cannot
-// be read the lines start empty and Send to vendor stays blocked), the
-// ship-to is prefilled and editable, and
-// notes are optional. Save draft keeps it; Send to vendor saves it, then
-// shows the confirmation step naming every recipient, and only Send to
-// vendor there sends it. Nothing is ever sent from here without that step.
+// be read the lines start empty and sending stays blocked), the ship-to is
+// prefilled and editable, and notes are optional. Save draft keeps it;
+// Review and send saves it, then shows the confirmation step naming every
+// recipient, and only Send to vendor there sends it. Nothing is ever sent
+// from here without that step, and "Send to vendor" names nothing else.
 //
-// Full screen on phones, a centered panel from sm. The rest of the
-// workspace (the drawer included) is inert while it is open, Esc and the
-// scrim close it (asking first when there are unsaved changes), and focus
-// returns where it was.
+// Full screen on phones, a centered panel from sm. The footer scrolls on
+// its own, so its buttons stay reachable in a short window. The rest of
+// the workspace (the drawer included) is inert while it is open, Esc and
+// the scrim close it (asking first when there are unsaved changes), and
+// focus returns where it was. A button disabled while it saves gets focus
+// back when the save ends.
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -106,6 +108,62 @@ function ModalShell({
     </div>,
     target,
   );
+}
+
+// Body and footer both scroll, so header plus footer can never push the
+// footer's buttons (the confirmation step's Send to vendor and Cancel) out
+// of the panel in a short window (a phone held sideways, or 200% zoom).
+// When room runs out the body gives it up first (its flex-shrink dwarfs
+// the footer's, and from sm the panel's height comes from its content, so
+// the body's basis is its full content height); only once the body is
+// down to nothing does the footer shrink, and then it scrolls.
+export function PoModalBody({ children }: { children: React.ReactNode }) {
+  return <div className="flex-1 shrink-[1000] overflow-y-auto overscroll-contain px-4 py-5 sm:px-6">{children}</div>;
+}
+
+export function PoModalFooter({ children }: { children: React.ReactNode }) {
+  return (
+    <footer className="flex max-h-[60dvh] flex-col gap-3 overflow-y-auto overscroll-contain border-t border-line px-4 py-4 sm:px-6">
+      {children}
+    </footer>
+  );
+}
+
+// The form's own buttons. Review and send opens the confirmation step;
+// only that step's Send to vendor sends.
+export function DraftActions({
+  saved,
+  saving,
+  locked,
+  sendBlocked,
+  onSaveDraft,
+  onReview,
+}: {
+  saved: string | null;
+  saving: boolean;
+  locked: boolean;
+  // The order's full item list has not loaded: no review yet.
+  sendBlocked: boolean;
+  onSaveDraft: () => void;
+  onReview: () => void;
+}) {
+  return (
+    <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-end">
+      <SaveStatus text={saved} />
+      <button id="po-save-draft" type="button" onClick={onSaveDraft} disabled={locked} className={ui.buttonSecondary}>
+        {saving ? "Saving" : "Save draft"}
+      </button>
+      <button id="po-send" type="button" onClick={onReview} disabled={locked || sendBlocked} className={ui.buttonPrimary}>
+        Review and send
+      </button>
+    </div>
+  );
+}
+
+// After a save or a send that did not close the modal, focus goes back to
+// the footer button (disabled while it ran), or Close once the PO is sent.
+function focusFooter(id: "po-save-draft" | "po-send") {
+  focusSoon(() => document.getElementById(id) ?? document.getElementById("po-done"));
 }
 
 type VendorDraft = { name: string; email: string; cc: string };
@@ -358,7 +416,7 @@ export function PoModal({
   const [askDiscard, setAskDiscard] = useState(false);
   const [addingVendor, setAddingVendor] = useState(false);
   // A new PO whose order's full item list could not be read (the stored
-  // list is partial): the lines start empty and Send to vendor stays
+  // list is partial): the lines start empty and Review and send stays
   // blocked until the list loads.
   const [linesProblem, setLinesProblem] = useState<string | null>(null);
   const [linesRetrying, setLinesRetrying] = useState(false);
@@ -374,6 +432,8 @@ export function PoModal({
       if (text) {
         setMessage({ tone: current.state === "failed" ? "bad" : "info", text });
       }
+      // The step closed while focus was on its (disabled) send button.
+      focusFooter("po-send");
     },
   });
 
@@ -516,8 +576,10 @@ export function PoModal({
   }
 
   // Saves the form (creating the draft the first time). Returns the saved
-  // PO, or null with the problem shown.
-  async function save(requireCosts: boolean): Promise<PoView | null> {
+  // PO, or null with the problem shown. The footer is disabled while it
+  // saves; a failed save gives focus back to the button that was pressed
+  // (`from`), a successful one leaves that to the caller.
+  async function save(requireCosts: boolean, from: "po-save-draft" | "po-send"): Promise<PoView | null> {
     if (!form) {
       return null;
     }
@@ -544,6 +606,7 @@ export function PoModal({
         onSaved(result.po);
       }
       setMessage({ tone: "bad", text: result.message });
+      focusFooter(from);
       return null;
     }
     setPo(result.po);
@@ -553,9 +616,10 @@ export function PoModal({
   }
 
   async function saveDraft() {
-    const result = await save(false);
+    const result = await save(false, "po-save-draft");
     if (result) {
       setSaved("Draft saved");
+      focusFooter("po-save-draft");
     }
   }
 
@@ -564,13 +628,15 @@ export function PoModal({
       setMessage({ tone: "warn", text: "Sending waits until the order's full item list loads. Try loading it again above." });
       return;
     }
-    const result = await save(true);
+    const result = await save(true, "po-send");
     if (!result) {
       return;
     }
     const label = result.number ? `purchase order ${result.number}` : "this purchase order";
+    // The confirmation step takes focus itself (its question).
     if (!flow.start(result, { label, resend: false })) {
       setMessage({ tone: "bad", text: "Pick a vendor from the list before sending." });
+      focusFooter("po-send");
     }
   }
 
@@ -599,7 +665,7 @@ export function PoModal({
         </button>
       </header>
 
-      <div className="flex-1 overflow-y-auto overscroll-contain px-4 py-5 sm:px-6">
+      <PoModalBody>
         {loaded.status === "loading" ? (
           <div aria-label="Loading the purchase order" className="flex flex-col gap-3">
             <span className="od-skeleton h-4 w-32" />
@@ -773,10 +839,10 @@ export function PoModal({
             </Field>
           </fieldset>
         ) : null}
-      </div>
+      </PoModalBody>
 
       {ready ? (
-        <footer className="flex flex-col gap-3 border-t border-line px-4 py-4 sm:px-6">
+        <PoModalFooter>
           {errors ? <InlineMessage tone="bad">Check the highlighted fields.</InlineMessage> : null}
           {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
           {flow.pending ? (
@@ -819,32 +885,24 @@ export function PoModal({
                 </button>
               </div>
             </div>
-          ) : (
+          ) : po?.state === "sent" ? (
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-end">
               <SaveStatus text={saved} />
-              {po?.state === "sent" ? (
-                <button type="button" onClick={onClose} className={ui.buttonSecondary}>
-                  Close
-                </button>
-              ) : (
-                <>
-                  <button type="button" onClick={() => void saveDraft()} disabled={locked} className={ui.buttonSecondary}>
-                    {saving ? "Saving" : "Save draft"}
-                  </button>
-                  <button
-                    id="po-send"
-                    type="button"
-                    onClick={() => void startSend()}
-                    disabled={locked || linesProblem !== null}
-                    className={ui.buttonPrimary}
-                  >
-                    Send to vendor
-                  </button>
-                </>
-              )}
+              <button id="po-done" type="button" onClick={onClose} className={ui.buttonSecondary}>
+                Close
+              </button>
             </div>
+          ) : (
+            <DraftActions
+              saved={saved}
+              saving={saving}
+              locked={locked}
+              sendBlocked={linesProblem !== null}
+              onSaveDraft={() => void saveDraft()}
+              onReview={() => void startSend()}
+            />
           )}
-        </footer>
+        </PoModalFooter>
       ) : null}
     </ModalShell>
   );

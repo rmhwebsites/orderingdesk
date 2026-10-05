@@ -312,6 +312,7 @@ export function Switch({
   onChange,
   label,
   disabled,
+  busy,
   describedBy,
 }: {
   id: string;
@@ -319,11 +320,18 @@ export function Switch({
   onChange: (checked: boolean) => void;
   label: string;
   disabled?: boolean;
+  // Unavailable for a moment (a change is saving): it keeps keyboard focus
+  // (aria-disabled, not disabled, which would drop focus to the page) and
+  // ignores changes until it is not busy.
+  busy?: boolean;
   // The id of help text about the switch, read with it.
   describedBy?: string;
 }) {
   return (
-    <label htmlFor={id} className="inline-flex cursor-pointer items-center gap-2.5 text-sm text-ink has-[:disabled]:cursor-not-allowed">
+    <label
+      htmlFor={id}
+      className="inline-flex cursor-pointer items-center gap-2.5 text-sm text-ink has-[:disabled]:cursor-not-allowed has-[[aria-disabled=true]]:cursor-progress"
+    >
       <span className="relative inline-flex h-6 w-10 shrink-0">
         <input
           id={id}
@@ -331,13 +339,18 @@ export function Switch({
           role="switch"
           checked={checked}
           disabled={disabled}
+          aria-disabled={busy ? true : undefined}
           aria-describedby={describedBy}
-          onChange={(event) => onChange(event.target.checked)}
-          className="peer absolute inset-0 z-10 cursor-pointer opacity-0 disabled:cursor-not-allowed"
+          onChange={(event) => {
+            if (!busy) {
+              onChange(event.target.checked);
+            }
+          }}
+          className="peer absolute inset-0 z-10 cursor-pointer opacity-0 disabled:cursor-not-allowed aria-disabled:cursor-progress"
         />
         <span
           aria-hidden
-          className="absolute inset-0 rounded-control border border-line-strong bg-surface-2 transition-colors duration-150 peer-checked:border-primary-strong peer-checked:bg-primary peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus peer-disabled:opacity-60"
+          className="absolute inset-0 rounded-control border border-line-strong bg-surface-2 transition-colors duration-150 peer-checked:border-primary-strong peer-checked:bg-primary peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus peer-disabled:opacity-60 peer-aria-disabled:opacity-60"
         />
         <span
           aria-hidden

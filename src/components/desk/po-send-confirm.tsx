@@ -2,8 +2,11 @@
 
 // The mandatory stop before a purchase order goes out: an in-page step that
 // names the vendor and every address (To and copies), with Cancel and an
-// explicit Send to vendor. Used by the review modal and by Retry and
-// Resend in the drawer's history. useSendFlow drives it: a request id per
+// explicit Send to vendor. It opens with focus on its question, never on
+// the send, and ignores a send pressed in its first moment, so the press
+// that opened it cannot also send. Used by the review modal (its Review
+// and send) and by Retry and Send again in the drawer's history.
+// useSendFlow drives it: a request id per
 // confirmation (so a repeated tap or a retry after a lost answer never
 // sends twice), new recipients shown again when they changed, and every
 // outcome handed back.
@@ -27,6 +30,31 @@ export type PendingSend = {
   message: string | null;
 };
 
+// A send pressed sooner than this after the step opened (or after a new
+// confirmation replaced it) is ignored: a double click that opened the
+// step must not land on its send button.
+export const CONFIRM_ARM_MS = 400;
+
+export function confirmArmed(openedAt: number | null, now: number): boolean {
+  return openedAt !== null && now - openedAt >= CONFIRM_ARM_MS;
+}
+
+type StepFocusState = { busy: boolean; requestId: string };
+
+// Where focus goes as the step changes. When it opens, and for every new
+// confirmation (new recipients), focus lands on the question, never on the
+// irreversible send: the WAI-ARIA practice for an action that cannot be
+// undone, and so a double or held Enter from the button that opened the
+// step cannot send. When the same send settles and the step stays open (a
+// message to read, then send again), focus goes back to its send button,
+// which was disabled while sending.
+export function confirmFocus(previous: StepFocusState | null, next: StepFocusState): "question" | "send" | null {
+  if (previous === null || previous.requestId !== next.requestId) {
+    return "question";
+  }
+  return previous.busy && !next.busy ? "send" : null;
+}
+
 export function SendConfirm({
   pending,
   busy,
@@ -39,21 +67,27 @@ export function SendConfirm({
   onCancel: () => void;
 }) {
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const questionRef = useRef<HTMLParagraphElement>(null);
   const questionId = useId();
-  const wasBusy = useRef(busy);
+  const focusState = useRef<StepFocusState | null>(null);
+  const openedAt = useRef<number | null>(null);
   const summary = recipientSummary(pending.recipients);
 
+  // Every confirmation (the first, or new recipients) arms the send anew.
   useEffect(() => {
-    confirmRef.current?.focus();
-  }, []);
-  // The buttons are disabled while sending, which drops focus; when the
-  // step stays open (a message to read), take it back.
+    openedAt.current = Date.now();
+  }, [pending.requestId]);
+
   useEffect(() => {
-    if (wasBusy.current && !busy) {
+    const next = { busy, requestId: pending.requestId };
+    const target = confirmFocus(focusState.current, next);
+    focusState.current = next;
+    if (target === "question") {
+      questionRef.current?.focus();
+    } else if (target === "send") {
       confirmRef.current?.focus();
     }
-    wasBusy.current = busy;
-  }, [busy]);
+  }, [busy, pending.requestId]);
 
   return (
     <div
@@ -67,7 +101,7 @@ export function SendConfirm({
         }
       }}
     >
-      <p id={questionId} className="text-sm font-semibold text-ink">
+      <p ref={questionRef} id={questionId} tabIndex={-1} className="text-sm font-semibold text-ink outline-none">
         {pending.resend ? `Send ${pending.label} again to ${pending.vendorName}?` : `Send ${pending.label} to ${pending.vendorName}?`}
       </p>
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm">
@@ -85,7 +119,11 @@ export function SendConfirm({
         <button
           ref={confirmRef}
           type="button"
-          onClick={onConfirm}
+          onClick={() => {
+            if (confirmArmed(openedAt.current, Date.now())) {
+              onConfirm();
+            }
+          }}
           disabled={busy}
           aria-describedby={questionId}
           className={ui.buttonPrimary}

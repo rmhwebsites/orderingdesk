@@ -12,7 +12,7 @@ import {
 import type { NotificationPrefsView } from "@/server/notification-prefs";
 import { IphoneInstallSteps } from "@/components/shell/app-install";
 import { ui } from "@/components/ui";
-import { InlineMessage, Panel, requestJson, SaveStatus, SettingsSection, Switch, ToneChip } from "./kit";
+import { focusSoon, InlineMessage, Panel, requestJson, SaveStatus, SettingsSection, Switch, ToneChip } from "./kit";
 
 // Settings > Your notifications, for every member: push on this device
 // (the browser's own subscription, kept per person on the server), and the
@@ -41,6 +41,8 @@ function readDeviceState(): Promise<DeviceState> {
   );
 }
 
+const DEVICE_TOGGLE_ID = "alerts-device-push";
+
 function DevicePanel() {
   const [state, setState] = useState<DeviceState>({ kind: "checking" });
   const [busy, setBusy] = useState(false);
@@ -59,12 +61,17 @@ function DevicePanel() {
     };
   }, []);
 
+  // The button is disabled while it works (and swapped for the other one
+  // after), which drops focus to the page: hand it to the button shown now.
+  const refocus = () => focusSoon(() => document.getElementById(DEVICE_TOGGLE_ID));
+
   async function enable() {
     setBusy(true);
     setError(null);
     setDone(null);
     const result = await enableDevicePush();
     setBusy(false);
+    refocus();
     if (result.ok) {
       setState({ kind: "on" });
       setDone("Push is on for this device.");
@@ -82,6 +89,7 @@ function DevicePanel() {
     setDone(null);
     const ok = await disableDevicePush();
     setBusy(false);
+    refocus();
     if (ok) {
       setState({ kind: "off" });
       setDone("Push is off for this device.");
@@ -137,7 +145,7 @@ function DevicePanel() {
             Get new orders and sent purchase orders as notifications on this device, even when Ordering Desk is closed.
           </p>
           <div>
-            <button type="button" onClick={enable} disabled={busy} className={ui.buttonPrimary}>
+            <button id={DEVICE_TOGGLE_ID} type="button" onClick={enable} disabled={busy} className={ui.buttonPrimary}>
               <BellRingingIcon size={16} aria-hidden />
               {busy ? "Turning on push" : "Enable push on this device"}
             </button>
@@ -151,7 +159,7 @@ function DevicePanel() {
             This device gets push notifications for the choices below, in every workspace you belong to.
           </p>
           <div>
-            <button type="button" onClick={disable} disabled={busy} className={ui.buttonSecondary}>
+            <button id={DEVICE_TOGGLE_ID} type="button" onClick={disable} disabled={busy} className={ui.buttonSecondary}>
               {busy ? "Turning off push" : "Turn off on this device"}
             </button>
           </div>
@@ -191,8 +199,16 @@ function ChoicesPanel({ workspaceId, initial }: { workspaceId: string; initial: 
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const confirmed = useRef(initial);
+  const inFlight = useRef(false);
 
+  // One change at a time. The switches stay focusable while it saves
+  // (busy, not disabled), so keyboard and screen reader users keep their
+  // place.
   async function change(field: keyof NotificationPrefsView, value: boolean) {
+    if (inFlight.current) {
+      return;
+    }
+    inFlight.current = true;
     setPrefs((current) => ({ ...current, [field]: value }));
     setSaving(field);
     setError(null);
@@ -201,6 +217,7 @@ function ChoicesPanel({ workspaceId, initial }: { workspaceId: string; initial: 
       `/api/workspaces/${encodeURIComponent(workspaceId)}/notification-prefs`,
       { method: "PUT", json: { [field]: value } },
     );
+    inFlight.current = false;
     setSaving(null);
     if (!result.ok) {
       setPrefs(confirmed.current);
@@ -221,7 +238,7 @@ function ChoicesPanel({ workspaceId, initial }: { workspaceId: string; initial: 
             <Switch
               id={choice.id}
               checked={prefs[choice.field]}
-              disabled={saving !== null}
+              busy={saving !== null}
               onChange={(value) => void change(choice.field, value)}
               label={choice.label}
               describedBy={`${choice.id}-help`}

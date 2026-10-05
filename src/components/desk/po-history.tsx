@@ -26,6 +26,10 @@ type ListState = { status: "loading" } | { status: "error" } | { status: "ready"
 
 const small = "h-8 px-3 text-xs";
 
+function rowFocusId(poId: string): string {
+  return `po-${poId}-number`;
+}
+
 function poLabel(po: PoView): string {
   return po.number ? `purchase order ${po.number}` : "this purchase order";
 }
@@ -76,8 +80,14 @@ export function PurchaseOrders({
     void load();
   }, [load, refreshKey]);
 
+  // A send from a row's confirmation step ends with the step closing while
+  // focus is on its (disabled) send button; the row's buttons change with
+  // the PO's new state, so focus goes to the row's PO number, which stays.
+  const focusRow = (poId: string) => focusSoon(() => document.getElementById(rowFocusId(poId)));
+
   const flow = useSendFlow({
     onSent: (po, resend) => {
+      focusRow(po.id);
       toast({
         title: resend ? `Purchase order ${po.number ?? ""} sent again` : `Purchase order ${po.number ?? ""} sent`,
         body: po.vendor ? `To ${po.vendor.name}` : undefined,
@@ -92,6 +102,7 @@ export function PurchaseOrders({
       onChanged?.();
     },
     onSettled: (po, message) => {
+      focusRow(po.id);
       if (message) {
         setNotices((current) => ({ ...current, [po.id]: message }));
       }
@@ -150,7 +161,9 @@ export function PurchaseOrders({
             return (
               <li key={po.id} className="flex flex-col gap-2.5 py-3.5 first:pt-0 last:pb-0">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                  <span className="font-mono text-sm font-semibold tabular-nums text-ink">{po.number ?? "Draft"}</span>
+                  <span id={rowFocusId(po.id)} tabIndex={-1} className="font-mono text-sm font-semibold tabular-nums text-ink outline-none">
+                    {po.number ?? "Draft"}
+                  </span>
                   <ToneChip tone={chip.tone}>{chip.label}</ToneChip>
                   {total ? <span className="ml-auto font-mono text-sm tabular-nums text-ink">{total}</span> : null}
                 </div>

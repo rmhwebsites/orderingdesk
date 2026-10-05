@@ -1,7 +1,52 @@
 import { describe, it, expect } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ConfirmStep, nearestRowOrder, SettingsSection } from "./kit";
+import { isValidElement, type ReactElement, type ReactNode } from "react";
+import { ConfirmStep, nearestRowOrder, SettingsSection, Switch } from "./kit";
+
+// The first element of `type` in a rendered tree (host elements only).
+function findElement(node: ReactNode, type: string): ReactElement<Record<string, unknown>> | null {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = findElement(child, type);
+      if (found) {
+        return found;
+      }
+    }
+    return null;
+  }
+  if (!isValidElement<Record<string, unknown>>(node)) {
+    return null;
+  }
+  return node.type === type ? node : findElement(node.props.children as ReactNode, type);
+}
+
+describe("Switch", () => {
+  // Disabling the focused switch while its change saves would drop
+  // keyboard focus to the page; a busy switch keeps focus and ignores
+  // changes instead.
+  it("stays focusable while busy: aria-disabled, never disabled", () => {
+    const html = renderToStaticMarkup(
+      createElement(Switch, { id: "alerts-push-orders", checked: true, onChange: () => {}, label: "Push", busy: true }),
+    );
+    const input = html.match(/<input[^>]*>/)?.[0] ?? "";
+    expect(input).toContain('aria-disabled="true"');
+    expect(input).not.toMatch(/\sdisabled=""/);
+  });
+
+  it("ignores changes while busy and passes them on otherwise", () => {
+    const changes: boolean[] = [];
+    const flip = (busy: boolean) => {
+      const tree = Switch({ id: "s", checked: false, onChange: (value) => changes.push(value), label: "Push", busy });
+      const input = findElement(tree, "input");
+      (input?.props.onChange as (event: { target: { checked: boolean } }) => void)({ target: { checked: true } });
+    };
+    flip(true);
+    expect(changes).toEqual([]);
+    flip(false);
+    expect(changes).toEqual([true]);
+  });
+});
 
 describe("SettingsSection", () => {
   // The workspace header is two rows (109px) below lg and one row (61px)
