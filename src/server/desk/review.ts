@@ -16,11 +16,17 @@
 //   completion move from Shopify) and nothing is sent; a total that is not
 //   exactly 0, or a draft Shopify is still calculating (asked again up to
 //   REVIEW_READY_TRIES times), is refused, and the mutation is never sent;
-// - the mutation is sent ONCE. "Not finished calculating" waits, checks
-//   again and tries once more. Any other refusal, a timeout or a transport
-//   failure is followed by a read, never a blind retry: COMPLETED counts as
-//   done (another approval or a person in Shopify won the race), still open
-//   reports what happened, and an unanswered read says to check in Shopify;
+// - only an OPEN or INVOICE_SENT draft is completed;
+// - the mutation is sent ONCE. "Not finished calculating" waits, reads the
+//   draft again with every check above (gone, completed, state, a total of
+//   exactly 0, ready) and tries once more: that refusal means the draft
+//   changed after the first read, so its total may have too. Any other
+//   refusal, a timeout or a transport failure is followed by a read, never
+//   a blind retry: COMPLETED counts as done (another approval or a person
+//   in Shopify won the race), still open reports what happened, and an
+//   unanswered read says to check in Shopify. A completion Shopify reports
+//   with a total that is not 0 is still recorded (it cannot be undone) and
+//   logged with its ids;
 // - the commit is one batch: the attach, the status (no from-key compare:
 //   approval is decisive, including from Rejected), its status event and
 //   the draft_completed event, each guarded or deterministic, so two
@@ -89,6 +95,8 @@ export const REVIEW_COPY = {
   draftsOff:
     "Draft orders are not enabled for this store's Shopify app. A platform admin can grant read_draft_orders and write_draft_orders, then refresh the connection.",
   notReady: "Shopify is still calculating this draft. Try again in a few seconds.",
+  unknownState: "Shopify reports this draft in a state Ordering Desk cannot approve. Check the draft in Shopify.",
+  completedElsewhere: "This draft was already completed in Shopify. The card updates on the next sync.",
   notConfirmed: "Shopify did not confirm the approval. Nothing changed. Try again.",
   noAnswer: "Shopify did not answer. Check the draft in Shopify before trying again. The card updates on the next sync.",
   reason: "Give a reason (up to 4000 characters). It is saved as a note.",
@@ -255,6 +263,25 @@ function totalRefusal(draft: DraftForApprove): string | null {
     : "Shopify did not report this draft's total. Ordering Desk only approves drafts that total $0.00, so no payment is recorded by mistake. Complete it in Shopify instead.";
 }
 
+// Shopify's draft states the mutation may be sent for.
+const APPROVABLE_STATES = new Set(["OPEN", "INVOICE_SENT"]);
+
+// Why a draft as just read must not be completed, or null. Every read that
+// precedes a draftOrderComplete goes through this, the read before the
+// "not finished calculating" retry included: that refusal means the draft
+// changed after the first read (a line added or repriced in Shopify admin),
+// so its total may no longer be 0, and a priced draft completed without a
+// payment is marked paid for money nobody took.
+function approvalRefusal(draft: DraftForApprove): string | null {
+  if (draft.status === "COMPLETED") {
+    return REVIEW_COPY.completedElsewhere;
+  }
+  if (!APPROVABLE_STATES.has(draft.status)) {
+    return REVIEW_COPY.unknownState;
+  }
+  return totalRefusal(draft);
+}
+
 // The completed draft as the sync stores it, read in full (the approve
 // pre-check carries only a few fields). Undefined when it cannot be read;
 // the stored draft snapshot then stays until the order is written.
@@ -333,9 +360,9 @@ export async function approveRequest(db: Db, ctx: ReviewContext, deps: ReviewDep
     if (read.draft.status === "COMPLETED") {
       return followShopifyCompletion(db, ctx, card, read.draft, access, clock);
     }
-    const tooMuch = totalRefusal(read.draft);
-    if (tooMuch) {
-      return refused(409, tooMuch);
+    const refusal = approvalRefusal(read.draft);
+    if (refusal) {
+      return refused(409, refusal);
     }
     if (read.draft.ready) {
       break;
@@ -360,6 +387,11 @@ export async function approveRequest(db: Db, ctx: ReviewContext, deps: ReviewDep
     if (done) {
       return done;
     }
+    // The same checks as the first read, before the mutation goes out again.
+    const refusal = approvalRefusal(again.draft);
+    if (refusal) {
+      return refused(409, refusal);
+    }
     if (!again.draft.ready) {
       return refused(409, REVIEW_COPY.notReady);
     }
@@ -369,6 +401,15 @@ export async function approveRequest(db: Db, ctx: ReviewContext, deps: ReviewDep
   if (completed.kind === "ok") {
     const [draft] = completed.node ? normalizeDrafts([completed.node]) : [];
     if (draft && draft.status === "completed" && draft.orderId !== null) {
+      if (!(draft.total.trim().length > 0 && Number(draft.total) === 0)) {
+        // Cannot happen after the checks above unless the draft changed
+        // between the last read and the mutation. Shopify's completion
+        // cannot be undone; ids only, so someone looks at the order at once.
+        console.warn(
+          "[review] " +
+            JSON.stringify({ workspaceId: ctx.workspaceId, orderRowId: card.id, shopifyOrderId: draft.orderId, completedTotal: "not zero" }),
+        );
+      }
       return commitApproval(db, ctx, card, approved, { orderId: draft.orderId, orderName: draft.orderName, completedDraft: draft }, clock);
     }
   }
@@ -547,7 +588,7 @@ async function followShopifyCompletion(
   clock: () => number,
 ): Promise<ApproveResult> {
   if (read.orderId === null) {
-    return refused(409, "This draft was already completed in Shopify. The card updates on the next sync.");
+    return refused(409, REVIEW_COPY.completedElsewhere);
   }
   const gid = draftGid(card.shopifyDraftId as string);
   const completedDraft = await completedSnapshot(access, gid, read.orderId);
@@ -561,7 +602,7 @@ async function followShopifyCompletion(
     source: "shopify",
   });
   if (attached.kind !== "attached" && attached.kind !== "already") {
-    return refused(409, "This draft was already completed in Shopify. The card updates on the next sync.");
+    return refused(409, REVIEW_COPY.completedElsewhere);
   }
   let statusChanges: StatusChange[] = [];
   if (attached.kind === "attached") {

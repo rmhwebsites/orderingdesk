@@ -430,6 +430,111 @@ describe("approveRequest", () => {
     expect(d.sleep).toHaveBeenCalledWith(REVIEW_RETRY_MS);
   });
 
+  it("never sends the retry when the draft gained a price while Shopify was calculating it", async () => {
+    // Someone in Shopify admin adds or reprices a line while the manager
+    // presses Approve: the first read is $0 and ready, Shopify refuses the
+    // first completion mid-calculation, and the read before the retry is
+    // ready at 48.00. Completing it would record a $48 payment that never
+    // happened.
+    const { db } = await setup();
+    const shop = fakeShop(
+      {},
+      {
+        ApproveDraft: () => {
+          shop.state.draft!.total = "48.00";
+          return json({
+            data: { draftOrderComplete: { draftOrder: null, userErrors: [{ field: null, message: "Draft order is not finished calculating" }] } },
+          });
+        },
+      },
+    );
+    expect(await approveRequest(db, ctx(), deps(shop))).toEqual({
+      kind: "refused",
+      status: 409,
+      error:
+        "This draft totals $48.00. Ordering Desk only approves drafts that total $0.00, so no payment is recorded by mistake. Complete it in Shopify instead.",
+    });
+    expect(shop.ops()).toEqual(["DraftBeforeApprove", "ApproveDraft", "DraftBeforeApprove"]);
+    expect(shop.ops().filter((op) => op === "ApproveDraft")).toHaveLength(1);
+    const card = await row(db);
+    expect(card.shopifyOrderId).toBeNull();
+    expect(card.statusKey).toBe("new");
+    expect(await eventsOf(db)).toHaveLength(0);
+  });
+
+  it("never sends the retry when the draft's total is missing or its state is not open on the second read", async () => {
+    for (const change of [
+      (draft: DraftState) => {
+        draft.total = null;
+      },
+      (draft: DraftState) => {
+        (draft as { status: string }).status = "SOMETHING_NEW";
+      },
+    ]) {
+      const { db } = await setup();
+      const shop = fakeShop(
+        {},
+        {
+          ApproveDraft: () => {
+            change(shop.state.draft!);
+            return json({
+              data: { draftOrderComplete: { draftOrder: null, userErrors: [{ field: null, message: "Draft order is not finished calculating" }] } },
+            });
+          },
+        },
+      );
+      const result = await approveRequest(db, ctx(), deps(shop));
+      expect(result).toMatchObject({ kind: "refused", status: 409 });
+      expect(shop.ops().filter((op) => op === "ApproveDraft")).toHaveLength(1);
+      expect((await row(db)).shopifyOrderId).toBeNull();
+    }
+  });
+
+  it("logs the order's ids when Shopify reports a completed total that is not zero", async () => {
+    // Only possible if the draft changed between the last read and the
+    // mutation; the completion cannot be undone, so it is recorded and
+    // flagged rather than hidden.
+    const { db } = await setup();
+    const shop = fakeShop(
+      {},
+      {
+        ApproveDraft: () => {
+          const draft = shop.state.draft!;
+          draft.status = "COMPLETED";
+          draft.order = { id: "9001", name: "#1234" };
+          draft.total = "48.00";
+          return json({ data: { draftOrderComplete: { draftOrder: draftNode(draft), userErrors: [] } } });
+        },
+      },
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      expect((await approveRequest(db, ctx(), deps(shop))).kind).toBe("approved");
+      const logged = warn.mock.calls.map((call) => String(call[0]));
+      expect(logged).toEqual([
+        "[review] " + JSON.stringify({ workspaceId: WS, orderRowId: "d1", shopifyOrderId: "9001", completedTotal: "not zero" }),
+      ]);
+      expect(logged.join(" ")).not.toContain("jordan@example.com");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("never completes a draft whose state is not open or invoice sent on the first read", async () => {
+    const { db } = await setup();
+    const shop = fakeShop({ status: "SOMETHING_NEW" as DraftState["status"] });
+    expect(await approveRequest(db, ctx(), deps(shop))).toEqual({
+      kind: "refused",
+      status: 409,
+      error: "Shopify reports this draft in a state Ordering Desk cannot approve. Check the draft in Shopify.",
+    });
+    expect(shop.ops()).toEqual(["DraftBeforeApprove"]);
+
+    const sent = await setup();
+    const invoiced = fakeShop({ status: "INVOICE_SENT" });
+    expect((await approveRequest(sent.db, ctx(), deps(invoiced))).kind).toBe("approved");
+  });
+
   it("reads the draft again after a refusal: completed counts as done, open shows Shopify's words", async () => {
     const won = await setup();
     const raced = fakeShop(
