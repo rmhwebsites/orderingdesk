@@ -1332,3 +1332,84 @@ an address on a domain you have onboarded.
 - Known limits: the kit's ConfirmStep (remove member and similar, not
   irreversible sends) still focuses its confirm button on open; the inline
   Add vendor form in the modal still drops focus when an add fails.
+
+
+## STATE UPDATE, 2026-10-05 PO content binding, push hosts, labels, focus (supersedes above)
+
+- Branch build/m1-core, on top of f522cba: e5c459c (push endpoint
+  allowlist), 84be0e6 (PO send bound to the reviewed content), af08c91
+  (resend labels), 7459892 (PO modal footer focus), 7a8a9ca (blocked push
+  focus), plus this docs commit. Not pushed, not deployed. No migration,
+  no dependency, no secret or wrangler change.
+- PO send covers what was reviewed, not only who it goes to
+  (src/server/po/send.ts, src/server/po/service.ts):
+  - Every PoView carries contentVersion: "<updated_at>.<sha256>" where the
+    hash covers the vendor (id, name, email), the recipients, the lines,
+    the ship-to, the notes and the currency (poContentVersion). Any save
+    moves updated_at; the hash also catches a save in the same millisecond
+    and changes made outside the PO (vendor renamed or readdressed,
+    workspace notification list edited).
+  - POST /api/pos/[poId]/send now needs contentVersion as well as confirm
+    and recipients. Missing: 400. Recipients changed: 409 (as before).
+    Content changed: 409. All three answer {error, recipients,
+    contentVersion, po}, where po is the PO as it would go out now.
+  - The send reads the PO again under its lease and renders the PDF and
+    email from that read. A save that landed after the check and before
+    the claim (or a vendor edited meanwhile) hands the claim back exactly
+    as it was and answers 409 with the fresh PO; nothing is sent and no
+    number is minted. While the lease is held a PATCH is refused (409), so
+    nothing can change what goes out mid-send.
+  - The confirmation step (po-send-confirm.tsx) now shows what goes out:
+    To and copies, total and line count, ship-to, notes and every line
+    (description, SKU, quantity x unit cost, line total), and says it is
+    exactly what goes out. A step with an unpriced line cannot send. On a
+    409 the step re-renders with the fresh content under a new request id,
+    focus returns to its question and the send re-arms; in the review
+    modal the form behind it is replaced with the fresh PO too, and the
+    drawer's history reloads.
+  - DEPLOY NOTE: a page loaded before this deploy sends no contentVersion,
+    so its step keeps asking again (400) and never sends. Managers reload
+    the page after the deploy; nothing is sent wrongly either way.
+- Push endpoints (src/server/push.ts pushServiceEndpoint): only
+  fcm.googleapis.com under /fcm/send/ or /wp/ (Chrome and Chromium, Edge on
+  Android), updates.push.services.mozilla.com under /wpush/ (Firefox),
+  web.push.apple.com with a token path (Safari, iPhone, iPad) and a
+  one-label <region>.notify.windows.com under /w/ with a token query
+  parameter (Edge on desktop: wns2-par02p, sg2p, db5p and similar). https
+  only, no port (":443" written out is refused too), no credentials, no
+  white space. storage.googleapis.com, www.googleapis.com,
+  android.googleapis.com, bugzilla.mozilla.com, api.push.apple.com and
+  deeper notify.windows.com names are refused.
+- Labels: the drawer's button that opens a resend reads "Review and send
+  again"; the step's final button reads "Send again to <vendor>" (first
+  send: "Send to vendor"). The row's buttons are PoRowActions in
+  po-history.tsx.
+- Focus: after a save or send that leaves the PO modal open, focus goes to
+  the pressed button only when enabled, else the first enabled footer
+  control, else the footer status message (now tabIndex -1), else the
+  modal heading (tabIndex -1). Cancel and Keep editing follow the same
+  rule. Turning push on that ends blocked focuses the blocked-state
+  message (tabIndex -1) instead of dropping focus to the page.
+- Known limits:
+  - Not checked in a browser this round (unit tests and `npm run build`
+    only). Worth a look in local dev: the step's line list in the modal
+    footer at 667x375 and 375x812, and a 409 refresh (save the PO from a
+    second tab while the step is open in the first).
+  - Saving a draft is still last write wins: a manager whose modal opened
+    before another manager's save overwrites that save when they save.
+    The send never goes out with content its sender did not see, but the
+    other manager's edit is lost silently.
+  - A save by someone else that changes nothing still moves updated_at,
+    so the open step asks again with the same content.
+  - Apple documents allowing any *.push.apple.com host; only
+    web.push.apple.com is accepted (the only host Safari hands out today).
+    If Apple adds another, Safari users get "This browser's push service
+    is not supported" until it is added to PUSH_SERVICES.
+  - Edge endpoints must be under /w/ with a token parameter, as every Edge
+    endpoint seen is; a different WNS path would be refused the same way.
+  - A resend reuses the first send's stored PDF, so a vendor renamed
+    since then shows the new name in the step and the email but the old
+    one in the PDF.
+  - enableDevicePush maps a dismissed permission prompt ("default") to
+    blocked, so the blocked message shows until the page is reloaded even
+    though the browser would ask again.
