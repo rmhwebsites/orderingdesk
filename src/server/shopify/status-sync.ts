@@ -44,6 +44,22 @@
 //       REQUEST_DECLINED).
 // - Each move is a status event with source shopify and no actor.
 //
+// Draft cards (draft orders spec section 10.1; the card's kind is the kind
+// of its snapshot, see snapshotKind in normalize.ts):
+// - Completion: the stored snapshot is an open draft and the fresh one is
+//   the completed draft or the order it became. The card moves to the
+//   status linked to draft_completed (or, when the order is already
+//   fulfilled or delivered, that state's status) FROM ANY STATUS, including
+//   ones that sort later such as Issue or Rejected (decision D6: the
+//   completion is a fact that supersedes what the team had while it was a
+//   request). Tag edits in the same change are ignored. Draft tags become
+//   the order's tags on completion; the next change compares the completed
+//   snapshot with the order, so an inherited tag is never an "added" one.
+// - Tag edits follow the kind: a draft never moves to a status linked to
+//   fulfilled, delivered or draft_completed (Approve does that), and does
+//   move to the draft_rejected status ("Marked rejected in Shopify"); an
+//   order never moves to the draft_rejected status.
+//
 // Echo safety. The app's own writes come back as webhooks:
 // - its tag names the order's current status, and its fulfillment's linked
 //   status is the current one, so applying them changes nothing;
@@ -64,6 +80,7 @@ import { events, orders, statuses, storeConnections, type ShopifyLinkValue } fro
 import type { LiveOrderStatus } from "../../lib/live-events";
 import { STATUS_TAG_PREFIX } from "../../lib/status-label";
 import { eventView, type EventView } from "../desk/shapes";
+import { snapshotKind } from "./normalize";
 import {
   addOrderTags,
   createFulfillment,
@@ -92,8 +109,11 @@ export type StatusRow = {
 };
 
 export type ShopifyState = "fulfilled" | "delivered" | null;
-export type MoveReason = "tag" | "fulfilled" | "delivered";
+export type MoveReason = "tag" | "fulfilled" | "delivered" | "completed";
 export type StatusChange = { event: EventView; order: LiveOrderStatus };
+// A move decided from Shopify. completedAs: set when the move follows a
+// draft's completion, the name of the order it became ("" when unknown).
+export type ShopifyMove = { to: StatusRow; reason: MoveReason; completedAs?: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -161,11 +181,58 @@ function statusForState(state: ShopifyState, rows: readonly StatusRow[]): Status
   return state === "fulfilled" ? linkedTo("fulfilled", rows) : undefined;
 }
 
+// Whether a card of this kind may sit in this status by a tag (or start in
+// it): a draft never in a status linked to fulfilled, delivered or
+// draft_completed (Approve and completion put it there); an order never in
+// the draft_rejected status.
+function allowedFor(kind: "draft" | "order", row: StatusRow): boolean {
+  if (kind === "draft") {
+    return row.shopifyLink === null || row.shopifyLink === "draft_rejected";
+  }
+  return row.shopifyLink !== "draft_rejected";
+}
+
+// An open draft: a draft snapshot that is not completed.
+function draftOpen(snapshot: unknown): boolean {
+  return snapshotKind(snapshot) === "draft" && isRecord(snapshot) && snapshot.status !== "completed";
+}
+
+// The change is the draft's completion: an open draft before, the completed
+// draft or the order it became after.
+export function completedNow(before: unknown, after: unknown): boolean {
+  return (
+    draftOpen(before) &&
+    (snapshotKind(after) === "order" || (isRecord(after) && after.status === "completed"))
+  );
+}
+
+// The name of the order a completed draft became: the order snapshot's own
+// name, else the completed draft's orderName, else "".
+function completedName(after: unknown): string {
+  if (!isRecord(after)) {
+    return "";
+  }
+  const name = snapshotKind(after) === "order" ? after.name : after.orderName;
+  return typeof name === "string" ? name : "";
+}
+
 // Where an order the app has never seen starts: the status its one status
 // tag names, else the status linked to its Shopify state, else the first
-// status. A new order gets no move event and no push (nothing changed in
-// the app); its order_new event is the record.
+// status. A draft starts in the one status its tag names when a draft may
+// hold it, else in the first status with no link, else the first status. A
+// new card gets no move event and no push (nothing changed in the app); its
+// order_new event is the record.
 export function initialStatusFor(snapshot: unknown, rows: readonly StatusRow[], defaultKey: string): string {
+  if (snapshotKind(snapshot) === "draft") {
+    const named = statusesNamed(
+      tagsOf(snapshot),
+      rows.filter((row) => allowedFor("draft", row)),
+    );
+    if (named.size === 1) {
+      return [...named][0];
+    }
+    return [...rows].sort((a, b) => a.sort - b.sort).find((row) => row.shopifyLink === null)?.key ?? defaultKey;
+  }
   const named = statusesNamed(tagsOf(snapshot), rows);
   if (named.size === 1) {
     return [...named][0];
@@ -180,14 +247,27 @@ export function decideShopifyMove(input: {
   statuses: readonly StatusRow[];
   // Statuses this order was moved to within ECHO_WINDOW_MS.
   recentlyHeld: ReadonlySet<string>;
-}): { to: StatusRow; reason: MoveReason } | null {
+}): ShopifyMove | null {
   const byKey = new Map(input.statuses.map((row) => [row.key, row]));
+
+  // A draft's completion, from any status (see the header). Nothing else in
+  // the same change counts.
+  if (completedNow(input.before, input.after)) {
+    const state = snapshotKind(input.after) === "order" ? shopifyStateOf(input.after) : null;
+    const byState = statusForState(state, input.statuses);
+    const to =
+      byState ?? [...input.statuses].sort((a, b) => a.sort - b.sort).find((row) => row.shopifyLink === "draft_completed");
+    if (!to || to.key === input.currentKey) {
+      return null;
+    }
+    return { to, reason: byState && state ? state : "completed", completedAs: completedName(input.after) };
+  }
 
   const namedBefore = statusesNamed(tagsOf(input.before), input.statuses);
   const added = [...statusesNamed(tagsOf(input.after), input.statuses)].filter((key) => !namedBefore.has(key));
   if (added.length === 1 && added[0] !== input.currentKey && !input.recentlyHeld.has(added[0])) {
     const to = byKey.get(added[0]);
-    if (to) {
+    if (to && allowedFor(snapshotKind(input.after), to)) {
       return { to, reason: "tag" };
     }
   }
@@ -208,23 +288,35 @@ export function decideShopifyMove(input: {
 }
 
 // A cheap first look, with no database read: whether this snapshot change
-// could move a status at all (a status tag changed, or Shopify's state rose).
+// could move a status at all (a status tag changed, Shopify's state rose,
+// or a draft was completed).
 function mightMove(before: unknown, after: unknown): boolean {
   const statusTags = (snapshot: unknown) => new Set(tagsOf(snapshot).filter(isStatusTag).map(tagKey));
   const was = statusTags(before);
   const now = statusTags(after);
   const tagsChanged = was.size !== now.size || [...now].some((tag) => !was.has(tag));
-  return tagsChanged || rankOf(shopifyStateOf(after)) > rankOf(shopifyStateOf(before));
+  return (
+    tagsChanged || rankOf(shopifyStateOf(after)) > rankOf(shopifyStateOf(before)) || completedNow(before, after)
+  );
 }
 
-function moveText(label: string, reason: MoveReason): string {
+function moveText(to: StatusRow, reason: MoveReason, completedAs: string | undefined): string {
+  if (completedAs !== undefined) {
+    return completedAs.length > 0
+      ? `Status set to ${to.label}: the draft was completed in Shopify as order ${completedAs}`
+      : `Status set to ${to.label}: the draft was completed in Shopify`;
+  }
   switch (reason) {
     case "tag":
-      return `Status set to ${label} from the Ordering Desk tag in Shopify`;
+      return to.shopifyLink === "draft_rejected"
+        ? "Marked rejected in Shopify"
+        : `Status set to ${to.label} from the Ordering Desk tag in Shopify`;
     case "fulfilled":
-      return `Status set to ${label}: Shopify reports the order fulfilled`;
+      return `Status set to ${to.label}: Shopify reports the order fulfilled`;
     case "delivered":
-      return `Status set to ${label}: Shopify reports the order delivered`;
+      return `Status set to ${to.label}: Shopify reports the order delivered`;
+    case "completed":
+      return `Status set to ${to.label}: the draft was completed in Shopify`;
   }
 }
 
@@ -233,6 +325,7 @@ function moveText(label: string, reason: MoveReason): string {
 // changed the status since the decision, nothing is written and the result
 // is null. The event is an insert-select that only yields its row when the
 // order now carries exactly this move, so the two land together.
+// completedAs: the move follows a draft's completion (see ShopifyMove).
 export async function applyShopifyMove(
   db: Db,
   workspaceId: string,
@@ -241,15 +334,19 @@ export async function applyShopifyMove(
   to: StatusRow,
   reason: MoveReason,
   now: number,
+  completedAs?: string,
 ): Promise<StatusChange | null> {
   const event = {
     id: crypto.randomUUID(),
     workspaceId,
     orderId,
     type: "status" as const,
-    text: moveText(to.label, reason),
+    text: moveText(to, reason, completedAs),
     actorId: null,
-    meta: { from: fromKey, to: to.key, reason },
+    meta:
+      completedAs !== undefined && reason !== "completed"
+        ? { from: fromKey, to: to.key, reason, completed: true }
+        : { from: fromKey, to: to.key, reason },
     createdAt: now,
     source: "shopify" as const,
   };
@@ -356,7 +453,16 @@ export async function evaluateShopifyTransitions(
     if (!decision) {
       continue;
     }
-    const change = await applyShopifyMove(db, workspaceId, transition.orderId, currentKey, decision.to, decision.reason, now);
+    const change = await applyShopifyMove(
+      db,
+      workspaceId,
+      transition.orderId,
+      currentKey,
+      decision.to,
+      decision.reason,
+      now,
+      decision.completedAs,
+    );
     if (change) {
       changes.push(change);
       current.set(transition.orderId, decision.to.key);

@@ -718,7 +718,17 @@ describe("runSync with draft orders", () => {
     expect(after).toMatchObject({ id: card.id, shopifyOrderId: "9001", name: "#1031" });
     expect((after.shopify as { kind: string }).kind).toBe("order");
     expect((after.draftSnapshot as NormalizedDraft).status).toBe("completed");
-    expect((await eventsOf(db, card.id)).map((event) => event.type).sort()).toEqual(["draft_completed", "order_new"]);
+    // The completion moves the card to the status linked to Draft approved,
+    // once (the order written onto it afterwards moves nothing).
+    expect(after.statusKey).toBe("approved");
+    expect((result.statusChanges ?? []).map((change) => change.event.text)).toEqual([
+      "Status set to Approved: the draft was completed in Shopify as order #1031",
+    ]);
+    expect((await eventsOf(db, card.id)).map((event) => event.type).sort()).toEqual([
+      "draft_completed",
+      "order_new",
+      "status",
+    ]);
   });
 
   it("keeps syncing orders when the drafts feed fails, leaving the draft cursor alone", async () => {
@@ -814,6 +824,10 @@ describe("runSync with draft orders", () => {
     expect((await eventsOf(db)).filter((event) => event.type === "order_new").map((event) => event.id)).toEqual([
       `evt-draft-new-${WS}-12`,
     ]);
+    // The completion move fires once, from the stored draft to the order.
+    expect(after.statusKey).toBe("approved");
+    expect((await eventsOf(db, card.id)).filter((event) => event.type === "status")).toHaveLength(1);
+    expect(result.statusChanges ?? []).toHaveLength(1);
   });
 
   it("writes no order when the draft lookup fails, keeping the orders cursor and the draft progress", async () => {
@@ -847,6 +861,9 @@ describe("runSync with draft orders", () => {
     expect(result.mergedOrders).toEqual([{ fromId: orphanId, toId: card.id }]);
     expect((await rows(db)).map((row) => row.id)).toEqual([card.id]);
     expect(result.updatedOrderIds).toContain(card.id);
+    // The card kept its status through the merge, then the completion moved it.
+    expect((await rowByDraft(db, "12"))!.statusKey).toBe("approved");
+    expect((await eventsOf(db, card.id)).filter((event) => event.type === "status")).toHaveLength(1);
   });
 
   it("checks every open draft card hourly: deleted ones are marked, missed completions attached", async () => {
@@ -870,6 +887,8 @@ describe("runSync with draft orders", () => {
     expect((await rowByDraft(db, "12"))!.draftDeletedAt).toBe(NOW);
     expect((await rowByDraft(db, "13"))!.shopifyOrderId).toBe("9013");
     expect(((await rowByDraft(db, "13"))!.shopify as { kind: string }).kind).toBe("order");
+    expect((await rowByDraft(db, "13"))!.statusKey).toBe("approved");
+    expect((await rowByDraft(db, "12"))!.statusKey).toBe("new");
     expect((await rowByDraft(db, "14"))!.shopifyOrderId).toBeNull();
     expect([...result.updatedOrderIds].sort()).toEqual([gone.id, done.id].sort());
     expect((await connectionOf(db)).draftCheckedAt).toBe(NOW);
@@ -932,6 +951,9 @@ describe("webhook paths", () => {
       NOW + 3,
     );
     expect(attached).toMatchObject({ kind: "attached", orderGid: "gid://shopify/Order/9001" });
+    expect(attached.kind === "attached" ? attached.statusChanges.map((change) => change.order.statusKey) : []).toEqual([
+      "approved",
+    ]);
     const silent = await upsertFetchedDraft(db, WS, draftOf({ id: "13" }), NOW, { silent: true });
     expect(silent.kind).toBe("added");
     expect((await rowByDraft(db, "13"))!.notifiedAt).toBe(NOW);
@@ -953,6 +975,9 @@ describe("webhook paths", () => {
 
     const linked = await upsertFetchedOrder(db, WS, orderOf({ id: "9001", name: "#1031" }), NOW, access);
     expect(linked).toMatchObject({ kind: "attached", orderId: card.id });
+    expect(linked.kind === "attached" ? linked.statusChanges.map((change) => change.order.statusKey) : []).toEqual([
+      "approved",
+    ]);
     expect(await rows(db)).toHaveLength(1);
     expect((await rowByDraft(db, "12"))!.shopifyOrderId).toBe("9001");
 

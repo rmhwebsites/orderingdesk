@@ -307,6 +307,185 @@ describe("evaluateShopifyTransitions", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Draft orders (draft orders spec section 10.1 and section 18 items 5 and 6)
+
+const DRAFT_STATUSES: StatusRow[] = [
+  { key: "new", label: "New", sort: 0, shopifyLink: null },
+  { key: "processing", label: "Processing", sort: 1, shopifyLink: null },
+  { key: "approved", label: "Approved", sort: 2, shopifyLink: "draft_completed" },
+  { key: "shipped", label: "Shipped", sort: 3, shopifyLink: "fulfilled" },
+  { key: "delivered", label: "Delivered", sort: 4, shopifyLink: "delivered" },
+  { key: "issue", label: "Issue", sort: 5, shopifyLink: null },
+  { key: "rejected", label: "Rejected", sort: 6, shopifyLink: "draft_rejected" },
+];
+const byKey = (key: string) => DRAFT_STATUSES.find((status) => status.key === key) as StatusRow;
+
+const openDraft = (tags = "") => ({ kind: "draft", name: "#D12", status: "open", tags, orderId: null, orderName: null });
+const completedDraft = (tags = "") => ({ ...openDraft(tags), status: "completed", orderId: "9001", orderName: "#1234" });
+const draftOrder = (tags = "", fulfillmentStatus = "unfulfilled", isDelivered = false) => ({
+  ...snapshotOf({ name: "#1234", tags, fulfillmentStatus, delivered: isDelivered }),
+  kind: "order",
+});
+
+function decideDraft(before: unknown, after: unknown, currentKey: string, recentlyHeld = none) {
+  return decideShopifyMove({ before, after, currentKey, statuses: DRAFT_STATUSES, recentlyHeld });
+}
+
+describe("decideShopifyMove for draft cards", () => {
+  it("moves a completed draft to the status linked to Draft approved, from any status", () => {
+    const completion = { to: byKey("approved"), reason: "completed", completedAs: "#1234" };
+    expect(decideDraft(openDraft(), completedDraft(), "new")).toEqual(completion);
+    expect(decideDraft(openDraft(), draftOrder(), "processing")).toEqual(completion);
+    // Rejected and Issue sort after Approved, and still move (decision D6).
+    expect(decideDraft(openDraft(), completedDraft(), "rejected")).toEqual(completion);
+    expect(decideDraft(openDraft(), draftOrder(), "issue")).toEqual(completion);
+  });
+
+  it("does not move a card already in the approved status", () => {
+    expect(decideDraft(openDraft(), completedDraft(), "approved")).toBeNull();
+    expect(decideDraft(openDraft(), draftOrder(), "approved")).toBeNull();
+  });
+
+  it("sends a completion whose order is already fulfilled or delivered to that state's status", () => {
+    expect(decideDraft(openDraft(), draftOrder("", "fulfilled"), "new")).toEqual({
+      to: byKey("shipped"),
+      reason: "fulfilled",
+      completedAs: "#1234",
+    });
+    expect(decideDraft(openDraft(), draftOrder("", "fulfilled", true), "rejected")).toEqual({
+      to: byKey("delivered"),
+      reason: "delivered",
+      completedAs: "#1234",
+    });
+  });
+
+  it("ignores a tag edit that arrives with the completion", () => {
+    expect(decideDraft(openDraft("Ordering Desk: New"), completedDraft("Ordering Desk: Issue"), "new")).toEqual({
+      to: byKey("approved"),
+      reason: "completed",
+      completedAs: "#1234",
+    });
+    // Nothing to move: the tag edit is still ignored.
+    expect(decideDraft(openDraft(), completedDraft("Ordering Desk: Issue"), "approved")).toBeNull();
+  });
+
+  it("moves nothing when the order inherits the draft's tags after the completion", () => {
+    // The completion already happened (the card holds a completed draft):
+    // the order's first snapshot carries the same Ordering Desk tag.
+    expect(decideDraft(completedDraft("Ordering Desk: Issue"), draftOrder("Ordering Desk: Issue"), "approved")).toBeNull();
+    expect(decideDraft(completedDraft(), draftOrder(), "new")).toBeNull();
+  });
+
+  it("follows tag edits on a draft only to statuses a draft can hold", () => {
+    expect(decideDraft(openDraft("Ordering Desk: New"), openDraft("Ordering Desk: Processing"), "new")).toEqual({
+      to: byKey("processing"),
+      reason: "tag",
+    });
+    // A request cannot be fulfilled, delivered or approved by a tag.
+    expect(decideDraft(openDraft(), openDraft("Ordering Desk: Shipped"), "new")).toBeNull();
+    expect(decideDraft(openDraft(), openDraft("Ordering Desk: Delivered"), "new")).toBeNull();
+    expect(decideDraft(openDraft(), openDraft("Ordering Desk: Approved"), "new")).toBeNull();
+    // A Rejected tag added in Shopify rejects the request (no reason).
+    expect(decideDraft(openDraft("Ordering Desk: New"), openDraft("Ordering Desk: Rejected"), "new")).toEqual({
+      to: byKey("rejected"),
+      reason: "tag",
+    });
+    // And a tag edit moves a rejected request out again.
+    expect(decideDraft(openDraft("Ordering Desk: Rejected"), openDraft("Ordering Desk: Issue"), "rejected")).toEqual({
+      to: byKey("issue"),
+      reason: "tag",
+    });
+  });
+
+  it("never rejects an order by a tag", () => {
+    expect(decideDraft(draftOrder("Ordering Desk: Approved"), draftOrder("Ordering Desk: Rejected"), "approved")).toBeNull();
+    expect(decideDraft(draftOrder("Ordering Desk: New"), draftOrder("Ordering Desk: Approved"), "new")).toEqual({
+      to: byKey("approved"),
+      reason: "tag",
+    });
+  });
+});
+
+describe("initialStatusFor a draft", () => {
+  it("starts at the one status its tag names when a draft can hold it, else the first unlinked status", () => {
+    expect(initialStatusFor(openDraft(), DRAFT_STATUSES, "new")).toBe("new");
+    expect(initialStatusFor(openDraft("Ordering Desk: Issue"), DRAFT_STATUSES, "new")).toBe("issue");
+    expect(initialStatusFor(openDraft("Ordering Desk: Rejected"), DRAFT_STATUSES, "new")).toBe("rejected");
+    // A tag naming a linked status a draft cannot hold is ignored.
+    expect(initialStatusFor(openDraft("Ordering Desk: Approved"), DRAFT_STATUSES, "new")).toBe("new");
+    expect(initialStatusFor(openDraft("Ordering Desk: Shipped"), DRAFT_STATUSES, "new")).toBe("new");
+    // The first status is linked: the first unlinked one in sort order.
+    const linkedFirst = DRAFT_STATUSES.map((status) =>
+      status.key === "new" ? { ...status, sort: 9, shopifyLink: null } : status,
+    );
+    expect(initialStatusFor(openDraft(), linkedFirst, "approved")).toBe("processing");
+    // Every status linked: the first status.
+    const allLinked: StatusRow[] = [
+      { key: "approved", label: "Approved", sort: 0, shopifyLink: "draft_completed" },
+      { key: "rejected", label: "Rejected", sort: 1, shopifyLink: "draft_rejected" },
+    ];
+    expect(initialStatusFor(openDraft(), allLinked, "approved")).toBe("approved");
+  });
+});
+
+describe("Shopify moves on draft cards", () => {
+  async function setupDrafts() {
+    const { db } = await setup();
+    await db.update(schema.statuses).set({ shopifyLink: "draft_completed" }).where(eq(schema.statuses.key, "approved"));
+    await db.insert(schema.statuses).values([
+      { id: `${WS}_st_issue`, workspaceId: WS, key: "issue", label: "Issue", color: "red", sort: 5 },
+      {
+        id: `${WS}_st_rejected`,
+        workspaceId: WS,
+        key: "rejected",
+        label: "Rejected",
+        color: "pink",
+        sort: 6,
+        shopifyLink: "draft_rejected",
+      },
+    ]);
+    return db;
+  }
+
+  it("words a completion and a rejection by tag for the timeline", async () => {
+    const db = await setupDrafts();
+    await seedOrder(db, WS, { id: "o1", statusKey: "rejected" });
+    await seedOrder(db, WS, { id: "o2", statusKey: "new" });
+    const changes = await evaluateShopifyTransitions(
+      db,
+      WS,
+      [
+        { orderId: "o1", before: openDraft(), after: completedDraft() },
+        { orderId: "o2", before: openDraft("Ordering Desk: New"), after: openDraft("Ordering Desk: Rejected") },
+      ],
+      NOW,
+    );
+    expect(changes.map((change) => [change.order.statusKey, change.event.text, change.event.meta])).toEqual([
+      [
+        "approved",
+        "Status set to Approved: the draft was completed in Shopify as order #1234",
+        { from: "rejected", to: "approved", reason: "completed" },
+      ],
+      ["rejected", "Marked rejected in Shopify", { from: "new", to: "rejected", reason: "tag" }],
+    ]);
+    expect(changes.every((change) => change.event.source === "shopify" && change.event.actorId === null)).toBe(true);
+  });
+
+  it("words a completion whose order is already fulfilled", async () => {
+    const db = await setupDrafts();
+    await seedOrder(db, WS, { id: "o1", statusKey: "new" });
+    const [change] = await evaluateShopifyTransitions(
+      db,
+      WS,
+      [{ orderId: "o1", before: openDraft(), after: draftOrder("", "fulfilled") }],
+      NOW,
+    );
+    expect(change.event.text).toBe("Status set to Shipped: the draft was completed in Shopify as order #1234");
+    expect(change.event.meta).toEqual({ from: "new", to: "shipped", reason: "fulfilled", completed: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // App -> Shopify
 
 type ShopCall = { query: string; variables: Record<string, unknown> };
