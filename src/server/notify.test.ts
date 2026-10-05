@@ -4,7 +4,16 @@ import type { Db } from "@/db";
 import * as schema from "@/db/schema";
 import { normalizeOrders } from "@/server/shopify/normalize";
 import { upsertFetchedOrder } from "@/server/sync/run";
-import { openTestDb, seedMember, seedOrder, seedUser, seedWorkspace, snapshotOf } from "@/server/desk/test-helpers";
+import {
+  draftSnapshotOf,
+  openTestDb,
+  seedDraft,
+  seedMember,
+  seedOrder,
+  seedUser,
+  seedWorkspace,
+  snapshotOf,
+} from "@/server/desk/test-helpers";
 import type { PushNotice, PushTarget } from "./push";
 
 // The fan-out against an in-memory database. The push transport is
@@ -341,6 +350,137 @@ describe("notifyActivity", () => {
       await notifyActivity(db, env, WS, event({ type }), opts);
     }
     expect(pushed).toEqual([]);
+  });
+});
+
+// Draft orders spec section 12: a draft card is a request.
+describe("requests", () => {
+  async function request(id: string, overrides: { createdAt?: number; snapshot?: Record<string, unknown>; notifiedAt?: number } = {}) {
+    await seedDraft(db, WS, {
+      id,
+      draftId: `d-${id}`,
+      name: `#D${id}`,
+      createdAt: overrides.createdAt ?? NOW - 60000,
+      notifiedAt: overrides.notifiedAt ?? null,
+      shopify: draftSnapshotOf({
+        shopifyDraftId: `d-${id}`,
+        name: `#D${id}`,
+        customerName: "Jordan Vale",
+        email: "jordan.vale@example.com",
+        shipping: { name: "Jordan Vale", a1: "1 Depot Way", a2: "", city: "Buford", prov: "GA", zip: "30518", country: "US", company: "", phone: "" },
+        attributes: [
+          { key: "Ship to Branch", value: "Buford HQ" },
+          { key: "For Employee Name", value: "Casey Lin" },
+          { key: "_pplr", value: "{}" },
+        ],
+        ...overrides.snapshot,
+      }),
+    });
+  }
+
+  it("announces a new request by push and email as a request", async () => {
+    await request("12");
+    const result = await notifyNewOrders(db, env, WS, ["12"], opts);
+    expect(result).toMatchObject({ claimed: 1, announced: ["12"] });
+    const phone = pushed.find((entry) => entry.target.id === "s_manager_phone")!.notice;
+    expect(phone).toEqual({
+      title: "New request #D12",
+      body: "Jordan, Buford HQ",
+      url: "https://orders.impactrentals.store/?order=12",
+      tag: "order-12",
+    });
+    expect(pushed.find((entry) => entry.target.id === "s_staff")!.notice.body).toBe("IMPACT Rentals. Jordan, Buford HQ");
+    expect(sent).toHaveLength(4);
+    for (const message of sent) {
+      expect(message.subject).toBe("New Request #D12 from Jordan Vale");
+      expect(message.html).toContain("Casey Lin");
+      expect(message.html).not.toContain("jordan.vale@example.com");
+      expect(message.html).not.toContain("Depot Way");
+      expect(message.html).not.toContain("_pplr");
+    }
+    for (const { notice } of pushed) {
+      expect(JSON.stringify(notice)).not.toContain("jordan.vale@example.com");
+    }
+  });
+
+  it("uses the total when a request names no branch", async () => {
+    await request("12", { snapshot: { attributes: [], location: "" } });
+    await notifyNewOrders(db, env, WS, ["12"], opts);
+    expect(pushed[0].notice.body).toContain("Jordan, $0.00");
+  });
+
+  it("never announces a request inserted silently, or the order a request became", async () => {
+    await request("12", { notifiedAt: NOW - 1000 });
+    expect(await notifyNewOrders(db, env, WS, ["12"], opts)).toMatchObject({ claimed: 0, announced: [] });
+    // Announced as a request, then approved: the card keeps its claim.
+    await request("13");
+    await notifyNewOrders(db, env, WS, ["13"], opts);
+    pushed.length = 0;
+    sent.length = 0;
+    await db
+      .update(schema.orders)
+      .set({ shopifyOrderId: "9001", name: "#1234", shopify: snapshotOf({ name: "#1234" }) })
+      .where(eq(schema.orders.id, "13"));
+    expect(await notifyNewOrders(db, env, WS, ["13"], opts)).toMatchObject({ claimed: 0, announced: [] });
+    expect(pushed).toEqual([]);
+    expect(sent).toEqual([]);
+  });
+
+  it("sums up requests, orders, or both when many land at once", async () => {
+    const cases: Array<[number, number, string]> = [
+      [DIGEST_AFTER + 1, 0, `${DIGEST_AFTER + 1} new requests`],
+      [3, 4, "7 new orders and requests"],
+    ];
+    for (const [requests, orders, title] of cases) {
+      pushed.length = 0;
+      sent.length = 0;
+      const ids: string[] = [];
+      for (let i = 0; i < requests; i++) {
+        const id = `r${title.length}${i}`;
+        await request(id);
+        ids.push(id);
+      }
+      for (let i = 0; i < orders; i++) {
+        const id = `o${title.length}${i}`;
+        await order(id);
+        ids.push(id);
+      }
+      await notifyNewOrders(db, env, WS, ids, opts);
+      expect(pushed[0].notice.title).toBe(title);
+      expect(sent[0].subject).toBe(`${title} in IMPACT Rentals`);
+    }
+  });
+
+  it("titles activity on a request with its draft name and pushes a deletion in Shopify", async () => {
+    await request("12");
+    const base = {
+      id: "e1",
+      orderId: "12",
+      actorId: "u_manager",
+      meta: null,
+      createdAt: NOW,
+      source: "app" as const,
+    };
+    await notifyActivity(db, env, WS, { ...base, type: "status", text: "Rejected the request. Status set to Rejected" }, opts);
+    expect(pushed.map((entry) => entry.notice.title)).toEqual(["Request #D12"]);
+    pushed.length = 0;
+    await notifyActivity(
+      db,
+      env,
+      WS,
+      {
+        ...base,
+        id: "e2",
+        type: "draft_deleted",
+        text: "Draft #D12 was deleted in Shopify. This card and its history are kept.",
+        actorId: null,
+        source: "shopify",
+      },
+      opts,
+    );
+    expect(pushed.map((entry) => [entry.target.id, entry.notice.title, entry.notice.body])).toEqual([
+      ["s_all", "Request #D12", "IMPACT Rentals. Draft #D12 was deleted in Shopify. This card and its history are kept."],
+    ]);
   });
 });
 

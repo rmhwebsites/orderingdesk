@@ -332,6 +332,8 @@ describe("writeDraftSnapshot", () => {
     const quiet = await insertDraft(db, { id: "13", customer: "" }, NOW - HOUR, { silent: true });
     expect(quiet.notifiedAt).toBe(NOW - HOUR);
     expect((await eventsOf(db, quiet.id))[0].text).toBe("New request #D13");
+    // Marked, so the bell leaves it out (src/server/activity.ts).
+    expect((await eventsOf(db, quiet.id))[0].meta).toEqual({ orderName: "#D13", kind: "draft", silent: true });
   });
 
   it("refreshes a changed open draft under the claim rule and leaves an unchanged one alone", async () => {

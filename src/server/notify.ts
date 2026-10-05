@@ -11,10 +11,15 @@
 //   Orders created more than a day ago are claimed silently (a store's
 //   first sync backfills two months). More than DIGEST_AFTER fresh orders
 //   at once become one summary push and email instead of a flood.
+//   A draft card is a request (draft orders spec section 12): "New request
+//   #D12", its branch and request fields. The order made from a request is
+//   the same row, already claimed, so it never announces itself; requests
+//   the first draft sync inserts are claimed at insert (never announced).
 // - notifyPoSent: after a reviewed Send to vendor (src/server/po/send.ts);
 //   same audience, the sender's own devices get no push, and addresses
 //   already on the vendor email get no second email.
-// - notifyActivity: status changes and notes, pushed only to members who
+// - notifyActivity: status changes (Approve and Reject included), notes
+//   and a request's draft deleted in Shopify, pushed only to members who
 //   opted into all activity, never about their own change.
 //
 // Audience: workspace members (platform admins who are not members get
@@ -47,12 +52,16 @@ import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { Db } from "../db";
 import { notificationPrefs, orders, user, workspaceMembers, workspaceSettings } from "../db/schema";
 import { formatMoney } from "../lib/format";
+import { requestFieldsOf } from "../lib/request-fields";
 import type { EventView } from "./desk/shapes";
 import { isRecord } from "./desk/shapes";
 import {
+  arrivalsPhrase,
   newOrderEmail,
   newOrdersDigestEmail,
   poSentEmail,
+  REQUEST_ATTRIBUTES_SHOWN,
+  REQUEST_VALUE_MAX,
   type OrderSummaryForEmail,
   type PoSentNotice,
   type RenderedEmail,
@@ -144,10 +153,14 @@ function withWorkspace(body: string, workspaceName: string, ownHost: boolean): s
 
 type NoticeContext = { workspaceName: string; ownHost: boolean; url: string };
 
+// A request (draft order spec section 12): "New request #D12", the
+// requester's first name and the branch (else the total).
 export function newOrderNotice(order: OrderSummaryForEmail, ctx: NoticeContext): PushNotice {
-  const body = [firstName(order.customerName), formatMoney(order.total, order.currency)].filter((part) => part.length > 0).join(", ");
+  const request = order.kind === "draft";
+  const second = request && order.branch?.trim() ? order.branch.trim().slice(0, NAME_MAX) : formatMoney(order.total, order.currency);
+  const body = [firstName(order.customerName), second].filter((part) => part.length > 0).join(", ");
   return {
-    title: `New order ${order.name}`,
+    title: `${request ? "New request" : "New order"} ${order.name}`,
     body: withWorkspace(body, ctx.workspaceName, ctx.ownHost),
     url: ctx.url,
     tag: `order-${order.id}`,
@@ -158,23 +171,31 @@ export function digestNotice(list: OrderSummaryForEmail[], ctx: NoticeContext): 
   const names = list.slice(0, 3).map((order) => order.name);
   const rest = list.length - names.length;
   return {
-    title: `${list.length} new orders`,
+    title: arrivalsPhrase(list),
     body: withWorkspace(rest > 0 ? `${names.join(", ")} and ${rest} more` : names.join(", "), ctx.workspaceName, ctx.ownHost),
     url: ctx.url,
     tag: "new-orders",
   };
 }
 
-const ACTIVITY_PUSH_TYPES = new Set<EventView["type"]>(["status", "note"]);
+// Status changes (Approve and Reject are status changes too), notes, and a
+// request's draft deleted in Shopify.
+const ACTIVITY_PUSH_TYPES = new Set<EventView["type"]>(["status", "note", "draft_deleted"]);
 
-export function activityNotice(event: EventView, orderName: string, ctx: NoticeContext): PushNotice | null {
+// isRequest: the card is still a draft ("Request #D12").
+export function activityNotice(
+  event: EventView,
+  orderName: string,
+  ctx: NoticeContext,
+  isRequest = false,
+): PushNotice | null {
   if (!ACTIVITY_PUSH_TYPES.has(event.type) || !event.orderId) {
     return null;
   }
   // A note's text may hold anything a person typed: it stays in the app.
   const what = event.type === "note" ? "New note" : event.text.slice(0, 120);
   return {
-    title: `Order ${orderName}`,
+    title: `${isRequest ? "Request" : "Order"} ${orderName}`,
     body: withWorkspace(what, ctx.workspaceName, ctx.ownHost),
     url: ctx.url,
     tag: `order-${event.orderId}-activity`,
@@ -295,10 +316,17 @@ async function emailEach(env: CloudflareEnv, workspace: MailWorkspace, recipient
 
 // ---- New orders ---------------------------------------------------------
 
-function summaryOf(row: { id: string; name: string; shopify: unknown }): OrderSummaryForEmail {
+function summaryOf(row: {
+  id: string;
+  name: string;
+  shopify: unknown;
+  shopifyOrderId: string | null;
+  draftSnapshot: unknown;
+}): OrderSummaryForEmail {
   const snapshot = isRecord(row.shopify) ? row.shopify : {};
   const text = (value: unknown) => (typeof value === "string" ? value : "");
   const items = Array.isArray(snapshot.items) ? snapshot.items.filter(isRecord) : [];
+  const request = requestFieldsOf(row.shopify, row.draftSnapshot);
   return {
     id: row.id,
     name: row.name,
@@ -310,6 +338,14 @@ function summaryOf(row: { id: string; name: string; shopify: unknown }): OrderSu
       qty: typeof item.qty === "number" && Number.isFinite(item.qty) ? item.qty : 1,
       variant: text(item.variant),
     })),
+    kind: row.shopifyOrderId === null ? "draft" : "order",
+    company: request.company,
+    location: request.location,
+    requestFor: request.requestFor,
+    branch: request.branch,
+    attributes: request.attributes
+      .slice(0, REQUEST_ATTRIBUTES_SHOWN)
+      .map((attribute) => ({ key: attribute.key, value: attribute.value.slice(0, REQUEST_VALUE_MAX) })),
   };
 }
 
@@ -318,7 +354,14 @@ function summaryOf(row: { id: string; name: string; shopify: unknown }): OrderSu
 // owns its announcement, so concurrent callers never both get it.
 async function claimNewOrders(db: Db, workspaceId: string, orderIds: string[], now: number) {
   const unique = [...new Set(orderIds)];
-  const claimed: Array<{ id: string; name: string; shopify: unknown; createdAt: number }> = [];
+  const claimed: Array<{
+    id: string;
+    name: string;
+    shopify: unknown;
+    createdAt: number;
+    shopifyOrderId: string | null;
+    draftSnapshot: unknown;
+  }> = [];
   for (let i = 0; i < unique.length; i += ID_CHUNK) {
     const rows = await db
       .update(orders)
@@ -326,7 +369,14 @@ async function claimNewOrders(db: Db, workspaceId: string, orderIds: string[], n
       .where(
         and(eq(orders.workspaceId, workspaceId), inArray(orders.id, unique.slice(i, i + ID_CHUNK)), isNull(orders.notifiedAt)),
       )
-      .returning({ id: orders.id, name: orders.name, shopify: orders.shopify, createdAt: orders.createdAt });
+      .returning({
+        id: orders.id,
+        name: orders.name,
+        shopify: orders.shopify,
+        createdAt: orders.createdAt,
+        shopifyOrderId: orders.shopifyOrderId,
+        draftSnapshot: orders.draftSnapshot,
+      });
     claimed.push(...rows);
   }
   return claimed;
@@ -458,7 +508,7 @@ export async function notifyActivity(
     const [workspace, orderRows] = await Promise.all([
       loadMailWorkspace(db, workspaceId),
       db
-        .select({ name: orders.name })
+        .select({ name: orders.name, shopifyOrderId: orders.shopifyOrderId })
         .from(orders)
         .where(and(eq(orders.id, event.orderId), eq(orders.workspaceId, workspaceId)))
         .limit(1),
@@ -473,11 +523,16 @@ export async function notifyActivity(
       workspace,
       members.map((member) => member.userId),
       (target) =>
-        activityNotice(event, orderRows[0].name, {
-          workspaceName: workspace.name,
-          ownHost: onOwnHost(workspace, target.host),
-          url: pushLink(env, workspace, orderId, target.host),
-        }),
+        activityNotice(
+          event,
+          orderRows[0].name,
+          {
+            workspaceName: workspace.name,
+            ownHost: onOwnHost(workspace, target.host),
+            url: pushLink(env, workspace, orderId, target.host),
+          },
+          orderRows[0].shopifyOrderId === null,
+        ),
       { ...opts, urgency: "normal", ttl: 21600 },
     );
     return { pushed };

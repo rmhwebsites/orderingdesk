@@ -82,6 +82,28 @@ describe("loadActivityFeed unread count", () => {
     expect(feed.unread).toBe(2);
   });
 
+  // Draft orders spec decision D12: requests already waiting when draft
+  // sync turned on are inserted silently, and stay out of the bell too.
+  it("leaves requests inserted silently by the first draft sync out of the feed and the count", async () => {
+    await event({
+      createdAt: 10,
+      type: "order_new",
+      text: "New request #D19 from Pat Rivera",
+      meta: { orderName: "#D19", kind: "draft", silent: true },
+      source: "shopify",
+    });
+    await event({
+      createdAt: 20,
+      type: "order_new",
+      text: "New request #D25 from Jordan Vale",
+      meta: { orderName: "#D25", kind: "draft" },
+      source: "shopify",
+    });
+    const feed = await loadActivityFeed(db, WS, "u_me");
+    expect(feed.items.map((item) => item.text)).toEqual(["New request #D25 from Jordan Vale"]);
+    expect(feed.unread).toBe(1);
+  });
+
   it(`stops counting at ${UNREAD_CAP + 1} so the badge can say ${UNREAD_CAP}+`, async () => {
     for (let i = 0; i < UNREAD_CAP + 20; i++) {
       await event({ createdAt: 1000 + i, actorId: "u_other" });

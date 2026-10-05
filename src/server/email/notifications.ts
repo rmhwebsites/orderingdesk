@@ -23,7 +23,21 @@ export type OrderSummaryForEmail = {
   total: string;
   currency: string;
   items: { title: string; qty: number; variant: string }[];
+  // Draft orders spec section 12: a draft card announces itself as a
+  // request, with its request fields (src/lib/request-fields.ts). Absent
+  // means an order.
+  kind?: "draft" | "order";
+  company?: string;
+  location?: string;
+  requestFor?: string;
+  branch?: string;
+  // Up to REQUEST_ATTRIBUTES_SHOWN public attributes, values clipped.
+  attributes?: { key: string; value: string }[];
 };
+
+// What a request email shows of its cart attributes.
+export const REQUEST_ATTRIBUTES_SHOWN = 6;
+export const REQUEST_VALUE_MAX = 200;
 
 export type PoSentNotice = {
   poId: string;
@@ -73,12 +87,75 @@ function total(order: Pick<OrderSummaryForEmail, "total" | "currency">): string 
   return formatMoney(order.total, order.currency);
 }
 
+const isRequest = (order: OrderSummaryForEmail) => order.kind === "draft";
+
+function clipValue(value: string): string {
+  const flat = value.trim();
+  return flat.length > REQUEST_VALUE_MAX ? `${flat.slice(0, REQUEST_VALUE_MAX - 3).trimEnd()}...` : flat;
+}
+
+// "3 new requests", "2 new orders", or "5 new orders and requests".
+export function arrivalsPhrase(list: OrderSummaryForEmail[]): string {
+  const requests = list.filter(isRequest).length;
+  if (requests === list.length) {
+    return plural(list.length, "new request");
+  }
+  if (requests === 0) {
+    return plural(list.length, "new order");
+  }
+  return `${list.length} new orders and requests`;
+}
+
+// A request (a draft order waiting for review): its fields and items, no
+// requester email or address.
+function newRequestEmail(env: CloudflareEnv, workspace: MailWorkspace, request: OrderSummaryForEmail, url: string): RenderedEmail {
+  const customer = request.customerName.trim();
+  const rows: Array<[string, string]> = [["Request", escapeHtml(request.name)]];
+  if (customer) {
+    rows.push(["Requested by", escapeHtml(customer)]);
+  }
+  if (request.company?.trim()) {
+    rows.push(["Company", escapeHtml(request.company.trim())]);
+  }
+  if (request.location?.trim()) {
+    rows.push(["Location", escapeHtml(request.location.trim())]);
+  }
+  for (const attribute of (request.attributes ?? []).slice(0, REQUEST_ATTRIBUTES_SHOWN)) {
+    rows.push([attribute.key.trim(), escapeHtml(clipValue(attribute.value))]);
+  }
+  const amount = Number(request.total) !== 0 ? total(request) : "";
+  if (amount) {
+    rows.push(["Total", escapeHtml(amount)]);
+  }
+  rows.push(["Items", itemsHtml(request.items)]);
+  const { html, text } = renderEmail({
+    workspace,
+    hubOrigin: appOrigin(env),
+    preheader: `${customer || "Someone"} sent request ${request.name}.`,
+    heading: `New request ${request.name}`,
+    bodyHtml:
+      emailParagraph(
+        `A new request came in for ${escapeHtml(workspace.name)}. It is waiting for a manager to approve or reject it.`,
+      ) + summaryTable(rows),
+    cta: { label: "Open the request", url },
+    footerNote: `Managers choose who gets these emails, and each person their own, in ${workspace.name} Settings.`,
+  });
+  return {
+    subject: sanitizeSubject(`New Request ${request.name}${customer ? ` from ${customer}` : ""}`),
+    html,
+    text,
+  };
+}
+
 export function newOrderEmail(
   env: CloudflareEnv,
   workspace: MailWorkspace,
   order: OrderSummaryForEmail,
   url: string,
 ): RenderedEmail {
+  if (isRequest(order)) {
+    return newRequestEmail(env, workspace, order, url);
+  }
   const customer = order.customerName.trim();
   const amount = total(order);
   const rows: Array<[string, string]> = [["Order", escapeHtml(order.name)]];
@@ -115,20 +192,22 @@ export function newOrdersDigestEmail(
 ): RenderedEmail {
   const shown = orders.slice(0, DIGEST_SHOWN);
   const rows: Array<[string, string]> = shown.map((order) => {
-    const detail = [order.customerName.trim(), total(order)].filter((part) => part.length > 0).join(", ");
-    return [order.name, escapeHtml(detail || "New order")];
+    const second = isRequest(order) ? (order.branch ?? "").trim() : total(order);
+    const detail = [order.customerName.trim(), second].filter((part) => part.length > 0).join(", ");
+    return [order.name, escapeHtml(detail || (isRequest(order) ? "New request" : "New order"))];
   });
   const rest = orders.length - shown.length;
-  const count = plural(orders.length, "new order");
+  const count = arrivalsPhrase(orders);
+  const requests = orders.every(isRequest);
   const { html, text } = renderEmail({
     workspace,
     hubOrigin: appOrigin(env),
     preheader: `${count} came in for ${workspace.name}.`,
     heading: count.charAt(0).toUpperCase() + count.slice(1),
     bodyHtml:
-      emailParagraph(`These orders came in for ${escapeHtml(workspace.name)}.`) +
+      emailParagraph(`These ${requests ? "requests" : orders.some(isRequest) ? "orders and requests" : "orders"} came in for ${escapeHtml(workspace.name)}.`) +
       summaryTable(rows) +
-      (rest > 0 ? emailParagraph(`And ${escapeHtml(plural(rest, "more order"))}.`) : ""),
+      (rest > 0 ? emailParagraph(`And ${rest} more.`) : ""),
     cta: { label: "Open orders", url: deskUrl },
     footerNote: `Managers choose who gets these emails, and each person their own, in ${workspace.name} Settings.`,
   });

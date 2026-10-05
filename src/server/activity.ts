@@ -9,7 +9,9 @@
 // Shopify (the routine echo of a status change; a failed one shows) and the
 // order_new events of orders brought in by the order history import
 // (meta.imported, src/server/sync/backfill.ts): those are old orders, not
-// arrivals, and an import can add thousands.
+// arrivals, and an import can add thousands. Likewise the requests the
+// first draft sync inserts silently (meta.silent, src/server/sync/
+// drafts.ts): they were already waiting in Shopify.
 // A platform admin who is not a member of the workspace has no
 // last_seen_at there: they get the feed with no unread count, and nothing
 // to mark read.
@@ -52,6 +54,7 @@ function bellWorthy(workspaceId: string) {
     eq(events.workspaceId, workspaceId),
     or(ne(events.type, "shopify_write"), sql`json_extract(${events.meta}, '$.ok') = 0`),
     or(ne(events.type, "order_new"), sql`coalesce(json_extract(${events.meta}, '$.imported'), 0) = 0`),
+    or(ne(events.type, "order_new"), sql`coalesce(json_extract(${events.meta}, '$.silent'), 0) = 0`),
   );
 }
 

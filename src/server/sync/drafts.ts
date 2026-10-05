@@ -535,7 +535,9 @@ async function insertDraftCard(
       orderId,
       type: "order_new",
       text: `New request ${draft.name}${draft.customerName ? " from " + draft.customerName : ""}`,
-      meta: { orderName: draft.name, kind: "draft" },
+      // silent: already waiting when draft sync turned on (decision D12);
+      // the bell leaves these out like imported orders.
+      meta: silent ? { orderName: draft.name, kind: "draft", silent: true } : { orderName: draft.name, kind: "draft" },
       createdAt: now,
       source: "shopify",
     })

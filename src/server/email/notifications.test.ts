@@ -99,6 +99,78 @@ describe("newOrdersDigestEmail", () => {
   });
 });
 
+// Draft orders spec section 12: a draft announces itself as a request.
+describe("new request emails", () => {
+  const request: OrderSummaryForEmail = {
+    id: "d1",
+    name: "#D12",
+    customerName: "Jordan Vale",
+    total: "0.00",
+    currency: "USD",
+    items: [{ title: "Business cards", qty: 1, variant: "" }],
+    kind: "draft",
+    company: "Impact Rentals",
+    location: "Buford, GA",
+    requestFor: "Casey Lin",
+    branch: "Buford HQ",
+    attributes: [
+      { key: "Ship to Branch", value: "Buford HQ" },
+      { key: "For Employee Name", value: "Casey Lin" },
+      { key: "Reason for Request", value: "New hire starting Monday" },
+    ],
+  };
+
+  it("names the request in a Title Case subject and lists its fields and items", () => {
+    const email = newOrderEmail(env, workspace, request, "https://orders.impactrentals.store/?order=d1");
+    expect(email.subject).toBe("New Request #D12 from Jordan Vale");
+    expect(email.html).toContain("New request #D12");
+    expect(email.text).toContain("Request: #D12");
+    expect(email.text).toContain("Requested by: Jordan Vale");
+    expect(email.text).toContain("Company: Impact Rentals");
+    expect(email.text).toContain("Ship to Branch: Buford HQ");
+    expect(email.text).toContain("Reason for Request: New hire starting Monday");
+    expect(email.text).toContain("Items: 1 x Business cards");
+    expect(email.text).toContain("Open the request: https://orders.impactrentals.store/?order=d1");
+    // A $0 request has no total worth showing.
+    expect(email.text).not.toContain("Total:");
+  });
+
+  it("escapes request attributes and keeps the requester's email and address out", () => {
+    const hostile = {
+      ...request,
+      attributes: [{ key: "<b>Key</b>", value: '<img src=x onerror="alert(1)">' }],
+      company: "<script>x</script>",
+    };
+    const email = newOrderEmail(env, workspace, hostile, "https://x.test/");
+    expect(email.html).not.toContain("<img src=x");
+    expect(email.html).not.toContain("<script>x");
+    expect(email.html).not.toContain("<b>Key</b>");
+    expect(email.html).toContain("&lt;b&gt;Key&lt;/b&gt;");
+    expect(email.html).not.toContain("jordan@example.com");
+  });
+
+  it("clips long attribute values and shows at most six attributes", () => {
+    const many = {
+      ...request,
+      attributes: Array.from({ length: 8 }, (_, i) => ({ key: `Field ${i + 1}`, value: "v".repeat(300) })),
+    };
+    const email = newOrderEmail(env, workspace, many, "https://x.test/");
+    expect(email.text).toContain("Field 6:");
+    expect(email.text).not.toContain("Field 7:");
+    expect(email.text).not.toContain("v".repeat(201));
+  });
+
+  it("says requests, orders, or orders and requests in a summary", () => {
+    const requests = Array.from({ length: 6 }, (_, i) => ({ ...request, id: `d${i}`, name: `#D${i}` }));
+    const orders = Array.from({ length: 6 }, (_, i) => ({ ...order, id: `o${i}`, name: `#10${i}` }));
+    expect(newOrdersDigestEmail(env, workspace, requests, "https://x.test/").subject).toBe("6 new requests in IMPACT Rentals");
+    expect(newOrdersDigestEmail(env, workspace, orders, "https://x.test/").subject).toBe("6 new orders in IMPACT Rentals");
+    const mixed = newOrdersDigestEmail(env, workspace, [...requests.slice(0, 3), ...orders.slice(0, 4)], "https://x.test/");
+    expect(mixed.subject).toBe("7 new orders and requests in IMPACT Rentals");
+    expect(mixed.html).toContain("7 new orders and requests");
+  });
+});
+
 describe("poSentEmail", () => {
   it("says which purchase order went to which vendor", () => {
     const email = poSentEmail(
