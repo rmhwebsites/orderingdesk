@@ -1281,3 +1281,54 @@ an address on a domain you have onboarded.
   - notifyPoSent runs on the first successful send only, not on a resend.
   - A send whose lease expired while it was still running (over 2
     minutes) can overlap a retry; the event log keeps both sends.
+
+
+## STATE UPDATE, 2026-10-05 Phase 6 and 7 review fixes (supersedes above)
+
+- Branch build/m1-core, on top of e036717: 2e811ea (push host scoping),
+  202ebdf (plain-text email tables), 9b56162 (PO send step, modal footer,
+  focus), plus this docs commit. Not pushed, not deployed. No migration,
+  no dependency, no secret or wrangler change.
+- Push and client hosts (src/server/notify.ts deliversTo,
+  src/server/push.ts). A client host is run by its tenant (DNS and TLS),
+  so it can serve its own service worker and read every push its devices
+  get. Now:
+  - A workspace's notices (new orders, PO sends, activity) go only to
+    devices recorded on the hub, with no host (reads as the hub), or on
+    that workspace's own ACTIVE client host. A device on another
+    workspace's client host, or on a client host that is no longer active,
+    gets nothing. A person who belongs to two workspaces and installed the
+    app on workspace A's client host gets only A's notices there; turning
+    push on at orderingdesk.com gets them every workspace's.
+  - POST/DELETE /api/push/subscribe act only on rows of the host the
+    request came in on: the 10 device cap is per person per host, an
+    endpoint recorded on another host is never moved or rewritten (POST
+    answers 409), and DELETE cannot remove another host's device (404).
+- Plain-text emails: a label and value table row reads "Label: value"
+  (htmlToText in src/server/email/layout.ts), so the new order, digest,
+  PO sent and vendor emails read "Order: #1042", "Date: Oct 4, 2026".
+- PO review modal and send step:
+  - The modal's first button is now "Review and send" (it saves and opens
+    the confirmation step); "Send to vendor" only ever names the final,
+    explicit send inside the step, which still names the vendor and every
+    address. The owner rule (a review modal and an explicit Send to vendor
+    every time; never sent automatically) is unchanged.
+  - The step opens with focus on its question, never on the send, and
+    ignores a send pressed in its first 400 ms (CONFIRM_ARM_MS), so a
+    double or held Enter, or a double click, on the button that opened it
+    cannot send. A new confirmation (recipients changed) does the same.
+    After a failed or offline send with the step still open, focus returns
+    to its send button.
+  - Body and footer both scroll and the body gives up room first, so the
+    step's buttons stay reachable in a short window. Checked in local dev
+    at 667x375 (with and without the recipients-changed warning), 375x812
+    and 1024x768.
+- Focus: notification switches stay focusable while a change saves (Switch
+  busy: aria-disabled, changes ignored); Save draft and Review and send get
+  focus back after a save; a send from the drawer's history lands on that
+  row's PO number; the device push button gets focus back.
+- Local dev data: the sample order #1011 now has a draft PO and #1012's PO
+  was sent again (local email fallback only).
+- Known limits: the kit's ConfirmStep (remove member and similar, not
+  irreversible sends) still focuses its confirm button on open; the inline
+  Add vendor form in the modal still drops focus when an add fails.
