@@ -754,6 +754,16 @@ async function applyLinks(
           outcome.transitions.push({ orderId: attached.orderRowId, before: attached.before, after: attached.after });
         }
         onAttached?.(candidate, link.orderId, attached.after);
+      } else if (attached.kind === "already" && onAttached) {
+        // Another signal attached the card since it was read as a candidate
+        // (orders/create and orders/updated arrive together on completion,
+        // and Approve or the draft webhook may attach meanwhile). The order
+        // still belongs on the card: hand over its snapshot as it is now, so
+        // the order is written as an update and never inserted as new.
+        const card = await readCard(db, workspaceId, attached.orderRowId);
+        if (card && card.shopifyOrderId === link.orderId) {
+          onAttached(candidate, link.orderId, card.shopify);
+        }
       }
     }
   }

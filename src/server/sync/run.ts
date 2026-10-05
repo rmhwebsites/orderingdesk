@@ -2,7 +2,7 @@
 // Relative imports on purpose: this module is bundled into the custom worker
 // entrypoint (cron), not only the Next.js build.
 
-import { and, desc, eq, inArray, lt, lte } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, lte, sql } from "drizzle-orm";
 import type { Db } from "../../db";
 import { applyBatch, rowsAffected } from "../../db/batch";
 import { events, orders, storeConnections } from "../../db/schema";
@@ -249,9 +249,11 @@ export type OrderWriteOutcome =
 // Inserts an order the app has never stored, with its initial status
 // (initialStatusFor: its one status tag, else the status linked to its
 // Shopify state, else the first status) and its order_new event. Both
-// inserts are conflict no-ops and the event id is deterministic across runs
-// (workspace + Shopify order), so a racing run that lost inserts nothing;
-// inserted is rows-affected truth. Nothing is written to Shopify.
+// inserts are conflict no-ops, the event id is deterministic across runs
+// (workspace + Shopify order) and the event is written only when this
+// call's order row landed, so a racing run that lost (or a card that
+// already carries the order) gets nothing inserted; inserted is
+// rows-affected truth. Nothing is written to Shopify.
 //
 // imported: the order comes from the order history import (backfill.ts).
 // Its notification is claimed at once (notified_at set), so no path ever
@@ -281,20 +283,27 @@ export async function insertNewOrder(
       ...(imported ? { notifiedAt: now } : {}),
     })
     .onConflictDoNothing();
+  const event = {
+    id: `evt-order-new-${workspaceId}-${order.shopifyOrderId}`,
+    type: "order_new" as const,
+    text: imported
+      ? `Order ${order.name} imported from the store's order history`
+      : `New order ${order.name}${order.customerName ? " from " + order.customerName : ""}`,
+    meta: imported ? { orderName: order.name, imported: true } : { orderName: order.name },
+    source: "shopify" as const,
+  };
+  // An insert-select that yields its row only when this call's order row
+  // landed (its id is fresh), so a lost insert never leaves an entry
+  // pointing at a row that does not exist: for example an order made from a
+  // draft card that another signal attached meanwhile, which must never
+  // announce itself as new. Values in the events table's column order (id,
+  // workspace_id, order_id, type, text, actor_id, meta, created_at, source).
+  const landed = sql`exists (select 1 from ${orders} where ${orders.id} = ${orderId})`;
   const insertEvent = db
     .insert(events)
-    .values({
-      id: `evt-order-new-${workspaceId}-${order.shopifyOrderId}`,
-      workspaceId,
-      orderId,
-      type: "order_new",
-      text: imported
-        ? `Order ${order.name} imported from the store's order history`
-        : `New order ${order.name}${order.customerName ? " from " + order.customerName : ""}`,
-      meta: imported ? { orderName: order.name, imported: true } : { orderName: order.name },
-      createdAt: now,
-      source: "shopify",
-    })
+    .select(
+      sql`select ${event.id}, ${workspaceId}, ${orderId}, ${event.type}, ${event.text}, ${null}, ${JSON.stringify(event.meta)}, ${now}, ${event.source} where ${landed}`,
+    )
     .onConflictDoNothing();
   const [orderInsertResult] = await applyPair(db, insertOrder, insertEvent);
   return { inserted: changesOf(orderInsertResult) === 1, orderId };

@@ -20,7 +20,7 @@ import {
   writeDraftSnapshot,
   type KnownDraft,
 } from "./drafts";
-import { claimAndLoad, runSync, upsertFetchedOrder, type KnownOrder } from "./run";
+import { claimAndLoad, insertNewOrder, runSync, upsertFetchedOrder, type KnownOrder } from "./run";
 
 // Draft orders in the sync engine (draft orders spec sections 5 and 6),
 // against the real migrations on better-sqlite3 and a stubbed Shopify.
@@ -986,5 +986,80 @@ describe("webhook paths", () => {
     // Without drafts (no access passed) an unknown order is a new card.
     const plain = await upsertFetchedOrder(db, WS, orderOf({ id: "9002" }), NOW);
     expect(plain.kind).toBe("added");
+  });
+
+  it("two signals for a draft-born order at once leave one card and no stray new order entry", async () => {
+    // orders/create and orders/updated arrive together when a draft is
+    // completed. Both jobs find no card for the order and look up the open
+    // draft cards; Shopify answers both only once both have asked, so both
+    // see the card still open. One attaches, the other sees already.
+    const { db } = await setup();
+    const card = await insertDraft(db, { id: "12", name: "#D12" }, NOW - 2 * HOUR);
+    const shop = fakeShop({
+      drafts: [{ id: "12", status: "COMPLETED", order: { id: "9001", name: "#1031" } }],
+      orders: [{ id: "9001", name: "#1031" }],
+    });
+    let release = () => {};
+    const bothAsked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let asked = 0;
+    const gated = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      asked += 1;
+      if (asked === 2) {
+        release();
+      }
+      await bothAsked;
+      return shop.impl(input, init);
+    }) as typeof fetch;
+    const access = { shopDomain: SHOP, token: TOKEN, fetchImpl: gated };
+    const order = orderOf({ id: "9001", name: "#1031" });
+    const [first, second] = await Promise.all([
+      upsertFetchedOrder(db, WS, order, NOW, access),
+      upsertFetchedOrder(db, WS, order, NOW + 1, access),
+    ]);
+    expect(shop.ops()).toEqual(["DraftLinks", "DraftLinks"]);
+
+    const cards = await rows(db);
+    expect(cards.map((row) => [row.id, row.shopifyOrderId])).toEqual([[card.id, "9001"]]);
+    // Both jobs wrote the order onto the card: neither is a new order.
+    expect([first.kind, second.kind]).toEqual(["attached", "attached"]);
+    const all = await eventsOf(db);
+    expect(all.find((event) => event.id === `evt-order-new-${WS}-9001`)).toBeUndefined();
+    expect(all.filter((event) => event.orderId !== card.id)).toEqual([]);
+    expect(all.filter((event) => event.type === "draft_completed")).toHaveLength(1);
+  });
+
+  it("an order insert that loses to a card already carrying the order writes no new order entry", async () => {
+    // A job that read no card for the order, then found no open draft card
+    // (another signal attached it in between), tries to insert the order.
+    const { db } = await setup();
+    const card = await insertDraft(db, { id: "12" }, NOW - 2 * HOUR);
+    const attached = await attachOrderToDraft(db, WS, {
+      draftRowId: card.id,
+      orderId: "9001",
+      orderName: "#1031",
+      now: NOW,
+      source: "shopify",
+    });
+    expect(attached.kind).toBe("attached");
+    const statusRows = await loadStatusRows(db, WS);
+    const lost = await insertNewOrder(db, WS, orderOf({ id: "9001", name: "#1031" }), NOW + 1, statusRows);
+    expect(lost.inserted).toBe(false);
+    expect(await rows(db)).toHaveLength(1);
+    expect((await eventsOf(db)).find((event) => event.id === `evt-order-new-${WS}-9001`)).toBeUndefined();
+
+    // An insert that lands still writes its entry, pointing at its row.
+    const fresh = await insertNewOrder(db, WS, orderOf({ id: "9002", name: "#1032" }), NOW + 1, statusRows);
+    expect(fresh.inserted).toBe(true);
+    expect((await eventsOf(db)).find((event) => event.id === `evt-order-new-${WS}-9002`)).toMatchObject({
+      orderId: fresh.orderId,
+      type: "order_new",
+      text: "New order #1032 from Jordan Vale",
+      actorId: null,
+      meta: { orderName: "#1032" },
+      createdAt: NOW + 1,
+      source: "shopify",
+    });
   });
 });
