@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
-import { broadcastSync } from "@/server/broadcast";
+import { broadcastMerges, broadcastSync } from "@/server/broadcast";
 import { getSyncConnection, manualSync, manualSyncResponse } from "@/server/desk/sync";
 import { guardResponse, requireMember } from "@/server/guard";
 import { notifyNewOrders } from "@/server/notify";
@@ -39,6 +39,7 @@ export async function POST(_request: Request, context: RouteContext) {
       ctx.waitUntil(
         (async () => {
           await broadcastSync(env, id, result);
+          await broadcastMerges(env, id, result.mergedOrders ?? []);
           await notifyNewOrders(db, env, id, result.addedOrderIds);
           await shareShopifyMoves(db, env, id, result.statusChanges ?? []);
         })(),

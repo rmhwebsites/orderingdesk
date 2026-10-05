@@ -38,7 +38,11 @@ export type LiveEvent =
   // A system timeline entry, such as the outcome of writing a status to
   // Shopify, or a purchase order drafted, sent or failed (po_* events; open
   // drawers reload the order's purchase orders).
-  | { kind: "order.activity"; event: EventView };
+  | { kind: "order.activity"; event: EventView }
+  // An order card was folded into the draft card it came from (draft orders
+  // spec section 6.4): fromId no longer exists, toId carries its history.
+  // Sent by the server; the desk's parser learns it with the desk UI work.
+  | { kind: "order.merged"; fromId: string; toId: string };
 
 const EVENT_TYPES = new Set([
   "order_new",

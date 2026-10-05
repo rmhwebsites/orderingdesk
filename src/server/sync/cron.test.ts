@@ -9,6 +9,7 @@ vi.mock("./backfill", () => ({
 }));
 vi.mock("../broadcast", () => ({
   broadcastSync: vi.fn(async () => undefined),
+  broadcastMerges: vi.fn(async () => undefined),
   broadcastImported: vi.fn(async () => undefined),
   kickUsers: vi.fn(async () => undefined),
 }));
@@ -22,7 +23,7 @@ vi.mock("../shopify/roster-sync", () => ({
 
 const { runSync } = await import("./run");
 const { runBackfillTick } = await import("./backfill");
-const { broadcastSync, broadcastImported, kickUsers } = await import("../broadcast");
+const { broadcastSync, broadcastMerges, broadcastImported, kickUsers } = await import("../broadcast");
 const { syncRoster } = await import("../shopify/roster-sync");
 const { notifyNewOrders } = await import("../notify");
 const { runAllSyncs, WEBHOOK_DELIVERY_RETENTION_MS } = await import("./cron");
@@ -50,6 +51,7 @@ async function setup() {
 beforeEach(() => {
   vi.mocked(runSync).mockReset();
   vi.mocked(broadcastSync).mockClear();
+  vi.mocked(broadcastMerges).mockClear();
   vi.mocked(kickUsers).mockClear();
   vi.mocked(syncRoster).mockClear();
   vi.mocked(notifyNewOrders).mockClear();
@@ -75,6 +77,21 @@ describe("runAllSyncs broadcasting", () => {
       ]),
     );
     expect(vi.mocked(broadcastSync)).toHaveBeenCalledTimes(2);
+  });
+
+  // Draft orders: an order card folded into its draft card is broadcast so
+  // open desks drop the old id.
+  it("broadcasts the merges a run made", async () => {
+    const db = await setup();
+    const a = result({ updated: 1, updatedOrderIds: ["o_draft"], mergedOrders: [{ fromId: "o_orphan", toId: "o_draft" }] });
+    vi.mocked(runSync).mockImplementation(async (_db, _env, workspaceId) => (workspaceId === "ws_a" ? a : result()));
+    await runAllSyncs(db, env);
+    expect(vi.mocked(broadcastMerges).mock.calls).toEqual(
+      expect.arrayContaining([
+        [env, "ws_a", [{ fromId: "o_orphan", toId: "o_draft" }]],
+        [env, "ws_b", []],
+      ]),
+    );
   });
 
   // Phase 6: every order a run inserted is announced (notify.ts claims

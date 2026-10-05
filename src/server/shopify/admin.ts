@@ -50,6 +50,28 @@ export function legacyIdOf(gid: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Draft order scopes (draft orders spec section 14)
+
+// Draft orders are an optional feature: they sync only when the app was
+// granted these. REQUIRED_SCOPES (src/server/desk/connection.ts) does not
+// include them, so a store without drafts keeps working as before.
+export const DRAFT_SCOPES = ["read_draft_orders", "write_draft_orders"] as const;
+
+// The draft scopes the grant lacks. A write scope implies its read scope
+// (Shopify may list only the write handle), so write_draft_orders alone
+// turns the feature on.
+export function missingDraftScopes(granted: readonly string[] | null | undefined): string[] {
+  const has = new Set(granted ?? []);
+  return DRAFT_SCOPES.filter(
+    (scope) => !(has.has(scope) || (scope.startsWith("read_") && has.has("write_" + scope.slice("read_".length)))),
+  );
+}
+
+export function draftsEnabled(granted: readonly string[] | null | undefined): boolean {
+  return Array.isArray(granted) && missingDraftScopes(granted).length === 0;
+}
+
+// ---------------------------------------------------------------------------
 // Webhook subscriptions
 
 // The topics registered on connect (platform amendment section 4).

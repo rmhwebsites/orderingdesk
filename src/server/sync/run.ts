@@ -6,6 +6,7 @@ import { and, desc, eq, inArray, lt, lte } from "drizzle-orm";
 import type { Db } from "../../db";
 import { applyBatch, rowsAffected } from "../../db/batch";
 import { events, orders, storeConnections } from "../../db/schema";
+import { draftsEnabled } from "../shopify/admin";
 import { fetchOrdersUpdatedSince } from "../shopify/client";
 import { accessTokenFor } from "../shopify/token";
 import { normalizeOrders, type NormalizedOrder } from "../shopify/normalize";
@@ -17,6 +18,13 @@ import {
   type StatusChange,
   type StatusRow,
 } from "../shopify/status-sync";
+import {
+  ensureOrderSnapshots,
+  lookupDraftParents,
+  runDraftPhase,
+  type OrderMerge,
+  type ShopifyAccess,
+} from "./drafts";
 
 export type SyncResult = {
   added: number;
@@ -37,6 +45,10 @@ export type SyncResult = {
   // snapshot changes this run landed. Present only when there are any. The
   // caller broadcasts them and writes the new status tag to Shopify.
   statusChanges?: StatusChange[];
+  // Order cards folded into draft cards this run (src/server/sync/drafts.ts
+  // mergeOrderIntoDraft): fromId no longer exists. Present only when there
+  // are any; the caller broadcasts order.merged for each.
+  mergedOrders?: OrderMerge[];
 };
 
 export type SyncOptions = {
@@ -48,8 +60,9 @@ export type SyncOptions = {
 // lease so it never runs at the same time as a sync of the same workspace.
 export const LEASE_MS = 120000;
 // Re-fetch a 5 minute overlap so clock skew between this worker and Shopify
-// cannot drop orders updated right around the previous lastSyncAt.
-const OVERLAP_MS = 300000;
+// cannot drop orders updated right around the previous lastSyncAt. The
+// drafts phase uses the same overlap.
+export const OVERLAP_MS = 300000;
 // Also how far back Shopify lets an app read orders without the
 // read_all_orders scope (the order history import checks against it).
 export const FIRST_SYNC_WINDOW_MS = 60 * 24 * 60 * 60 * 1000;
@@ -172,11 +185,11 @@ async function holdsLease(db: Db, workspaceId: string, myLease: number): Promise
 // the chain start was recorded) reads as a chain whose start is unknown.
 const RESUME_TOKEN = /^(\d{1,15})\|([\s\S]+)$/;
 
-function resumeToken(openedAt: number, cursor: string): string {
+export function resumeToken(openedAt: number, cursor: string): string {
   return `${Math.max(0, Math.trunc(openedAt))}|${cursor}`;
 }
 
-function parseResumeToken(stored: unknown): { cursor: string; openedAt: number | null } | null {
+export function parseResumeToken(stored: unknown): { cursor: string; openedAt: number | null } | null {
   if (typeof stored !== "string" || stored.length === 0) {
     return null;
   }
@@ -352,6 +365,29 @@ export async function writeOrderSnapshot(
   return { kind: "updated", orderId: existing.id, before: existing.shopify };
 }
 
+// One sync_error activity event per failure text per hour, judged against
+// the event stream itself: lastError flaps on interleaved transient blips
+// and must not be the dedup key.
+async function recordSyncError(db: Db, workspaceId: string, text: string, now: number): Promise<void> {
+  const recent = await db
+    .select({ createdAt: events.createdAt })
+    .from(events)
+    .where(and(eq(events.workspaceId, workspaceId), eq(events.type, "sync_error"), eq(events.text, text)))
+    .orderBy(desc(events.createdAt))
+    .limit(1);
+  if (!recent[0] || recent[0].createdAt < now - SYNC_ERROR_EVENT_WINDOW_MS) {
+    await db.insert(events).values({
+      id: crypto.randomUUID(),
+      workspaceId,
+      orderId: null,
+      type: "sync_error",
+      text,
+      createdAt: now,
+      source: "system",
+    });
+  }
+}
+
 // One order outside a sync run (a webhook re-fetched it): claim, load and
 // write it through writeOrderSnapshot, then apply the Shopify -> app status
 // rules to a snapshot change that landed. `now` must be taken before the
@@ -361,33 +397,56 @@ export async function writeOrderSnapshot(
 // sync lease (it would skip or stall behind a run); the lease guards the
 // connection state, and the caller re-checks the connection before calling
 // this, like a run's holdsLease (see src/server/shopify/webhooks.ts).
+//
+// link (draft orders spec section 6.2): Shopify access, passed when drafts
+// are enabled. An order with no card is then first looked up against the
+// open draft cards: if it came from one, that card is attached and the
+// order written onto it (attached, never added, so never announced). If
+// the lookup fails nothing is written (deferred); the cron sync lands the
+// order within 10 minutes.
 export async function upsertFetchedOrder(
   db: Db,
   workspaceId: string,
   order: NormalizedOrder,
   now: number,
+  link?: ShopifyAccess,
 ): Promise<
   | { kind: "added"; orderId: string; statusChanges: StatusChange[] }
   | { kind: "updated"; orderId: string; statusChanges: StatusChange[] }
+  | { kind: "attached"; orderId: string; statusChanges: StatusChange[]; mergedOrders: OrderMerge[] }
+  | { kind: "deferred"; detail: string }
   | { kind: "unchanged" }
 > {
   const statusRows = await loadStatusRows(db, workspaceId);
   const known = new Map<string, KnownOrder>();
   await claimAndLoad(db, workspaceId, [order.shopifyOrderId], now, known);
+  let attached = false;
+  const transitions: SnapshotTransition[] = [];
+  const mergedOrders: OrderMerge[] = [];
+  if (link && !known.has(order.shopifyOrderId)) {
+    const lookup = await lookupDraftParents(db, workspaceId, [order], known, link, now);
+    if (lookup.kind === "failed") {
+      return { kind: "deferred", detail: lookup.detail };
+    }
+    attached = known.has(order.shopifyOrderId);
+    transitions.push(...lookup.transitions);
+    mergedOrders.push(...lookup.mergedOrders);
+  }
   const outcome = await writeOrderSnapshot(db, workspaceId, order, now, statusRows, known);
   if (outcome.kind === "added") {
     return { kind: "added", orderId: outcome.orderId, statusChanges: [] };
   }
-  if (outcome.kind === "none") {
+  if (outcome.kind === "updated") {
+    transitions.push({ orderId: outcome.orderId, before: outcome.before, after: order });
+  }
+  if (outcome.kind === "none" && !attached) {
     return { kind: "unchanged" };
   }
-  const statusChanges = await evaluateShopifyTransitions(
-    db,
-    workspaceId,
-    [{ orderId: outcome.orderId, before: outcome.before, after: order }],
-    now,
-  );
-  return { kind: "updated", orderId: outcome.orderId, statusChanges };
+  const statusChanges = await evaluateShopifyTransitions(db, workspaceId, transitions, now);
+  const orderId = outcome.kind === "updated" ? outcome.orderId : (known.get(order.shopifyOrderId)?.id ?? "");
+  return attached
+    ? { kind: "attached", orderId, statusChanges, mergedOrders }
+    : { kind: "updated", orderId, statusChanges };
 }
 
 export async function runSync(
@@ -432,10 +491,65 @@ export async function runSync(
     return { ...empty(), skipped: "running" };
   }
 
-  let added = 0;
-  let updated = 0;
+  // What this run landed, rows-affected truth, kept across both phases so
+  // every return (also a failed or superseded one) reports it. An id added
+  // this run stays out of updatedOrderIds.
   const addedOrderIds: string[] = [];
   const updatedOrderIds: string[] = [];
+  const addedSet = new Set<string>();
+  const updatedSet = new Set<string>();
+  const noteAdded = (id: string) => {
+    if (!addedSet.has(id)) {
+      addedSet.add(id);
+      addedOrderIds.push(id);
+    }
+  };
+  const noteUpdated = (id: string) => {
+    if (!addedSet.has(id) && !updatedSet.has(id)) {
+      updatedSet.add(id);
+      updatedOrderIds.push(id);
+    }
+  };
+  const mergedOrders: OrderMerge[] = [];
+  const statusChanges: StatusChange[] = [];
+  const landed = (extra: Partial<SyncResult> = {}): SyncResult => ({
+    added: addedOrderIds.length,
+    updated: updatedOrderIds.filter((id) => !addedSet.has(id)).length,
+    addedOrderIds,
+    updatedOrderIds: updatedOrderIds.filter((id) => !addedSet.has(id)),
+    ...(mergedOrders.length > 0 ? { mergedOrders } : {}),
+    ...(statusChanges.length > 0 ? { statusChanges } : {}),
+    ...extra,
+  });
+  // Draft progress for every fenced terminal or early-return write, so it is
+  // kept even when the orders feed fails (draft orders spec section 5.1).
+  let draftTerminal: ConnectionWrite = {};
+  let draftError: string | null = null;
+  let draftFatal = false;
+  const draftErrorText = () => (draftError !== null ? clip("Drafts: " + draftError) : null);
+  // The fenced write every path after the drafts phase ends with; a drafts
+  // feed failure Shopify will repeat is recorded once it is known the run
+  // still held its lease.
+  const finish = async (write: ConnectionWrite, extra: Partial<SyncResult> = {}): Promise<SyncResult> => {
+    const held = await fencedConnectionWrite(db, workspaceId, myLease, { ...draftTerminal, ...write });
+    if (held && draftFatal && draftError !== null) {
+      await recordSyncError(db, workspaceId, clip("Drafts: " + draftError), now);
+    }
+    return landed({ ...extra, ...(held ? {} : { superseded: true }) });
+  };
+  // Snapshot changes must reach the Shopify -> app rules even if the lease
+  // was lost meanwhile: each landed exactly once (claim rule), so skipping
+  // it would lose it for good. A failure costs only the moves.
+  const evaluate = async (transitions: readonly SnapshotTransition[]) => {
+    try {
+      statusChanges.push(...(await evaluateShopifyTransitions(db, workspaceId, transitions, now)));
+    } catch (e) {
+      console.warn(
+        "[sync] " +
+          JSON.stringify({ workspaceId, statusRules: e instanceof Error ? e.name : "failed" }),
+      );
+    }
+  };
 
   // The lease is held from here on: everything that can throw stays inside
   // this try so the catch path releases it through the fenced write.
@@ -491,6 +605,49 @@ export async function runSync(
       return { ...empty(), error: detail, ...(held ? {} : { superseded: true }) };
     }
     const token = access.token;
+    const fetchImpl = opts?.fetchImpl ?? fetch;
+    const shopify: ShopifyAccess = { shopDomain: connection.shopDomain, token, fetchImpl };
+
+    // Every status, in sort order: the first is where a new order starts
+    // unless its tag or Shopify state says otherwise (initialStatusFor).
+    const statusRows = await loadStatusRows(db, workspaceId);
+
+    // Drafts first (draft orders spec section 5): same lease, same now, its
+    // own cursor. A completion seen here usually attaches the card before
+    // the orders phase fetches that order, which then lands as an update of
+    // the card. Only when the app holds the draft scopes.
+    const draftsOn = draftsEnabled(connection.scopes);
+    const attachedRowIds: string[] = [];
+    if (draftsOn) {
+      const phase = await runDraftPhase({
+        db,
+        workspaceId,
+        now,
+        access: shopify,
+        connection,
+        statusRows,
+        holdsLease: () => holdsLease(db, workspaceId, myLease),
+      });
+      if (phase.kind === "auth") {
+        const held = await fencedConnectionWrite(db, workspaceId, myLease, {
+          status: "error",
+          lastError: TOKEN_REJECTED,
+          runningUntil: 0,
+        });
+        return { ...empty(), error: TOKEN_REJECTED, ...(held ? {} : { superseded: true }) };
+      }
+      if (phase.kind === "superseded") {
+        return { ...empty(), superseded: true };
+      }
+      phase.addedOrderIds.forEach(noteAdded);
+      phase.updatedOrderIds.forEach(noteUpdated);
+      attachedRowIds.push(...phase.attachedRowIds);
+      mergedOrders.push(...phase.mergedOrders);
+      draftTerminal = phase.terminal;
+      draftError = phase.error;
+      draftFatal = phase.fatal;
+      await evaluate(phase.transitions);
+    }
 
     // A persisted cursor means an earlier run stopped before the end of its
     // window: resume that exact window from the cursor instead of opening a
@@ -509,17 +666,12 @@ export async function runSync(
       connection.shopDomain,
       token,
       sinceIso,
-      opts?.fetchImpl ?? fetch,
+      fetchImpl,
       resuming ? { startCursor: resume.cursor } : undefined,
     );
 
     if (fetched.kind === "auth") {
-      const held = await fencedConnectionWrite(db, workspaceId, myLease, {
-        status: "error",
-        lastError: TOKEN_REJECTED,
-        runningUntil: 0,
-      });
-      return { ...empty(), error: TOKEN_REJECTED, ...(held ? {} : { superseded: true }) };
+      return finish({ status: "error", lastError: TOKEN_REJECTED, runningUntil: 0 }, { error: TOKEN_REJECTED });
     }
 
     if (fetched.kind === "transient" || fetched.kind === "fatal") {
@@ -527,47 +679,20 @@ export async function runSync(
       // cron tick retries from the same place; record what happened and
       // release the lease. A fatal while resuming also drops the chain
       // (Shopify cursors go stale), falling back to the plain window path
-      // next tick.
+      // next tick. Draft progress is kept.
       const detail = clip(fetched.detail);
-      const held = await fencedConnectionWrite(db, workspaceId, myLease, {
-        lastError: detail,
-        runningUntil: 0,
-        ...(fetched.kind === "fatal" && resuming
-          ? { syncCursor: null, syncCursorSince: null }
-          : {}),
-      });
-      if (!held) {
-        return { ...empty(), error: fetched.detail, superseded: true };
+      const result = await finish(
+        {
+          lastError: detail,
+          runningUntil: 0,
+          ...(fetched.kind === "fatal" && resuming ? { syncCursor: null, syncCursorSince: null } : {}),
+        },
+        { error: fetched.detail },
+      );
+      if (fetched.kind === "fatal" && !result.superseded) {
+        await recordSyncError(db, workspaceId, detail, now);
       }
-      if (fetched.kind === "fatal") {
-        // One activity event per failure text per hour, judged against the
-        // event stream itself: lastError flaps on interleaved transient blips
-        // and must not be the dedup key.
-        const recent = await db
-          .select({ createdAt: events.createdAt })
-          .from(events)
-          .where(
-            and(
-              eq(events.workspaceId, workspaceId),
-              eq(events.type, "sync_error"),
-              eq(events.text, detail),
-            ),
-          )
-          .orderBy(desc(events.createdAt))
-          .limit(1);
-        if (!recent[0] || recent[0].createdAt < now - SYNC_ERROR_EVENT_WINDOW_MS) {
-          await db.insert(events).values({
-            id: crypto.randomUUID(),
-            workspaceId,
-            orderId: null,
-            type: "sync_error",
-            text: detail,
-            createdAt: now,
-            source: "system",
-          });
-        }
-      }
-      return { ...empty(), error: fetched.detail };
+      return result;
     }
 
     // The fetch can take minutes. If the lease changed hands meanwhile (a
@@ -577,14 +702,10 @@ export async function runSync(
     // superseded run never advances lastSyncAt or the cursor; the next run
     // covers the same window (after a store change, a fresh first-sync one).
     if (!(await holdsLease(db, workspaceId, myLease))) {
-      return { ...empty(), superseded: true };
+      return landed({ superseded: true });
     }
 
     const normalized = normalizeOrders(fetched.nodes);
-
-    // Every status, in sort order: the first is where a new order starts
-    // unless its tag or Shopify state says otherwise (initialStatusFor).
-    const statusRows = await loadStatusRows(db, workspaceId);
 
     // Existence map in chunks instead of one SELECT per order (each chunk is
     // claimed before it is read, see claimAndLoad); maintained inside the loop
@@ -594,7 +715,7 @@ export async function runSync(
     for (let i = 0; i < shopifyIds.length; i += EXISTENCE_CHUNK) {
       // The first chunk follows the check above; every later one re-checks.
       if (i > 0 && !(await holdsLease(db, workspaceId, myLease))) {
-        return { ...empty(), superseded: true };
+        return landed({ superseded: true });
       }
       const chunk = shopifyIds.slice(i, i + EXISTENCE_CHUNK);
       await claimAndLoad(db, workspaceId, chunk, now, existingByShopifyId);
@@ -603,45 +724,52 @@ export async function runSync(
     // rows, and a run superseded from here on finishes it (see the fence
     // comment for why those rows are safe).
     if (shopifyIds.length > 0 && !(await holdsLease(db, workspaceId, myLease))) {
-      return { ...empty(), superseded: true };
+      return landed({ superseded: true });
     }
 
-    const addedSet = new Set<string>();
-    const updatedSet = new Set<string>();
     // Snapshot changes this run landed, for the Shopify -> app status rules.
     const transitions: SnapshotTransition[] = [];
+
+    // Orders with no card may come from an open draft card (draft orders
+    // spec section 6.2): look them up live before inserting anything. If
+    // the lookup fails, no order is written this run (like a transient
+    // orders feed failure: cursor and anchor untouched, draft progress
+    // kept).
+    if (draftsOn) {
+      const unknown = normalized.filter((order) => !existingByShopifyId.has(order.shopifyOrderId));
+      const lookup = await lookupDraftParents(db, workspaceId, unknown, existingByShopifyId, shopify, now);
+      if (lookup.kind === "failed") {
+        const detail = clip(`Could not check which draft an order came from: ${lookup.detail}`);
+        return finish({ lastError: detail, runningUntil: 0 }, { error: detail });
+      }
+      lookup.attachedRowIds.forEach(noteUpdated);
+      lookup.deleted.forEach((entry) => noteUpdated(entry.orderId));
+      attachedRowIds.push(...lookup.attachedRowIds);
+      mergedOrders.push(...lookup.mergedOrders);
+      transitions.push(...lookup.transitions);
+    }
 
     for (const order of normalized) {
       const outcome = await writeOrderSnapshot(db, workspaceId, order, now, statusRows, existingByShopifyId);
       if (outcome.kind === "added") {
-        added++;
-        addedOrderIds.push(outcome.orderId);
-        addedSet.add(outcome.orderId);
+        noteAdded(outcome.orderId);
       } else if (outcome.kind === "updated") {
-        // An id added this run stays out of updatedOrderIds: a later
-        // duplicate in the same payload refines the new order, it does not
-        // "update" it.
-        if (!addedSet.has(outcome.orderId) && !updatedSet.has(outcome.orderId)) {
-          updated++;
-          updatedOrderIds.push(outcome.orderId);
-          updatedSet.add(outcome.orderId);
-        }
+        // A later duplicate in the same payload refines a new order, it
+        // does not "update" it (noteUpdated skips ids added this run).
+        noteUpdated(outcome.orderId);
         transitions.push({ orderId: outcome.orderId, before: outcome.before, after: order });
       }
     }
 
-    // Shopify -> app status rules for the snapshot changes that landed. They
-    // run even if the lease was lost during the loop: each change landed
-    // exactly once (claim rule), so skipping it here would lose it for good.
-    // A failure here costs only the moves, never the run's progress.
-    let statusChanges: StatusChange[] = [];
-    try {
-      statusChanges = await evaluateShopifyTransitions(db, workspaceId, transitions, now);
-    } catch (e) {
-      console.warn(
-        "[sync] " +
-          JSON.stringify({ workspaceId, statusRules: e instanceof Error ? e.name : "failed" }),
-      );
+    // Shopify -> app status rules for the snapshot changes that landed.
+    await evaluate(transitions);
+
+    // Cards attached this run that still show their draft: load their
+    // orders (an update of the card, never a new order).
+    if (attachedRowIds.length > 0) {
+      const ensured = await ensureOrderSnapshots(db, workspaceId, attachedRowIds, shopify, now);
+      ensured.updatedOrderIds.forEach(noteUpdated);
+      statusChanges.push(...ensured.statusChanges);
     }
 
     // When the window this run worked on was opened: this run's own now for
@@ -669,7 +797,7 @@ export async function runSync(
         syncCursorSince: sinceMs,
         runningUntil: 0,
         status: "ok",
-        lastError: null,
+        lastError: draftErrorText(),
       };
     } else {
       // Window complete. One rule holds for both cases: lastSyncAt never
@@ -695,33 +823,18 @@ export async function runSync(
         syncCursorSince: null,
         runningUntil: 0,
         status: "ok",
-        lastError: null,
+        lastError: draftErrorText(),
       };
     }
-    const held = await fencedConnectionWrite(db, workspaceId, myLease, terminal);
-    return {
-      added,
-      updated,
-      addedOrderIds,
-      updatedOrderIds,
-      ...(held ? {} : { superseded: true }),
-      ...(statusChanges.length > 0 ? { statusChanges } : {}),
-    };
+    return finish(terminal);
   } catch (e) {
-    // Unexpected throw: release the lease and surface the message; the counts
-    // so far go back so callers can still broadcast what landed.
+    // Unexpected throw: release the lease and surface the message; what
+    // landed so far goes back so callers can still broadcast it.
     const message = clip(e instanceof Error ? e.message : "sync failed unexpectedly");
     const held = await fencedConnectionWrite(db, workspaceId, myLease, {
       lastError: message,
       runningUntil: 0,
     });
-    return {
-      added,
-      updated,
-      addedOrderIds,
-      updatedOrderIds,
-      error: message,
-      ...(held ? {} : { superseded: true }),
-    };
+    return landed({ error: message, ...(held ? {} : { superseded: true }) });
   }
 }

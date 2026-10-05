@@ -302,12 +302,12 @@ async function runJob(
     return;
   }
   const outcome = await upsertFetchedOrder(db, workspaceId, order, now);
-  if (outcome.kind === "unchanged") {
+  if (outcome.kind === "unchanged" || outcome.kind === "deferred") {
     return;
   }
   await broadcastSync(env, workspaceId, {
     addedOrderIds: outcome.kind === "added" ? [outcome.orderId] : [],
-    updatedOrderIds: outcome.kind === "updated" ? [outcome.orderId] : [],
+    updatedOrderIds: outcome.kind === "added" ? [] : [outcome.orderId],
   });
   // A new order is announced (push and email); notifyNewOrders claims it,
   // so a cron run that lands it too announces nothing twice.

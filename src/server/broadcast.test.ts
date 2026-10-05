@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import type { LiveEvent } from "../lib/live-events";
-import { broadcast, broadcastSync, kickUsers } from "./broadcast";
+import { broadcast, broadcastMerges, broadcastSync, kickUsers } from "./broadcast";
 
 const WS = "ws_impact";
 
@@ -124,5 +124,23 @@ describe("kickUsers", () => {
     await expect(kickUsers(broken.env, WS, ["u_marta"])).resolves.toBeUndefined();
     expect(warn).toHaveBeenCalled();
     await expect(kickUsers({} as CloudflareEnv, WS, ["u_marta"])).resolves.toBeUndefined();
+  });
+});
+
+// Draft orders (spec section 6.4): an order card folded into a draft card
+// tells open desks which id went and which one it became.
+describe("broadcastMerges", () => {
+  it("sends one order.merged event per merge, and nothing for none", async () => {
+    const { env, calls } = fakeEnv(() => Response.json({ sent: 1 }));
+    await broadcastMerges(env, WS, []);
+    expect(calls).toEqual([]);
+    await broadcastMerges(env, WS, [
+      { fromId: "o_orphan", toId: "o_draft" },
+      { fromId: "o_b", toId: "o_c" },
+    ]);
+    expect(calls.map((call) => JSON.parse(call.body))).toEqual([
+      { kind: "order.merged", fromId: "o_orphan", toId: "o_draft" },
+      { kind: "order.merged", fromId: "o_b", toId: "o_c" },
+    ]);
   });
 });

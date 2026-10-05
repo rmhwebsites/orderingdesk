@@ -94,6 +94,13 @@ export function applyLiveEvent(
     case "orders.imported":
       return { state, effects: { ...NO_EFFECTS, refetch: true } };
 
+    // An order card folded into its draft card: reload the list. (Dropping
+    // the old id and moving an open drawer to the new one comes with the
+    // desk's draft order work; until then parseLiveEvent does not pass this
+    // kind on.)
+    case "order.merged":
+      return { state, effects: { ...NO_EFFECTS, refetch: true } };
+
     case "order.status": {
       const change = event.order;
       const byOther = event.event.actorId !== selfUserId;

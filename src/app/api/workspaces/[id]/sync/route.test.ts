@@ -21,7 +21,10 @@ vi.mock("@opennextjs/cloudflare", () => ({
 }));
 vi.mock("@/server/auth", () => ({ getAuth: async () => ({ api: { getSession: async () => state.session } }) }));
 vi.mock("@/db", () => ({ getDb: () => state.db, getDbFromEnv: () => state.db }));
-vi.mock("@/server/broadcast", () => ({ broadcastSync: vi.fn(async () => undefined) }));
+vi.mock("@/server/broadcast", () => ({
+  broadcastSync: vi.fn(async () => undefined),
+  broadcastMerges: vi.fn(async () => undefined),
+}));
 vi.mock("@/server/shopify/fanout", () => ({ shareShopifyMoves: vi.fn(async () => undefined) }));
 vi.mock("@/server/notify", () => ({ notifyNewOrders: vi.fn(async () => ({ claimed: 0, announced: [], pushed: 0, emailed: 0 })) }));
 vi.mock("@/server/desk/sync", async (importOriginal) => {
@@ -32,6 +35,7 @@ vi.mock("@/server/desk/sync", async (importOriginal) => {
 const { POST } = await import("./route");
 const { manualSync } = await import("@/server/desk/sync");
 const { notifyNewOrders } = await import("@/server/notify");
+const { broadcastMerges } = await import("@/server/broadcast");
 
 const context = { params: Promise.resolve({ id: "ws_impact" }) };
 const result = (overrides: Partial<SyncResult> = {}): SyncResult => ({
@@ -77,5 +81,15 @@ describe("POST /api/workspaces/[id]/sync", () => {
     expect((await POST(new Request("https://x/"), context)).status).toBe(502);
     await Promise.all(state.after);
     expect(vi.mocked(notifyNewOrders).mock.calls.map((call) => call[3])).toEqual([["o2"]]);
+  });
+
+  it("broadcasts the order cards the run folded into draft cards", async () => {
+    state.session = { user: { id: "u_staff", email: "staff@example.com" } };
+    vi.mocked(broadcastMerges).mockClear();
+    const merged = [{ fromId: "o_orphan", toId: "o_draft" }];
+    vi.mocked(manualSync).mockResolvedValue({ kind: "done", result: result({ updated: 1, updatedOrderIds: ["o_draft"], mergedOrders: merged }) });
+    expect((await POST(new Request("https://x/"), context)).status).toBe(200);
+    await Promise.all(state.after);
+    expect(vi.mocked(broadcastMerges).mock.calls.map((call) => [call[1], call[2]])).toEqual([["ws_impact", merged]]);
   });
 });

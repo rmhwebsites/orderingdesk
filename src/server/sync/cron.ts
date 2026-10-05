@@ -1,7 +1,7 @@
 import { lt, ne } from "drizzle-orm";
 import { getDbFromEnv, type Db } from "../../db";
 import { storeConnections, webhookDeliveries } from "../../db/schema";
-import { broadcastImported, broadcastSync, kickUsers } from "../broadcast";
+import { broadcastImported, broadcastMerges, broadcastSync, kickUsers } from "../broadcast";
 import { notifyNewOrders } from "../notify";
 import { shareShopifyMoves } from "../shopify/fanout";
 import { syncRoster } from "../shopify/roster-sync";
@@ -26,8 +26,10 @@ export async function runAllSyncs(db: Db, env: CloudflareEnv, opts?: SyncOptions
     // One workspace blowing up must not take down the rest of the tick.
     try {
       const result = await runSync(db, env, workspaceId, opts);
-      // Open desks refresh from the landed ids (never throws).
+      // Open desks refresh from the landed ids, and drop the order cards
+      // folded into draft cards (never throws).
       await broadcastSync(env, workspaceId, result);
+      await broadcastMerges(env, workspaceId, result.mergedOrders ?? []);
       // Push and email for the orders this run inserted (never throws;
       // each order is announced once, whichever path landed it).
       await notifyNewOrders(db, env, workspaceId, result.addedOrderIds, opts);

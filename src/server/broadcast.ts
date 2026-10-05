@@ -72,6 +72,19 @@ export async function broadcastSync(
   });
 }
 
+// Order cards folded into draft cards (src/server/sync/drafts.ts
+// mergeOrderIntoDraft): one order.merged event each, so open desks drop
+// fromId and follow toId (an open drawer switches to it).
+export async function broadcastMerges(
+  env: CloudflareEnv,
+  workspaceId: string,
+  merges: readonly { fromId: string; toId: string }[],
+): Promise<void> {
+  for (const merge of merges) {
+    await broadcast(env, workspaceId, { kind: "order.merged", fromId: merge.fromId, toId: merge.toId });
+  }
+}
+
 // After an order history import tick (src/server/sync/backfill.ts) landed
 // orders: one orders.imported event, so open desks refresh. Old orders are
 // not arrivals, so no ids travel (nothing to announce or flash).

@@ -391,6 +391,52 @@ describe("runBackfillTick", () => {
     expect(known.shopify).toMatchObject({ note: "stored by the sync" });
   });
 
+  // Draft orders spec D11 and section 13: the import brings orders only. It
+  // never creates a draft card, never looks drafts up, and an order that is
+  // already a card that was a draft (it carries the order id) is skipped.
+  it("imports orders only, never drafts, and skips an order already attached to a draft card", async () => {
+    const { db, env } = await setup({ scopes: [...WITH_ALL_ORDERS, "write_draft_orders"] });
+    await db.insert(schema.orders).values([
+      {
+        id: "open_draft",
+        workspaceId: WS,
+        shopifyOrderId: null,
+        shopifyDraftId: "55",
+        draftName: "#D55",
+        name: "#D55",
+        shopify: { kind: "draft", name: "#D55" },
+        statusKey: "new",
+        createdAt: NOW - 95 * DAY,
+        syncedAt: NOW - 5000,
+      },
+      {
+        id: "was_draft",
+        workspaceId: WS,
+        shopifyOrderId: "801",
+        shopifyDraftId: "56",
+        draftName: "#D56",
+        name: "#801",
+        shopify: snapshotOf({ shopifyOrderId: "801", name: "#801" }),
+        statusKey: "approved",
+        createdAt: NOW - 96 * DAY,
+        syncedAt: NOW - 5000,
+      },
+    ]);
+    const store = shop([
+      { id: 801, createdAtMs: NOW - 90 * DAY },
+      { id: 802, createdAtMs: NOW - 91 * DAY },
+    ]);
+    await startAll(db);
+    const result = await tick(db, env, store.impl);
+    expect(result.imported).toBe(1);
+    expect(store.requests.every((request) => request.query.includes("OrderHistory"))).toBe(true);
+    const all = await db.select().from(schema.orders).where(eq(schema.orders.workspaceId, WS));
+    const byKind = (row: (typeof all)[number]) => `${row.shopifyOrderId ?? "-"}/${row.shopifyDraftId ?? "-"}`;
+    expect(all.map(byKind).sort()).toEqual(["-/55", "801/56", "802/-"]);
+    const [wasDraft] = all.filter((row) => row.id === "was_draft");
+    expect(wasDraft).toMatchObject({ statusKey: "approved", syncedAt: NOW - 5000, name: "#801" });
+  });
+
   it("leaves orders from the last day and outside the range to the regular sync, whatever Shopify returns", async () => {
     const { db, env } = await setup();
     await startBackfill(db, WS, { range: "since", since: NOW - 100 * DAY }, NOW);

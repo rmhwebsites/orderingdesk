@@ -2,6 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   completeDraft,
   DRAFT_LINK_CHUNK,
+  DRAFT_SCOPES,
+  draftsEnabled,
+  missingDraftScopes,
   draftGid,
   fetchDraftForApprove,
   fetchDraftLinks,
@@ -225,5 +228,22 @@ describe("completeDraft", () => {
       kind: "transient",
       detail: "Shopify request timed out",
     });
+  });
+});
+
+// Draft orders are an optional feature (spec section 14): they sync only
+// when the app was granted the draft scopes, and a write scope implies its
+// read scope.
+describe("draft scopes", () => {
+  it("needs read and write draft orders, with write implying read", () => {
+    expect(DRAFT_SCOPES).toEqual(["read_draft_orders", "write_draft_orders"]);
+    expect(missingDraftScopes([])).toEqual(["read_draft_orders", "write_draft_orders"]);
+    expect(missingDraftScopes(["read_draft_orders"])).toEqual(["write_draft_orders"]);
+    expect(missingDraftScopes(["write_draft_orders"])).toEqual([]);
+    expect(missingDraftScopes(["read_orders", "read_draft_orders", "write_draft_orders"])).toEqual([]);
+    expect(draftsEnabled(["write_draft_orders", "read_orders"])).toBe(true);
+    expect(draftsEnabled(["read_draft_orders", "write_orders"])).toBe(false);
+    expect(draftsEnabled(null)).toBe(false);
+    expect(draftsEnabled(undefined)).toBe(false);
   });
 });
