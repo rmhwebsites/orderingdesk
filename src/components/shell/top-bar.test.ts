@@ -10,8 +10,10 @@ vi.mock("./workspace-provider", () => ({
     sync: { status: "ready", connection: null },
     manual: { running: false, cooldownUntil: 0, failure: null },
     runManualSync: () => {},
+    subscribe: () => () => {},
   }),
 }));
+vi.mock("@/components/toasts", () => ({ useToast: () => () => {} }));
 
 const { TopBar } = await import("./top-bar");
 
@@ -44,5 +46,18 @@ describe("TopBar from lg up", () => {
     expect(chip).toContain("shrink-0");
     expect(chip).not.toContain("min-w-0");
     expect(html).not.toMatch(/<span class="truncate">Store not connected<\/span>/);
+  });
+});
+
+describe("TopBar bell", () => {
+  // Last in the controls row, so its dropdown (right aligned to it) stays
+  // on screen at phone width.
+  it("puts the activity bell last in the controls row, labeled for screen readers", () => {
+    const html = renderToStaticMarkup(createElement(TopBar, { name: "Impact", images: { logo: null, symbol: null } }));
+    const controls = html.match(/<div class="[^"]*lg:order-3[^"]*">([\s\S]*)<\/div><\/div><\/header>/);
+    expect(controls).not.toBeNull();
+    const row = controls![1];
+    expect(row.lastIndexOf('aria-label="Activity"')).toBeGreaterThan(row.lastIndexOf("Settings"));
+    expect(html).toContain('aria-expanded="false"');
   });
 });

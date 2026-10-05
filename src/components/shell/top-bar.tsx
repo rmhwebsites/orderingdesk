@@ -14,6 +14,7 @@ import { CHIP_TONE_COLOR, syncChipState, type ChipTone } from "@/lib/sync-status
 import { useNow } from "@/lib/use-now";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { ui } from "@/components/ui";
+import { Bell } from "./bell";
 import { useWorkspace } from "./workspace-provider";
 import { WorkspaceBrandSlot } from "./workspace-brand-slot";
 
@@ -128,6 +129,8 @@ export function TopBar({ name, images }: { name: string; images: BrandImages }) 
             <GearSixIcon size={18} aria-hidden />
             <span className="sr-only sm:not-sr-only">Settings</span>
           </Link>
+          {/* Last, so its dropdown, right aligned to it, stays on screen. */}
+          <Bell />
         </div>
       </div>
     </header>

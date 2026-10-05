@@ -31,7 +31,7 @@ export function SettingsPage({ data }: { data: SettingsPageData }) {
         <h1 className="font-display text-2xl font-semibold tracking-tight text-ink">Settings</h1>
         <p className="text-sm text-ink-2">
           {workspace.name}. You are signed in as {roleLabel(data.role).toLowerCase()}
-          {data.role === "staff" ? ", so you can see these settings but not change them." : "."}
+          {data.role === "staff" ? ", so you can change your own notifications and see the rest." : "."}
         </p>
         {data.hubSettingsUrl ? (
           <div className="mt-2 w-full max-w-3xl">
