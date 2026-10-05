@@ -3,21 +3,33 @@
 // reads what a role may see) and its client sections (which hide controls);
 // the API routes enforce every check on their own.
 //
+// - Everyone: their own notification choices and this device's push
+//   (Your notifications), first.
 // - Staff: the store's status and the vendor list, read only.
-// - Managers: also the team, statuses, vendors and notification settings.
+// - Managers: also the team, statuses, vendors and the workspace email
+//   settings (who gets new order and purchase order email).
 // - Platform admins: everything, including the store connection, roster
 //   tags, email sender, custom domain and branding.
 
 import { roleAtLeast, type Role } from "./roles";
 
-export type SettingsSection = "store" | "team" | "statuses" | "vendors" | "notifications" | "domain" | "branding";
+export type SettingsSection =
+  | "alerts"
+  | "store"
+  | "team"
+  | "statuses"
+  | "vendors"
+  | "notifications"
+  | "domain"
+  | "branding";
 
 export const SETTINGS_SECTION_LABELS: Record<SettingsSection, string> = {
+  alerts: "Your notifications",
   store: "Store connection",
   team: "Team",
   statuses: "Statuses",
   vendors: "Vendors",
-  notifications: "Notifications and email",
+  notifications: "Workspace email",
   domain: "Custom domain",
   branding: "Branding",
 };
@@ -37,7 +49,7 @@ export type SettingsAccess = {
 export function settingsAccess(role: Role): SettingsAccess {
   const manager = roleAtLeast(role, "manager");
   const platform = roleAtLeast(role, "platform");
-  const sections: SettingsSection[] = ["store"];
+  const sections: SettingsSection[] = ["alerts", "store"];
   if (manager) {
     sections.push("team", "statuses");
   }

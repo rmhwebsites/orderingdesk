@@ -8,6 +8,7 @@ import { ui } from "@/components/ui";
 import { BrandingSection } from "./branding";
 import { CustomDomainSection } from "./custom-domain";
 import { InlineMessage } from "./kit";
+import { MyNotificationsSection } from "./my-notifications";
 import { NotificationsSection } from "./notifications";
 import { StatusesSection } from "./statuses";
 import { StoreConnectionSection } from "./store-connection";
@@ -62,6 +63,7 @@ export function SettingsPage({ data }: { data: SettingsPageData }) {
         </nav>
 
         <div className="flex min-w-0 max-w-5xl flex-col gap-12">
+          <MyNotificationsSection workspaceId={workspace.id} workspaceName={workspace.name} initial={data.alerts} />
           <StoreConnectionSection workspaceId={workspace.id} initial={data.connection} canEdit={access.canEditStore} />
           {data.team ? (
             <TeamSection

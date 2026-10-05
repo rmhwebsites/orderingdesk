@@ -117,7 +117,7 @@ export function CustomDomainSection({ workspaceId, initial }: { workspaceId: str
         {reason && view.status === "error" ? <InlineMessage tone="bad">{reason}</InlineMessage> : null}
         {view.status === "active" && reason === null && busy === null && view.domain ? (
           <p className="text-sm text-ink-2">
-            {view.domain} opens this workspace. Email from it can be set up under Notifications and email.
+            {view.domain} opens this workspace. Email from it can be set up under Workspace email.
           </p>
         ) : null}
         <form onSubmit={save} className="flex flex-col gap-3 sm:flex-row sm:items-end">

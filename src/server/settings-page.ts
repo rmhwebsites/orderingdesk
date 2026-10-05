@@ -18,6 +18,7 @@ import type { DomainView } from "./domains";
 import { loadMailWorkspace } from "./email/workspace";
 import { appOrigin } from "./host";
 import { listMembers, type MemberView, type PendingInviteView } from "./members";
+import { getNotificationPrefs, type NotificationPrefsView } from "./notification-prefs";
 import { resolveRosterTags, type RosterRequests } from "./roster";
 import { senderView, type SenderView } from "./sender";
 import type { RosterTags } from "@/db/schema";
@@ -27,6 +28,9 @@ export type SettingsPageData = {
   role: Role;
   viewerUserId: string;
   access: SettingsAccess;
+  // The viewer's own notification choices here (everyone sees this
+  // section); member is false for a platform admin who is not a member.
+  alerts: { member: boolean; prefs: NotificationPrefsView };
   connection: ConnectionSettingsView | null;
   vendors: VendorView[];
   team: { members: MemberView[]; invites: PendingInviteView[]; requests: RosterRequests; rosterTags: RosterTags } | null;
@@ -61,7 +65,8 @@ export async function loadSettingsPage(
   const access = settingsAccess(role);
   const shows = (section: SettingsAccess["sections"][number]) => access.sections.includes(section);
 
-  const [connection, vendors, team, statusRows, settings, mail] = await Promise.all([
+  const [alerts, connection, vendors, team, statusRows, settings, mail] = await Promise.all([
+    getNotificationPrefs(db, workspace.id, input.userId),
     getConnectionSettings(db, workspace.id),
     listVendors(db, workspace.id),
     shows("team") ? listMembers(db, workspace.id, { includeInvites: true }) : Promise.resolve(null),
@@ -77,6 +82,7 @@ export async function loadSettingsPage(
     role,
     viewerUserId: input.userId,
     access,
+    alerts,
     connection,
     vendors,
     team: team

@@ -1,10 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { settingsAccess } from "./settings-access";
+import { SETTINGS_SECTION_LABELS, settingsAccess } from "./settings-access";
 
 describe("settingsAccess", () => {
-  it("shows staff the store status and the vendor list, editing nothing", () => {
+  // Phase 6: everyone has their own notification choices, first.
+  it("shows staff their own notifications, the store status and the vendor list, editing nothing else", () => {
     expect(settingsAccess("staff")).toEqual({
-      sections: ["store", "vendors"],
+      sections: ["alerts", "store", "vendors"],
       canEditStore: false,
       canEditTeam: false,
       canEditRosterTags: false,
@@ -17,7 +18,7 @@ describe("settingsAccess", () => {
 
   it("gives managers the team, statuses, vendors and notifications, not the platform settings", () => {
     expect(settingsAccess("manager")).toEqual({
-      sections: ["store", "team", "statuses", "vendors", "notifications"],
+      sections: ["alerts", "store", "team", "statuses", "vendors", "notifications"],
       canEditStore: false,
       canEditTeam: true,
       canEditRosterTags: false,
@@ -30,7 +31,7 @@ describe("settingsAccess", () => {
 
   it("gives platform admins everything", () => {
     expect(settingsAccess("platform")).toEqual({
-      sections: ["store", "team", "statuses", "vendors", "notifications", "domain", "branding"],
+      sections: ["alerts", "store", "team", "statuses", "vendors", "notifications", "domain", "branding"],
       canEditStore: true,
       canEditTeam: true,
       canEditRosterTags: true,
@@ -39,5 +40,10 @@ describe("settingsAccess", () => {
       canEditNotifications: true,
       canEditSender: true,
     });
+  });
+
+  it("labels a person's own notifications apart from the workspace email settings", () => {
+    expect(SETTINGS_SECTION_LABELS.alerts).toBe("Your notifications");
+    expect(SETTINGS_SECTION_LABELS.notifications).toBe("Workspace email");
   });
 });

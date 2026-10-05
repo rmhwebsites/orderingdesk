@@ -42,7 +42,8 @@ describe("loadSettingsPage", () => {
   it("reads only the store status and vendors for staff", async () => {
     const { db, workspace } = await setup();
     const page = await loadSettingsPage(db, env, { workspace, role: "staff", userId: "u_crew", basePath: "/w/ws_impact" });
-    expect(page.access.sections).toEqual(["store", "vendors"]);
+    expect(page.access.sections).toEqual(["alerts", "store", "vendors"]);
+    expect(page.alerts).toEqual({ member: true, prefs: { pushNewOrders: true, emailNewOrders: true, pushAllActivity: false } });
     expect(page.connection?.shopDomain).toBe("impact-rentals.myshopify.com");
     expect(page.vendors.map((vendor) => vendor.name)).toEqual(["Hard Hat Supply"]);
     expect(page.team).toBeNull();
@@ -83,6 +84,8 @@ describe("loadSettingsPage", () => {
     });
     expect(page.workspace).toEqual({ id: WS, name: "Workspace ws_impact", slug: WS, basePath: "" });
     expect(page.viewerUserId).toBe("u_boss");
+    // Not a member: nothing in this workspace notifies them.
+    expect(page.alerts.member).toBe(false);
     expect(page.hubSettingsUrl).toBeNull();
   });
 

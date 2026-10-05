@@ -312,12 +312,15 @@ export function Switch({
   onChange,
   label,
   disabled,
+  describedBy,
 }: {
   id: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
   label: string;
   disabled?: boolean;
+  // The id of help text about the switch, read with it.
+  describedBy?: string;
 }) {
   return (
     <label htmlFor={id} className="inline-flex cursor-pointer items-center gap-2.5 text-sm text-ink has-[:disabled]:cursor-not-allowed">
@@ -328,6 +331,7 @@ export function Switch({
           role="switch"
           checked={checked}
           disabled={disabled}
+          aria-describedby={describedBy}
           onChange={(event) => onChange(event.target.checked)}
           className="peer absolute inset-0 z-10 cursor-pointer opacity-0 disabled:cursor-not-allowed"
         />

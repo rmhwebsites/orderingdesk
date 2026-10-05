@@ -265,8 +265,8 @@ export function NotificationsSection({
   return (
     <SettingsSection
       id="notifications"
-      title="Notifications and email"
-      description="Who hears about new orders and purchase orders, and how workspace email is addressed."
+      title="Workspace email"
+      description="Who else gets new order and purchase order email, and how workspace email is addressed. Each person picks their own push and email under Your notifications."
     >
       <Panel>
         <EmailSettings workspaceId={workspaceId} initial={settings} />
