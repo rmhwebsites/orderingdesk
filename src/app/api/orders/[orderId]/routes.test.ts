@@ -1,6 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Db } from "@/db";
-import { openTestDb, seedMember, seedOrder, seedUser, seedWorkspace } from "@/server/desk/test-helpers";
+import {
+  openTestDb,
+  seedDraft,
+  seedDraftStatuses,
+  seedMember,
+  seedOrder,
+  seedUser,
+  seedWorkspace,
+} from "@/server/desk/test-helpers";
 
 // The status and note routes: guards, the write, and what runs after the
 // response (since Phase 6 that includes the all-activity push). The room,
@@ -65,6 +73,21 @@ describe("POST /api/orders/[orderId]/status and /note", () => {
       ["ws_impact", event.id],
     ]);
     expect(event.actorId).toBe("u_staff");
+  });
+
+  it("answers 403 when staff move a rejected request and 400 for a status a request cannot take", async () => {
+    const db = state.db as Db;
+    await seedDraftStatuses(db, "ws_impact");
+    await seedDraft(db, "ws_impact", { id: "d1", statusKey: "rejected" });
+    await seedDraft(db, "ws_impact", { id: "d2" });
+    state.session = { user: { id: "u_staff", email: "staff@example.com" } };
+    const rejected = await STATUS(post({ statusKey: "new" }), { params: Promise.resolve({ orderId: "d1" }) });
+    expect(rejected.status).toBe(403);
+    expect(await rejected.json()).toEqual({ error: "Only a manager can reopen a rejected request." });
+    const approve = await STATUS(post({ statusKey: "approved" }), { params: Promise.resolve({ orderId: "d2" }) });
+    expect(approve.status).toBe(400);
+    expect(await approve.json()).toEqual({ error: "Use Approve to approve this request. It creates the order in Shopify." });
+    expect(state.after).toEqual([]);
   });
 
   it("hands a note to the all-activity push after the response", async () => {

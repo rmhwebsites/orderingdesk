@@ -11,9 +11,9 @@ type RouteContext = { params: Promise<{ orderId: string }> };
 export async function POST(request: Request, context: RouteContext) {
   try {
     const { orderId } = await context.params;
-    const { db, userId, workspaceId } = await requireMemberByOrder(orderId, "staff");
+    const { db, userId, workspaceId, role } = await requireMemberByOrder(orderId, "staff");
     const body = (await request.json().catch(() => null)) as unknown;
-    const result = await addOrderNote(db, { workspaceId, orderId, userId }, body);
+    const result = await addOrderNote(db, { workspaceId, orderId, userId, role }, body);
     switch (result.kind) {
       case "invalid":
         return NextResponse.json({ error: result.error }, { status: 400 });

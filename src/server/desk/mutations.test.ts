@@ -3,7 +3,15 @@ import { eq } from "drizzle-orm";
 import type { Db } from "@/db";
 import * as schema from "@/db/schema";
 import { NOTE_MAX, addOrderNote, changeOrderStatus } from "./mutations";
-import { openTestDb, seedOrder, seedWorkspace, snapshotOf, withBatch } from "./test-helpers";
+import {
+  openTestDb,
+  seedDraft,
+  seedDraftStatuses,
+  seedOrder,
+  seedWorkspace,
+  snapshotOf,
+  withBatch,
+} from "./test-helpers";
 
 const WS = "ws_impact";
 const OTHER = "ws_other";
@@ -26,7 +34,13 @@ async function setup() {
   return db;
 }
 
-const ctx = (orderId = "o1") => ({ workspaceId: WS, orderId, userId: USER, now: NOW });
+const ctx = (orderId = "o1", role: "staff" | "manager" | "platform" = "staff") => ({
+  workspaceId: WS,
+  orderId,
+  userId: USER,
+  role,
+  now: NOW,
+});
 
 async function orderRow(db: Db, id: string) {
   const rows = await db.select().from(schema.orders).where(eq(schema.orders.id, id));
@@ -184,6 +198,80 @@ describe("changeOrderStatus", () => {
     expect(result).toEqual({ kind: "not-found" });
     expect(await orderRow(db, "x1")).toEqual(before);
     expect(await eventsOf(db, OTHER)).toEqual([]);
+  });
+});
+
+// Draft orders spec section 8.2 and section 18 item 5.
+describe("changeOrderStatus on draft cards", () => {
+  async function draftSetup(statusKey = "new") {
+    const db = await setup();
+    await seedDraftStatuses(db, WS);
+    await seedDraft(db, WS, { id: "d1", draftId: "12", name: "#D12", statusKey });
+    return db;
+  }
+
+  it("lets staff move a request between statuses with no Shopify link", async () => {
+    const db = await draftSetup();
+    const result = await changeOrderStatus(db, ctx("d1"), { statusKey: "processing" });
+    expect(result).toMatchObject({ kind: "changed", order: { statusKey: "processing" }, triggersPo: false });
+    expect((await changeOrderStatus(db, ctx("d1"), { statusKey: "issue" })).kind).toBe("changed");
+  });
+
+  it("refuses the fulfilled and delivered statuses for a request", async () => {
+    const db = await draftSetup();
+    expect(await changeOrderStatus(db, ctx("d1", "manager"), { statusKey: "shipped" })).toEqual({
+      kind: "invalid",
+      error: "A draft cannot be marked Shipped until it is approved and becomes an order.",
+    });
+    expect((await orderRow(db, "d1")).statusKey).toBe("new");
+    expect(await eventsOf(db)).toEqual([]);
+  });
+
+  it("points to Approve and Reject instead of their statuses", async () => {
+    const db = await draftSetup();
+    expect(await changeOrderStatus(db, ctx("d1", "manager"), { statusKey: "approved" })).toEqual({
+      kind: "invalid",
+      error: "Use Approve to approve this request. It creates the order in Shopify.",
+    });
+    expect(await changeOrderStatus(db, ctx("d1", "platform"), { statusKey: "rejected" })).toEqual({
+      kind: "invalid",
+      error: "Use Reject to reject this request. It asks for a reason.",
+    });
+    expect(await eventsOf(db)).toEqual([]);
+  });
+
+  it("lets only a manager or platform admin reopen a rejected request", async () => {
+    const db = await draftSetup("rejected");
+    expect(await changeOrderStatus(db, ctx("d1", "staff"), { statusKey: "processing" })).toEqual({
+      kind: "forbidden",
+      error: "Only a manager can reopen a rejected request.",
+    });
+    expect((await orderRow(db, "d1")).statusKey).toBe("rejected");
+    expect((await changeOrderStatus(db, ctx("d1", "manager"), { statusKey: "processing" })).kind).toBe("changed");
+    await db.update(schema.orders).set({ statusKey: "rejected" }).where(eq(schema.orders.id, "d1"));
+    expect((await changeOrderStatus(db, ctx("d1", "platform"), { statusKey: "new" })).kind).toBe("changed");
+  });
+
+  it("never rejects an order, and keeps every other status open to orders", async () => {
+    const db = await draftSetup();
+    expect(await changeOrderStatus(db, ctx("o1", "manager"), { statusKey: "rejected" })).toEqual({
+      kind: "invalid",
+      error: "Rejected is for requests that are still drafts.",
+    });
+    expect(await changeOrderStatus(db, ctx("o1"), { statusKey: "approved" })).toMatchObject({
+      kind: "changed",
+      triggersPo: true,
+    });
+    expect((await changeOrderStatus(db, ctx("o1"), { statusKey: "shipped" })).kind).toBe("changed");
+  });
+
+  it("never asks for a purchase order on a request", async () => {
+    const db = await draftSetup();
+    await db.update(schema.statuses).set({ triggersPo: true }).where(eq(schema.statuses.key, "processing"));
+    expect(await changeOrderStatus(db, ctx("d1"), { statusKey: "processing" })).toMatchObject({
+      kind: "changed",
+      triggersPo: false,
+    });
   });
 });
 

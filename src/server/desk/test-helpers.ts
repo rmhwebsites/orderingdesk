@@ -8,6 +8,7 @@ import Database from "better-sqlite3";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { and, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import type { Db } from "@/db";
 import * as schema from "@/db/schema";
@@ -158,6 +159,94 @@ export function snapshotOf(overrides: Record<string, unknown> = {}): Record<stri
     note: "",
     ...overrides,
   };
+}
+
+// A draft card (draft orders spec section 2): no Shopify order id yet, the
+// draft's legacy id and name, and a draft snapshot. Plain records again.
+export function draftSnapshotOf(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    kind: "draft",
+    shopifyDraftId: "12",
+    name: "#D12",
+    status: "open",
+    createdAt: 1000,
+    completedAt: null,
+    orderId: null,
+    orderName: null,
+    customerName: "Jordan Vale",
+    email: "jordan@example.com",
+    company: "Impact Rentals",
+    location: "Buford, GA",
+    attributes: [],
+    discountCodes: [],
+    discount: null,
+    subtotal: "0.00",
+    discounts: "0.00",
+    total: "0.00",
+    currency: "USD",
+    items: [{ title: "Business cards", qty: 1, price: "0.00", sku: "BC-1", variant: "", props: [], custom: false }],
+    itemsTruncated: false,
+    shipping: null,
+    tags: "",
+    note: "",
+    poNumber: "",
+    ...overrides,
+  };
+}
+
+export async function seedDraft(
+  db: Db,
+  workspaceId: string,
+  opts: {
+    id: string;
+    draftId?: string;
+    name?: string;
+    statusKey?: string;
+    createdAt?: number;
+    syncedAt?: number;
+    shopify?: unknown;
+    draftDeletedAt?: number | null;
+    notifiedAt?: number | null;
+  },
+) {
+  const draftId = opts.draftId ?? "d-" + opts.id;
+  const name = opts.name ?? "#D" + opts.id;
+  await db.insert(schema.orders).values({
+    id: opts.id,
+    workspaceId,
+    shopifyOrderId: null,
+    name,
+    shopify: "shopify" in opts ? opts.shopify : draftSnapshotOf({ shopifyDraftId: draftId, name }),
+    statusKey: opts.statusKey ?? "new",
+    createdAt: opts.createdAt ?? 1000,
+    syncedAt: opts.syncedAt ?? 2000,
+    notifiedAt: opts.notifiedAt ?? null,
+    shopifyDraftId: draftId,
+    draftName: name,
+    draftDeletedAt: opts.draftDeletedAt ?? null,
+  });
+}
+
+// Links Approved to draft_completed and adds Issue and Rejected
+// (draft_rejected) after the TEST_STATUSES, as migration 0010 does for an
+// existing workspace.
+export async function seedDraftStatuses(db: Db, workspaceId: string) {
+  await db
+    .update(schema.statuses)
+    .set({ shopifyLink: "draft_completed" })
+    .where(and(eq(schema.statuses.workspaceId, workspaceId), eq(schema.statuses.key, "approved")));
+  await db.insert(schema.statuses).values([
+    { id: `${workspaceId}_st_issue`, workspaceId, key: "issue", label: "Issue", color: "red", sort: 4 },
+    {
+      id: `${workspaceId}_st_rejected`,
+      workspaceId,
+      key: "rejected",
+      label: "Rejected",
+      color: "pink",
+      sort: 5,
+      shopifyLink: "draft_rejected",
+    },
+  ]);
 }
 
 export async function seedOrder(

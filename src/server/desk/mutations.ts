@@ -8,6 +8,7 @@ import type { Db } from "@/db";
 import { applyBatch, rowsAffected } from "@/db/batch";
 import { events, orders, statuses } from "@/db/schema";
 import { NOTE_MAX } from "@/lib/limits";
+import { roleAtLeast, type Role } from "@/lib/roles";
 import { eventView, isRecord, type EventView } from "./shapes";
 
 // Shared with the note composer (src/lib/limits.ts).
@@ -17,12 +18,16 @@ export type MutationContext = {
   workspaceId: string;
   orderId: string;
   userId: string;
+  // The caller's effective role in the workspace (requireMemberByOrder).
+  role: Role;
   // Injectable clock for tests.
   now?: number;
 };
 
 export type StatusChangeResult =
   | { kind: "invalid"; error: string }
+  // The rule needs a manager (the route answers 403).
+  | { kind: "forbidden"; error: string }
   | { kind: "not-found" }
   | { kind: "unchanged" }
   | {
@@ -39,7 +44,7 @@ export type NoteResult =
 
 async function findOrder(db: Db, ctx: MutationContext) {
   const rows = await db
-    .select({ id: orders.id, statusKey: orders.statusKey })
+    .select({ id: orders.id, statusKey: orders.statusKey, shopifyOrderId: orders.shopifyOrderId })
     .from(orders)
     .where(and(eq(orders.id, ctx.orderId), eq(orders.workspaceId, ctx.workspaceId)))
     .limit(1);
@@ -51,6 +56,17 @@ async function findOrder(db: Db, ctx: MutationContext) {
 // columns change (statusKey, statusSetBy, statusSetAt): the Shopify snapshot
 // and synced_at belong to the sync engine. Concurrent changes resolve last
 // writer wins; each one still leaves its own event.
+//
+// Draft cards (draft orders spec section 8.2 and section 18 item 5; a card
+// is a draft while it has no Shopify order id):
+// - a request moves freely between statuses with no Shopify link, staff
+//   included;
+// - never into a status linked to fulfilled or delivered (it is not an
+//   order yet), nor to draft_completed or draft_rejected (Approve and
+//   Reject do that, with their own checks and the reason);
+// - out of the draft_rejected status only for a manager or platform admin;
+// - an order never moves into the draft_rejected status;
+// - triggersPo only for an order (a purchase order needs the Shopify order).
 export async function changeOrderStatus(
   db: Db,
   ctx: MutationContext,
@@ -64,20 +80,47 @@ export async function changeOrderStatus(
   const [order, statusRows] = await Promise.all([
     findOrder(db, ctx),
     db
-      .select({ label: statuses.label, triggersPo: statuses.triggersPo })
+      .select({
+        key: statuses.key,
+        label: statuses.label,
+        triggersPo: statuses.triggersPo,
+        shopifyLink: statuses.shopifyLink,
+      })
       .from(statuses)
-      .where(and(eq(statuses.workspaceId, ctx.workspaceId), eq(statuses.key, statusKey)))
-      .limit(1),
+      .where(eq(statuses.workspaceId, ctx.workspaceId)),
   ]);
   if (!order) {
     return { kind: "not-found" };
   }
-  const status = statusRows[0];
+  const status = statusRows.find((row) => row.key === statusKey);
   if (!status) {
     return { kind: "invalid", error: "Unknown status for this workspace" };
   }
   if (order.statusKey === statusKey) {
     return { kind: "unchanged" };
+  }
+  const isDraft = order.shopifyOrderId === null;
+  if (isDraft) {
+    const current = statusRows.find((row) => row.key === order.statusKey);
+    if (current?.shopifyLink === "draft_rejected" && !roleAtLeast(ctx.role, "manager")) {
+      return { kind: "forbidden", error: "Only a manager can reopen a rejected request." };
+    }
+    switch (status.shopifyLink) {
+      case "fulfilled":
+      case "delivered":
+        return {
+          kind: "invalid",
+          error: `A draft cannot be marked ${status.label} until it is approved and becomes an order.`,
+        };
+      case "draft_completed":
+        return { kind: "invalid", error: "Use Approve to approve this request. It creates the order in Shopify." };
+      case "draft_rejected":
+        return { kind: "invalid", error: "Use Reject to reject this request. It asks for a reason." };
+      default:
+        break;
+    }
+  } else if (status.shopifyLink === "draft_rejected") {
+    return { kind: "invalid", error: "Rejected is for requests that are still drafts." };
   }
 
   const now = ctx.now ?? Date.now();
@@ -122,7 +165,7 @@ export async function changeOrderStatus(
     kind: "changed",
     event: eventView(event),
     order: { id: order.id, statusKey, statusSetBy: ctx.userId, statusSetAt: now },
-    triggersPo: status.triggersPo,
+    triggersPo: status.triggersPo && !isDraft,
   };
 }
 

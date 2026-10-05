@@ -10,19 +10,24 @@ type RouteContext = { params: Promise<{ orderId: string }> };
 
 // Body {statusKey}. 200 {unchanged: true} when the order already has that
 // status (nothing is written); otherwise 200 {event, order, triggersPo}, where
-// triggersPo tells the client to open the PO review flow. The new status is
+// triggersPo tells the client to open the PO review flow (orders only). 400
+// for a status the card cannot take (a request into a status linked to
+// fulfilled, delivered, Draft approved or Draft rejected; an order into
+// Rejected), 403 for staff moving a request out of Rejected. The new status is
 // written to Shopify after the response (status tag, and a fulfillment for a
 // status linked to fulfilled); its outcome lands in the order's timeline and
 // a Shopify failure never undoes the change here.
 export async function POST(request: Request, context: RouteContext) {
   try {
     const { orderId } = await context.params;
-    const { db, userId, workspaceId } = await requireMemberByOrder(orderId, "staff");
+    const { db, userId, workspaceId, role } = await requireMemberByOrder(orderId, "staff");
     const body = (await request.json().catch(() => null)) as unknown;
-    const result = await changeOrderStatus(db, { workspaceId, orderId, userId }, body);
+    const result = await changeOrderStatus(db, { workspaceId, orderId, userId, role }, body);
     switch (result.kind) {
       case "invalid":
         return NextResponse.json({ error: result.error }, { status: 400 });
+      case "forbidden":
+        return NextResponse.json({ error: result.error }, { status: 403 });
       case "not-found":
         return NextResponse.json({ error: "Not found" }, { status: 404 });
       case "unchanged":
