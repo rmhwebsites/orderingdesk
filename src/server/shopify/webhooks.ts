@@ -19,7 +19,8 @@
 //   the sync's own query shape and normalizer and written through the sync's
 //   write path (upsertFetchedOrder: same claim rule, so a webhook and a sync
 //   run never regress each other), the Shopify -> app status rules run on
-//   the change, and open desks hear about it.
+//   the change, open desks hear about it, and an order the webhook inserted
+//   is announced (src/server/notify.ts, once per order).
 // - Customer topics: the customer is re-fetched (customers/delete needs no
 //   fetch) and the roster updated (roster-sync.ts).
 // - Anything else: 200 and ignored.
@@ -34,6 +35,7 @@ import { rowsAffected } from "../../db/batch";
 import { storeConnections, webhookDeliveries } from "../../db/schema";
 import { broadcastSync, kickUsers } from "../broadcast";
 import { decryptSecret } from "../crypto";
+import { notifyNewOrders } from "../notify";
 import { upsertFetchedOrder } from "../sync/run";
 import { failureText, fetchCustomer, fetchOrderNode, legacyIdOf } from "./admin";
 import { shareShopifyMoves } from "./fanout";
@@ -307,5 +309,10 @@ async function runJob(
     addedOrderIds: outcome.kind === "added" ? [outcome.orderId] : [],
     updatedOrderIds: outcome.kind === "updated" ? [outcome.orderId] : [],
   });
+  // A new order is announced (push and email); notifyNewOrders claims it,
+  // so a cron run that lands it too announces nothing twice.
+  if (outcome.kind === "added") {
+    await notifyNewOrders(db, env, workspaceId, [outcome.orderId], opts);
+  }
   await shareShopifyMoves(db, env, workspaceId, outcome.statusChanges, opts);
 }

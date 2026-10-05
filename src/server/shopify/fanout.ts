@@ -7,6 +7,7 @@
 
 import type { Db } from "../../db";
 import { broadcast } from "../broadcast";
+import { notifyActivity } from "../notify";
 import { pushOrderStatus, type StatusChange } from "./status-sync";
 
 type FanoutOptions = { fetchImpl?: typeof fetch; now?: () => number };
@@ -26,9 +27,10 @@ export async function pushAndShare(
   }
 }
 
-// Moves that came from Shopify (the sync or a webhook): broadcast each, then
-// bring the order's status tag up to date. Never fulfills: Shopify reported
-// the state these moves follow.
+// Moves that came from Shopify (the sync or a webhook): broadcast each,
+// push it to members who opted into all activity (notifyActivity never
+// throws), then bring the order's status tag up to date. Never fulfills:
+// Shopify reported the state these moves follow.
 export async function shareShopifyMoves(
   db: Db,
   env: CloudflareEnv,
@@ -38,6 +40,7 @@ export async function shareShopifyMoves(
 ): Promise<void> {
   for (const change of changes) {
     await broadcast(env, workspaceId, { kind: "order.status", event: change.event, order: change.order });
+    await notifyActivity(db, env, workspaceId, change.event, opts);
     const activity = await pushOrderStatus(db, env, workspaceId, change.order.id, { fulfill: false, ...opts });
     for (const event of activity) {
       await broadcast(env, workspaceId, { kind: "order.activity", event });

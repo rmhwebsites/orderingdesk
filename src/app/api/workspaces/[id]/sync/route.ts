@@ -3,6 +3,7 @@ import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { broadcastSync } from "@/server/broadcast";
 import { getSyncConnection, manualSync, manualSyncResponse } from "@/server/desk/sync";
 import { guardResponse, requireMember } from "@/server/guard";
+import { notifyNewOrders } from "@/server/notify";
 import { shareShopifyMoves } from "@/server/shopify/fanout";
 
 type RouteContext = { params: Promise<{ id: string }> };
@@ -30,13 +31,15 @@ export async function POST(_request: Request, context: RouteContext) {
     const outcome = await manualSync(db, env, id);
     if (outcome.kind !== "cooldown") {
       // Failed runs too: their id lists still name exactly what landed.
-      // Phase 6 hook point: notify from outcome.result.addedOrderIds here.
-      // Status moves that came from Shopify are broadcast and their status
-      // tags written back.
+      // The new orders are announced (push and email, once per order
+      // whichever path landed it); status moves that came from Shopify are
+      // broadcast and their status tags written back. All best effort,
+      // after the response.
       const { result } = outcome;
       ctx.waitUntil(
         (async () => {
           await broadcastSync(env, id, result);
+          await notifyNewOrders(db, env, id, result.addedOrderIds);
           await shareShopifyMoves(db, env, id, result.statusChanges ?? []);
         })(),
       );

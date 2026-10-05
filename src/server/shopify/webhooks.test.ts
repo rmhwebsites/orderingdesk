@@ -277,6 +277,26 @@ describe("receiveShopifyWebhook: orders", () => {
     expect(sent).toEqual([{ kind: "orders.synced", addedOrderIds: [rows[0].id], updatedOrderIds: [] }]);
   });
 
+  // Phase 6: an order a webhook inserted goes through notifyNewOrders,
+  // whose claim (notified_at) is what keeps a racing cron run from
+  // announcing it again; a webhook about a known order claims nothing.
+  it("hands the order it inserted to the new-order notifications, and only that one", async () => {
+    const db = await setup();
+    const { env } = fakeEnv();
+    const shop = store({ node: orderNode({ createdAt: "2026-10-02T11:30:00Z" }) });
+    const created = await deliver(db, env, { topic: "orders/create", payload: { id: 8101 }, webhookId: "wh-create" }, shop.impl);
+    await created.work?.();
+    const [row] = await orderRows(db);
+    expect(row.notifiedAt).toBe(NOW);
+
+    await db.update(schema.orders).set({ notifiedAt: null }).where(eq(schema.orders.id, row.id));
+    const updatedShop = store({ node: orderNode({ createdAt: "2026-10-02T11:30:00Z", note: "changed" }) });
+    const updated = await deliver(db, env, { topic: "orders/updated", payload: { id: 8101 }, webhookId: "wh-update" }, updatedShop.impl);
+    await updated.work?.();
+    const [after] = await orderRows(db);
+    expect(after.notifiedAt).toBeNull();
+  });
+
   it("moves the status forward on a fulfillment webhook and writes the tag back", async () => {
     const db = await setup();
     const { env, sent } = fakeEnv();

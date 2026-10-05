@@ -3,6 +3,7 @@ import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { broadcast } from "@/server/broadcast";
 import { addOrderNote } from "@/server/desk/mutations";
 import { guardResponse, requireMemberByOrder } from "@/server/guard";
+import { notifyActivity } from "@/server/notify";
 
 type RouteContext = { params: Promise<{ orderId: string }> };
 
@@ -19,10 +20,16 @@ export async function POST(request: Request, context: RouteContext) {
       case "not-found":
         return NextResponse.json({ error: "Not found" }, { status: 404 });
       case "added": {
-        // After the response: open drawers on this order append the note
-        // (best effort, never fails the request).
+        // After the response: open drawers on this order append the note,
+        // and members who opted into all activity get a push (best effort,
+        // never fails the request).
         const { env, ctx } = getCloudflareContext();
-        ctx.waitUntil(broadcast(env, workspaceId, { kind: "order.note", event: result.event }));
+        ctx.waitUntil(
+          (async () => {
+            await broadcast(env, workspaceId, { kind: "order.note", event: result.event });
+            await notifyActivity(db, env, workspaceId, result.event);
+          })(),
+        );
         return NextResponse.json({ event: result.event });
       }
     }

@@ -2,6 +2,7 @@ import { lt, ne } from "drizzle-orm";
 import { getDbFromEnv, type Db } from "../../db";
 import { storeConnections, webhookDeliveries } from "../../db/schema";
 import { broadcastSync, kickUsers } from "../broadcast";
+import { notifyNewOrders } from "../notify";
 import { shareShopifyMoves } from "../shopify/fanout";
 import { syncRoster } from "../shopify/roster-sync";
 import { runSync, type SyncOptions } from "./run";
@@ -24,9 +25,11 @@ export async function runAllSyncs(db: Db, env: CloudflareEnv, opts?: SyncOptions
     // One workspace blowing up must not take down the rest of the tick.
     try {
       const result = await runSync(db, env, workspaceId, opts);
-      // Open desks refresh from the landed ids (never throws). Phase 6 hook
-      // point: notify from result.addedOrderIds here.
+      // Open desks refresh from the landed ids (never throws).
       await broadcastSync(env, workspaceId, result);
+      // Push and email for the orders this run inserted (never throws;
+      // each order is announced once, whichever path landed it).
+      await notifyNewOrders(db, env, workspaceId, result.addedOrderIds, opts);
       // Status moves that came from Shopify: broadcast, and write each
       // order's status tag back (never throws).
       await shareShopifyMoves(db, env, workspaceId, result.statusChanges ?? [], opts);

@@ -1,9 +1,10 @@
 // Everything an email about a workspace needs: its branding (renderEmail)
 // and its sender (senderFor). One read, shared by every template.
 
+// Relative imports: the cron path bundles this (src/server/notify.ts).
 import { eq } from "drizzle-orm";
-import type { Db } from "@/db";
-import { workspaces, workspaceSettings } from "@/db/schema";
+import type { Db } from "../../db";
+import { workspaces, workspaceSettings } from "../../db/schema";
 import type { EmailWorkspace } from "./layout";
 import type { SenderWorkspace } from "./send";
 

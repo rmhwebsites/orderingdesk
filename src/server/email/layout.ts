@@ -20,10 +20,12 @@
 // is the one exception: it is HTML the caller has already escaped.
 // Subjects are the caller's, through sanitizeSubject.
 
-import { contrastRatio, DEFAULT_ACCENT } from "@/lib/accent";
-import { APP_NAME } from "@/lib/brand";
-import { fontStack, SYSTEM_FONT_STACK } from "@/lib/brand-fonts";
-import { brandAssetPath, brandHex, emailPngKey, type BrandRadius, type WorkspaceBranding } from "@/lib/branding";
+// Relative imports on purpose: new-order notifications send from the cron
+// path (src/server/notify.ts), which bundles this into the custom worker.
+import { contrastRatio, DEFAULT_ACCENT } from "../../lib/accent";
+import { APP_NAME } from "../../lib/brand";
+import { fontStack, SYSTEM_FONT_STACK } from "../../lib/brand-fonts";
+import { brandAssetPath, brandHex, emailPngKey, type BrandRadius, type WorkspaceBranding } from "../../lib/branding";
 import { escapeHtml } from "./escape";
 
 export type EmailWorkspace = {

@@ -3,6 +3,7 @@ import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { broadcast } from "@/server/broadcast";
 import { changeOrderStatus } from "@/server/desk/mutations";
 import { guardResponse, requireMemberByOrder } from "@/server/guard";
+import { notifyActivity } from "@/server/notify";
 import { pushAndShare } from "@/server/shopify/fanout";
 
 type RouteContext = { params: Promise<{ orderId: string }> };
@@ -28,12 +29,14 @@ export async function POST(request: Request, context: RouteContext) {
         return NextResponse.json({ unchanged: true });
       case "changed": {
         // After the response: open desks update the row and any open
-        // drawer's timeline, then the status goes to Shopify and its outcome
-        // follows (best effort, never fails the request).
+        // drawer's timeline, members who opted into all activity get a
+        // push, then the status goes to Shopify and its outcome follows
+        // (best effort, never fails the request).
         const { env, ctx } = getCloudflareContext();
         ctx.waitUntil(
           (async () => {
             await broadcast(env, workspaceId, { kind: "order.status", event: result.event, order: result.order });
+            await notifyActivity(db, env, workspaceId, result.event);
             await pushAndShare(db, env, workspaceId, orderId);
           })(),
         );

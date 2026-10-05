@@ -1,10 +1,15 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import * as schema from "@/db/schema";
 import { encryptSecret } from "@/server/crypto";
 import { openTestDb, seedOrder, seedWorkspace } from "@/server/desk/test-helpers";
 import type { LiveEvent } from "@/lib/live-events";
-import { pushAndShare, shareShopifyMoves } from "./fanout";
 import type { StatusChange } from "./status-sync";
+
+// The activity push is notify.ts's (tested there); here only that a move
+// from Shopify reaches it.
+vi.mock("../notify", () => ({ notifyActivity: vi.fn(async () => ({ pushed: 0 })) }));
+const { notifyActivity } = await import("../notify");
+const { pushAndShare, shareShopifyMoves } = await import("./fanout");
 
 // After a status change: open desks hear about it, the status goes to
 // Shopify, and the outcome reaches open drawers. Stubbed store and room.
@@ -88,6 +93,8 @@ describe("shareShopifyMoves", () => {
     expect(sent[1]).toMatchObject({ event: { type: "shopify_write", text: "Shopify updated: tagged Ordering Desk: Shipped" } });
     // Shopify already fulfilled the order: no fulfillment request.
     expect(shop.calls.some((call) => call.query.includes("fulfillment"))).toBe(false);
+    // Members who opted into all activity hear about the move.
+    expect(vi.mocked(notifyActivity).mock.calls.map((call) => [call[2], call[3]])).toEqual([[WS, change.event]]);
   });
 });
 

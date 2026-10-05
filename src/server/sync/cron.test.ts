@@ -5,6 +5,10 @@ import type { SyncResult } from "./run";
 
 vi.mock("./run", () => ({ runSync: vi.fn() }));
 vi.mock("../broadcast", () => ({ broadcastSync: vi.fn(async () => undefined), kickUsers: vi.fn(async () => undefined) }));
+vi.mock("../notify", () => ({
+  notifyNewOrders: vi.fn(async () => ({ claimed: 0, announced: [], pushed: 0, emailed: 0 })),
+  notifyActivity: vi.fn(async () => ({ pushed: 0 })),
+}));
 vi.mock("../shopify/roster-sync", () => ({
   syncRoster: vi.fn(async () => ({ kind: "ok", complete: true, entries: 0, removed: 0, revokedUserIds: [] })),
 }));
@@ -12,6 +16,7 @@ vi.mock("../shopify/roster-sync", () => ({
 const { runSync } = await import("./run");
 const { broadcastSync, kickUsers } = await import("../broadcast");
 const { syncRoster } = await import("../shopify/roster-sync");
+const { notifyNewOrders } = await import("../notify");
 const { runAllSyncs, WEBHOOK_DELIVERY_RETENTION_MS } = await import("./cron");
 
 const env = { ENCRYPTION_KEY: "unused" } as CloudflareEnv;
@@ -39,6 +44,7 @@ beforeEach(() => {
   vi.mocked(broadcastSync).mockClear();
   vi.mocked(kickUsers).mockClear();
   vi.mocked(syncRoster).mockClear();
+  vi.mocked(notifyNewOrders).mockClear();
   vi.spyOn(console, "log").mockImplementation(() => undefined);
 });
 
@@ -59,6 +65,21 @@ describe("runAllSyncs broadcasting", () => {
       ]),
     );
     expect(vi.mocked(broadcastSync)).toHaveBeenCalledTimes(2);
+  });
+
+  // Phase 6: every order a run inserted is announced (notify.ts claims
+  // each one, so a webhook that landed it too announces nothing twice).
+  it("announces each workspace's new orders after its run", async () => {
+    const db = await setup();
+    const a = result({ added: 2, addedOrderIds: ["o1", "o2"], updated: 1, updatedOrderIds: ["o3"] });
+    vi.mocked(runSync).mockImplementation(async (_db, _env, workspaceId) => (workspaceId === "ws_a" ? a : result()));
+    await runAllSyncs(db, env);
+    expect(vi.mocked(notifyNewOrders).mock.calls.map((call) => [call[2], call[3]])).toEqual(
+      expect.arrayContaining([
+        ["ws_a", ["o1", "o2"]],
+        ["ws_b", []],
+      ]),
+    );
   });
 
   it("keeps going after one workspace's run throws", async () => {
