@@ -4,9 +4,8 @@ import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/ArrowSquareOut";
 import { ChatTextIcon } from "@phosphor-icons/react/ChatText";
-import { CheckIcon } from "@phosphor-icons/react/Check";
 import { CheckCircleIcon } from "@phosphor-icons/react/CheckCircle";
-import { CopyIcon } from "@phosphor-icons/react/Copy";
+import { ClipboardTextIcon } from "@phosphor-icons/react/ClipboardText";
 import { FileTextIcon } from "@phosphor-icons/react/FileText";
 import { InfoIcon } from "@phosphor-icons/react/Info";
 import { PaperPlaneRightIcon } from "@phosphor-icons/react/PaperPlaneRight";
@@ -16,27 +15,46 @@ import { TagIcon } from "@phosphor-icons/react/Tag";
 import { TrashIcon } from "@phosphor-icons/react/Trash";
 import { WarningIcon } from "@phosphor-icons/react/Warning";
 import { XIcon } from "@phosphor-icons/react/X";
-import { formatDateTime, formatMoney, relativeTime, sentenceCase, shopifyAdminOrderUrl } from "@/lib/format";
+import { XCircleIcon } from "@phosphor-icons/react/XCircle";
+import {
+  formatDateTime,
+  relativeTime,
+  sentenceCase,
+  shopifyAdminDraftUrl,
+  shopifyAdminOrderUrl,
+} from "@/lib/format";
 import { NOTE_MAX } from "@/lib/limits";
-import { financialTone, fulfillmentTone, itemsSubtotal, readSnapshot, shippingLines } from "@/lib/order-snapshot";
+import { financialTone, fulfillmentTone, readSnapshot } from "@/lib/order-snapshot";
+import { requestFieldsOf } from "@/lib/request-fields";
+import { roleAtLeast, type Role } from "@/lib/roles";
+import { statusOptionsFor } from "@/lib/status-options";
 import { useNow } from "@/lib/use-now";
 import type { OrderSummary } from "@/server/desk/read";
 import type { EventView, StatusView } from "@/server/desk/shapes";
 import { ui } from "@/components/ui";
+import { focusSoon } from "@/components/settings/kit";
 import { StatusSelect } from "./status-select";
 import { APP_NAME } from "@/lib/brand";
 import type { PoView } from "@/server/po/service";
 import { PurchaseOrders } from "./po-history";
+import { CopyButton, Section, ToneChip } from "./drawer-kit";
+import { ItemsSection, RequestSection, ShipToSection } from "./request-parts";
+import { ReviewPanel } from "./review-panel";
 
 export type DrawerOrder = {
   id: string;
-  shopifyOrderId: string;
+  // Null while the card is a request (draft orders spec section 2).
+  shopifyOrderId: string | null;
   name: string;
   shopify: unknown;
   statusKey: string;
   statusSetBy: string | null;
   statusSetAt: number | null;
   createdAt: number;
+  shopifyDraftId: string | null;
+  draftName: string | null;
+  draftSnapshot: unknown;
+  draftDeletedAt: number | null;
 };
 
 export type DrawerDetail =
@@ -176,59 +194,6 @@ export function DrawerShell({
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section className="border-t border-line py-5 first:border-t-0 first:pt-0">
-      <h3 className="mb-3 font-display text-sm font-semibold text-ink">{title}</h3>
-      {children}
-    </section>
-  );
-}
-
-function ToneChip({ tone, children }: { tone: string; children: React.ReactNode }) {
-  return (
-    <span
-      data-tone={tone}
-      className="inline-flex h-7 items-center rounded-control bg-tone-fill px-2.5 text-xs font-semibold text-tone-text"
-    >
-      {children}
-    </span>
-  );
-}
-
-function CopyButton({ text, label }: { text: string; label: string }) {
-  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
-
-  useEffect(() => {
-    if (state === "idle") {
-      return;
-    }
-    const timer = setTimeout(() => setState("idle"), 2400);
-    return () => clearTimeout(timer);
-  }, [state]);
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(text);
-      setState("copied");
-    } catch {
-      setState("failed");
-    }
-  }
-
-  return (
-    <span className="inline-flex items-center gap-2">
-      <button type="button" onClick={copy} className={`${ui.buttonQuiet} h-8 border border-line px-3 text-xs`}>
-        {state === "copied" ? <CheckIcon size={14} aria-hidden /> : <CopyIcon size={14} aria-hidden />}
-        {state === "copied" ? "Copied" : label}
-      </button>
-      <span role="status" className="text-xs text-ink-2">
-        {state === "failed" ? "Copy is blocked here. Select the address instead." : ""}
-      </span>
-    </span>
-  );
-}
-
 function actorName(event: EventView, members: Map<string, MemberView>, selfUserId: string): string {
   if (!event.actorId) {
     return event.source === "shopify" || event.type === "order_new" ? "Shopify" : APP_NAME;
@@ -256,14 +221,33 @@ const EVENT_ICONS: Record<EventView["type"], typeof ChatTextIcon> = {
   draft_deleted: TrashIcon,
 };
 
-// A Shopify write that failed reads as a warning, so it stands out.
+function metaOf(event: EventView): Record<string, unknown> {
+  return typeof event.meta === "object" && event.meta !== null ? (event.meta as Record<string, unknown>) : {};
+}
+
+// A Shopify write that failed reads as a warning, so it stands out. Request
+// entries (draft orders spec section 11.6): a new request, an approval, a
+// rejection, and a completion that came from Shopify.
 function eventIcon(event: EventView): typeof ChatTextIcon {
-  const failed =
-    event.type === "shopify_write" &&
-    typeof event.meta === "object" &&
-    event.meta !== null &&
-    (event.meta as { ok?: unknown }).ok === false;
-  return failed ? WarningIcon : (EVENT_ICONS[event.type] ?? InfoIcon);
+  const meta = metaOf(event);
+  if (event.type === "shopify_write" && meta.ok === false) {
+    return WarningIcon;
+  }
+  if (event.type === "order_new" && meta.kind === "draft") {
+    return ClipboardTextIcon;
+  }
+  if (event.type === "status") {
+    if (meta.action === "approve") {
+      return CheckCircleIcon;
+    }
+    if (meta.action === "reject") {
+      return XCircleIcon;
+    }
+    if (event.source === "shopify" && (meta.reason === "completed" || meta.completed === true)) {
+      return StorefrontIcon;
+    }
+  }
+  return EVENT_ICONS[event.type] ?? InfoIcon;
 }
 
 function Timeline({
@@ -329,9 +313,14 @@ function Timeline({
                 </time>
               </p>
               {event.type === "note" ? (
-                <p className="mt-1.5 whitespace-pre-wrap break-words rounded-panel bg-surface-2 px-3 py-2 text-sm text-ink">
-                  {event.text}
-                </p>
+                <>
+                  {metaOf(event).rejectReason === true ? (
+                    <p className="mt-1 text-xs font-semibold text-ink-2">Reason</p>
+                  ) : null}
+                  <p className="mt-1.5 whitespace-pre-wrap break-words rounded-panel bg-surface-2 px-3 py-2 text-sm text-ink">
+                    {event.text}
+                  </p>
+                </>
               ) : (
                 <p className="mt-0.5 break-words text-sm text-ink-2">{event.text}</p>
               )}
@@ -430,6 +419,13 @@ function HeaderSkeleton() {
   );
 }
 
+export type ReviewState = {
+  // Whether draft orders sync for the store (the stored grant).
+  draftsEnabled: boolean;
+};
+
+const DRAFT_STATUS_LABEL = { open: "Open", invoice_sent: "Invoice sent", completed: "Completed" } as const;
+
 export function OrderDrawerContent({
   labelId,
   orderId,
@@ -442,9 +438,13 @@ export function OrderDrawerContent({
   statusBusy = false,
   members,
   selfUserId,
+  role,
   shopDomain,
+  drafts,
   onChangeStatus,
   onAddNote,
+  onApprove,
+  onReject,
   onClose,
   onRetry,
   canManagePos,
@@ -464,9 +464,14 @@ export function OrderDrawerContent({
   statusBusy?: boolean;
   members: Map<string, MemberView>;
   selfUserId: string;
+  role: Role;
   shopDomain: string | null;
+  drafts: ReviewState;
   onChangeStatus: (statusKey: string) => void;
   onAddNote: (text: string) => Promise<string | null>;
+  // Approve and Reject a request: the error to show, or null.
+  onApprove: () => Promise<string | null>;
+  onReject: (reason: string) => Promise<string | null>;
   onClose: () => void;
   onRetry: () => void;
   // Managers and platform admins create and send purchase orders; staff
@@ -478,17 +483,54 @@ export function OrderDrawerContent({
 }) {
   const order = detail.status === "ready" ? detail.order : null;
   const snapshot = order ? readSnapshot(order.shopify) : null;
+  // The card's kind follows its Shopify order id (a request has none). Right
+  // after an approval the snapshot can still be the draft for a moment.
+  const kind: "draft" | "order" = order ? (order.shopifyOrderId === null ? "draft" : "order") : (summary?.kind ?? "order");
+  const showsDraft = kind === "draft" || snapshot?.kind === "draft";
+  const loadingOrder = kind === "order" && snapshot?.kind === "draft";
+  const draftName = order?.draftName ?? summary?.draftName ?? null;
   const name = order?.name ?? summary?.name ?? "";
   const createdAt = order?.createdAt ?? summary?.createdAt ?? null;
   const statusKey = summary?.statusKey ?? order?.statusKey ?? null;
   const statusSetBy = summary?.statusSetBy ?? order?.statusSetBy ?? null;
   const statusSetAt = summary?.statusSetAt ?? order?.statusSetAt ?? null;
-  const financial = snapshot?.financialStatus ?? summary?.financialStatus ?? "";
-  const fulfillment = snapshot?.fulfillmentStatus ?? summary?.fulfillmentStatus ?? "";
-  const shopifyUrl = order ? shopifyAdminOrderUrl(shopDomain, order.shopifyOrderId) : null;
+  const financial = snapshot && !showsDraft ? snapshot.financialStatus : kind === "order" ? (summary?.financialStatus ?? "") : "";
+  const fulfillment =
+    snapshot && !showsDraft ? snapshot.fulfillmentStatus : kind === "order" ? (summary?.fulfillmentStatus ?? "") : "";
+  const deleted = kind === "draft" && (order ? order.draftDeletedAt !== null : (summary?.draftDeleted ?? false));
+  const draftStatus = kind === "draft" ? (snapshot?.draftStatus ?? summary?.draftStatus ?? null) : null;
+  // A draft Shopify deleted has no admin page to open.
+  const shopifyUrl = order
+    ? order.shopifyOrderId !== null
+      ? shopifyAdminOrderUrl(shopDomain, order.shopifyOrderId)
+      : order.draftDeletedAt === null
+        ? shopifyAdminDraftUrl(shopDomain, order.shopifyDraftId)
+        : null
+    : null;
   const itemsTruncated = detail.status === "ready" ? detail.itemsTruncated : (summary?.itemsTruncated ?? false);
+  const fields = order ? requestFieldsOf(order.shopify, order.draftSnapshot) : null;
+  const kept = order && kind === "order" && order.draftSnapshot ? readSnapshot(order.draftSnapshot) : null;
+  const canReview = roleAtLeast(role, "manager");
+  const statusOptions =
+    statusKey !== null ? statusOptionsFor({ kind, role, currentKey: statusKey, statuses }) : null;
+  const approvedStatus = statuses.find((status) => status.shopifyLink === "draft_completed");
+  const rejectedStatus = statuses.find((status) => status.shopifyLink === "draft_rejected");
+  const draftsOff = "Draft orders are not enabled for this store's Shopify app.";
+  const approveBlock = deleted
+    ? "Shopify no longer has this draft."
+    : !drafts.draftsEnabled
+      ? draftsOff
+      : !approvedStatus
+        ? "Set a status to follow Draft approved in Settings > Statuses."
+        : null;
+  const rejectBlock = !drafts.draftsEnabled
+    ? draftsOff
+    : !rejectedStatus
+      ? "Set a status to follow Draft rejected in Settings > Statuses."
+      : null;
+  const zeroTotal = snapshot ? Number(snapshot.total) === 0 && snapshot.total.trim().length > 0 : true;
   // A status set with no person behind it came from Shopify (a fulfillment,
-  // a delivery or the Ordering Desk tag edited there).
+  // a delivery, a completion or the Ordering Desk tag edited there).
   const setBy = statusSetBy
     ? statusSetBy === selfUserId
       ? "you"
@@ -497,6 +539,7 @@ export function OrderDrawerContent({
       ? "Shopify"
       : null;
   const now = useNow(30000);
+  const placedAt = kind === "order" && snapshot && !showsDraft ? snapshot.createdAt : null;
 
   return (
     <>
@@ -505,12 +548,35 @@ export function OrderDrawerContent({
           <div className="min-w-0">
             {name ? (
               <>
-                <h2 id={labelId} className="font-mono text-xl font-semibold tabular-nums text-ink">
-                  <span className="sr-only">Order </span>
-                  {name}
-                </h2>
+                <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
+                  <h2 id={labelId} tabIndex={-1} className="font-mono text-xl font-semibold tabular-nums text-ink outline-none">
+                    <span className="sr-only">{kind === "draft" ? "Draft order " : "Order "}</span>
+                    {name}
+                  </h2>
+                  {kind === "draft" ? (
+                    <ToneChip tone="slate" size="sm">
+                      Draft
+                    </ToneChip>
+                  ) : null}
+                  {deleted ? (
+                    <ToneChip tone="amber" size="sm">
+                      Deleted in Shopify
+                    </ToneChip>
+                  ) : null}
+                </div>
+                {kind === "order" && draftName ? (
+                  <p className="mt-0.5 text-sm text-ink-2">
+                    from draft <span className="font-mono tabular-nums">{draftName}</span>
+                  </p>
+                ) : null}
                 {createdAt !== null ? (
-                  <p className="mt-0.5 text-sm tabular-nums text-ink-2">Placed {formatDateTime(createdAt)}</p>
+                  <p className="mt-0.5 text-sm tabular-nums text-ink-2">
+                    {kind === "draft"
+                      ? `Submitted ${formatDateTime(createdAt)}`
+                      : draftName
+                        ? `Requested ${formatDateTime(createdAt)}.${placedAt !== null ? ` Order placed ${formatDateTime(placedAt)}.` : ""}`
+                        : `Placed ${formatDateTime(createdAt)}`}
+                  </p>
                 ) : null}
               </>
             ) : (
@@ -528,22 +594,28 @@ export function OrderDrawerContent({
           </button>
         </div>
 
-        {financial || fulfillment ? (
+        {draftStatus ? (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <ToneChip tone="blue">{DRAFT_STATUS_LABEL[draftStatus]}</ToneChip>
+          </div>
+        ) : financial || fulfillment ? (
           <div className="mt-3 flex flex-wrap items-center gap-2">
             {financial ? <ToneChip tone={financialTone(financial)}>{sentenceCase(financial)}</ToneChip> : null}
             {fulfillment ? <ToneChip tone={fulfillmentTone(fulfillment)}>{sentenceCase(fulfillment)}</ToneChip> : null}
           </div>
         ) : null}
 
-        {statusKey !== null ? (
+        {statusKey !== null && statusOptions ? (
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <StatusSelect
-              statuses={statuses}
+              statuses={statusOptions.options}
               value={statusKey}
               onChange={onChangeStatus}
-              label={`Status for order ${name}`}
+              label={`Status for ${kind === "draft" ? "request" : "order"} ${name}`}
               size="md"
               busy={statusBusy}
+              disabled={statusOptions.disabled}
+              hint={statusOptions.hint}
             />
             {shopifyUrl ? (
               <a href={shopifyUrl} target="_blank" rel="noopener noreferrer" className={`${ui.buttonSecondary} h-9`}>
@@ -553,6 +625,11 @@ export function OrderDrawerContent({
               </a>
             ) : null}
           </div>
+        ) : null}
+        {statusOptions?.hint ? (
+          <p aria-hidden className="mt-2 text-xs text-ink-2">
+            {statusOptions.hint}
+          </p>
         ) : null}
         {setBy && statusSetAt !== null ? (
           <p className="mt-2 text-xs text-ink-2">
@@ -590,95 +667,64 @@ export function OrderDrawerContent({
           </div>
         ) : null}
 
-        {snapshot && order ? (
+        {snapshot && order && fields ? (
           <>
-            <Section title="Customer">
-              <p className="text-sm font-medium text-ink">{snapshot.customerName || "No customer name"}</p>
-              {snapshot.email ? (
-                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-2">
-                  <span className="select-all break-all text-sm text-ink-2">{snapshot.email}</span>
-                  <CopyButton text={snapshot.email} label="Copy email" />
-                </div>
-              ) : (
-                <p className="mt-1 text-sm text-ink-2">No email on this order.</p>
-              )}
-            </Section>
-
-            <Section title="Items">
-              {itemsTruncated ? (
-                <p data-tone="amber" className="mb-3 flex gap-2 rounded-panel bg-tone-fill px-3 py-2.5 text-sm text-tone-text">
-                  <InfoIcon size={18} aria-hidden className="mt-px shrink-0" />
-                  <span>This order has more items than {APP_NAME} syncs. Open it in Shopify to see all of them.</span>
-                </p>
-              ) : null}
-              {snapshot.items.length === 0 ? (
-                <p className="text-sm text-ink-2">No line items.</p>
-              ) : (
-                <ul className="divide-y divide-line">
-                  {snapshot.items.map((item, index) => {
-                    const unit = item.price === null ? null : formatMoney(item.price, snapshot.currency);
-                    const line =
-                      item.price === null || !Number.isFinite(Number(item.price))
-                        ? null
-                        : formatMoney((Number(item.price) * item.qty).toFixed(2), snapshot.currency);
-                    return (
-                      <li key={index} className="flex gap-4 py-3 first:pt-0 last:pb-0">
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm font-medium text-ink">{item.title || "Untitled item"}</p>
-                          <p className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-ink-2">
-                            {item.variant ? <span>{item.variant}</span> : null}
-                            {item.sku ? <span className="font-mono">SKU {item.sku}</span> : null}
-                          </p>
-                        </div>
-                        <div className="shrink-0 text-right">
-                          <p className="font-mono text-sm tabular-nums text-ink">{line ?? "No price"}</p>
-                          <p className="font-mono text-xs tabular-nums text-ink-2">
-                            {item.qty} x {unit ?? "?"}
-                          </p>
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-              <dl className="mt-4 flex flex-col gap-1.5 border-t border-line pt-3 text-sm">
-                {!itemsTruncated && itemsSubtotal(snapshot.items) !== null ? (
-                  <div className="flex justify-between gap-4">
-                    <dt className="text-ink-2">Items</dt>
-                    <dd className="font-mono tabular-nums text-ink">
-                      {formatMoney(itemsSubtotal(snapshot.items) ?? "", snapshot.currency)}
-                    </dd>
-                  </div>
-                ) : null}
-                <div className="flex justify-between gap-4">
-                  <dt className="font-semibold text-ink">Order total</dt>
-                  <dd className="font-mono font-semibold tabular-nums text-ink">
-                    {formatMoney(snapshot.total, snapshot.currency)}
-                  </dd>
-                </div>
-              </dl>
-              <p className="mt-1.5 text-xs text-ink-2">
-                The order total comes from Shopify and includes shipping, taxes and discounts.
+            {loadingOrder ? (
+              <p role="status" className="mb-5 flex items-center gap-2 text-sm text-ink-2">
+                <InfoIcon size={16} aria-hidden className="shrink-0" />
+                Loading order {name} from Shopify
               </p>
-            </Section>
+            ) : null}
 
-            <Section title="Ship to">
-              {snapshot.shipping ? (
-                <address className="text-sm not-italic leading-relaxed text-ink">
-                  {shippingLines(snapshot.shipping).map((line, index) => (
-                    <span key={index} className="block">
-                      {line}
-                    </span>
-                  ))}
-                </address>
-              ) : (
-                <p className="text-sm text-ink-2">No shipping address on this order.</p>
-              )}
-            </Section>
+            {kind === "draft" ? (
+              <ReviewPanel
+                name={name}
+                email={snapshot.email}
+                canReview={canReview}
+                rejected={rejectedStatus !== undefined && statusKey === rejectedStatus.key}
+                approveBlock={approveBlock}
+                rejectBlock={rejectBlock}
+                completeInShopify={zeroTotal || deleted ? null : { url: shopifyUrl }}
+                onApprove={async () => {
+                  const failure = await onApprove();
+                  if (!failure) {
+                    focusSoon(() => document.getElementById(labelId));
+                  }
+                  return failure;
+                }}
+                onReject={onReject}
+              />
+            ) : null}
 
-            <Section title="Tags and checkout note">
-              {snapshot.tags.length === 0 && !snapshot.note ? (
-                <p className="text-sm text-ink-2">No tags or checkout note.</p>
+            {showsDraft || draftName ? (
+              <RequestSection
+                customerName={snapshot.customerName}
+                email={snapshot.email}
+                fields={fields}
+                note={showsDraft ? snapshot.note : (kept?.note ?? "")}
+                poNumber={showsDraft ? snapshot.poNumber : (kept?.poNumber ?? "")}
+              />
+            ) : (
+              <Section title="Customer">
+                <p className="text-sm font-medium text-ink">{snapshot.customerName || "No customer name"}</p>
+                {snapshot.email ? (
+                  <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-2">
+                    <span className="select-all break-all text-sm text-ink-2">{snapshot.email}</span>
+                    <CopyButton text={snapshot.email} label="Copy email" />
+                  </div>
+                ) : (
+                  <p className="mt-1 text-sm text-ink-2">No email on this order.</p>
+                )}
+              </Section>
+            )}
+
+            <ItemsSection snapshot={snapshot} itemsTruncated={itemsTruncated} shopifyUrl={shopifyUrl} />
+
+            <ShipToSection shipping={snapshot.shipping} />
+
+            <Section title={showsDraft ? "Tags" : "Tags and checkout note"}>
+              {snapshot.tags.length === 0 && (showsDraft || !snapshot.note) ? (
+                <p className="text-sm text-ink-2">{showsDraft ? "No tags." : "No tags or checkout note."}</p>
               ) : null}
               {snapshot.tags.length > 0 ? (
                 <ul className="flex flex-wrap gap-1.5" aria-label="Tags">
@@ -689,20 +735,22 @@ export function OrderDrawerContent({
                   ))}
                 </ul>
               ) : null}
-              {snapshot.note ? (
+              {!showsDraft && snapshot.note ? (
                 <p className="mt-3 whitespace-pre-wrap break-words rounded-panel bg-surface-2 px-3 py-2.5 text-sm text-ink">
                   {snapshot.note}
                 </p>
               ) : null}
             </Section>
 
-            <PurchaseOrders
-              orderId={orderId}
-              canManage={canManagePos}
-              refreshKey={poRefreshKey}
-              onCreate={onCreatePo}
-              onEdit={onEditPo}
-            />
+            {kind === "order" ? (
+              <PurchaseOrders
+                orderId={orderId}
+                canManage={canManagePos}
+                refreshKey={poRefreshKey}
+                onCreate={onCreatePo}
+                onEdit={onEditPo}
+              />
+            ) : null}
           </>
         ) : null}
 

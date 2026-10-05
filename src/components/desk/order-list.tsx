@@ -2,13 +2,18 @@
 
 import { InfoIcon } from "@phosphor-icons/react/Info";
 import { formatDate, formatMoney, formatTime } from "@/lib/format";
+import type { Role } from "@/lib/roles";
+import { statusOptionsFor } from "@/lib/status-options";
 import type { OrderSummary } from "@/server/desk/read";
 import type { StatusView } from "@/server/desk/shapes";
+import { ToneChip } from "./drawer-kit";
 import { StatusSelect } from "./status-select";
 
 type ListProps = {
   orders: OrderSummary[];
   statuses: StatusView[];
+  // Decides which statuses a request offers (src/lib/status-options.ts).
+  role: Role;
   flashing: Set<string>;
   rowErrors: Record<string, string>;
   // Orders whose status change is saving.
@@ -39,6 +44,63 @@ function ItemsSummary({ order }: { order: OrderSummary }) {
   );
 }
 
+// A request's Draft chip and, when Shopify deleted its draft, a Deleted
+// chip; an order that was a request names its draft.
+function KindMarks({ order }: { order: OrderSummary }) {
+  if (order.kind === "draft") {
+    return (
+      <span className="mt-1 flex flex-wrap gap-1">
+        <ToneChip tone="slate" size="sm">
+          Draft
+        </ToneChip>
+        {order.draftDeleted ? (
+          <ToneChip tone="amber" size="sm">
+            Deleted in Shopify
+          </ToneChip>
+        ) : null}
+      </span>
+    );
+  }
+  return order.draftName ? (
+    <span className="mt-0.5 block text-xs text-ink-2">
+      from draft <span className="font-mono tabular-nums">{order.draftName}</span>
+    </span>
+  ) : null;
+}
+
+// "For Casey Lin · Buford HQ" when the request names them.
+function requestLine(order: OrderSummary): string | null {
+  const parts = [order.requestFor ? `For ${order.requestFor}` : "", order.branch].filter((part) => part.length > 0);
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+function RowStatus({
+  order,
+  statuses,
+  role,
+  busy,
+  onChangeStatus,
+}: {
+  order: OrderSummary;
+  statuses: StatusView[];
+  role: Role;
+  busy: boolean;
+  onChangeStatus: (orderId: string, statusKey: string) => void;
+}) {
+  const options = statusOptionsFor({ kind: order.kind, role, currentKey: order.statusKey, statuses });
+  return (
+    <StatusSelect
+      statuses={options.options}
+      value={order.statusKey}
+      onChange={(key) => onChangeStatus(order.id, key)}
+      label={`Status for ${order.kind === "draft" ? "request" : "order"} ${order.name}`}
+      busy={busy}
+      disabled={options.disabled}
+      hint={options.hint}
+    />
+  );
+}
+
 function RowError({ message }: { message?: string }) {
   return message ? (
     <p role="alert" className="mt-1 text-xs font-medium text-bad">
@@ -52,12 +114,12 @@ function Total({ order }: { order: OrderSummary }) {
 }
 
 // Table at 880px and up.
-export function OrderTable({ orders, statuses, flashing, rowErrors, savingIds, onOpen, onChangeStatus }: ListProps) {
+export function OrderTable({ orders, statuses, role, flashing, rowErrors, savingIds, onOpen, onChangeStatus }: ListProps) {
   return (
     <div className="hidden overflow-hidden rounded-panel border border-line bg-surface shadow-panel desk:block">
       <table className="w-full table-fixed border-collapse text-left">
         <colgroup>
-          <col className="w-[6.5rem]" />
+          <col className="w-[8.5rem]" />
           <col className="w-[7.5rem]" />
           <col className="w-[22%]" />
           <col />
@@ -92,9 +154,10 @@ export function OrderTable({ orders, statuses, flashing, rowErrors, savingIds, o
                     }}
                     className="-mx-1 rounded-control px-1 font-mono text-sm font-semibold tabular-nums text-ink underline-offset-4 hover:underline"
                   >
-                    <span className="sr-only">Open order </span>
+                    <span className="sr-only">{order.kind === "draft" ? "Open request " : "Open order "}</span>
                     {order.name}
                   </button>
+                  <KindMarks order={order} />
                 </td>
                 <td className={`px-3 py-3.5 ${flash}`}>
                   <p className="text-sm tabular-nums text-ink">{formatDate(order.createdAt)}</p>
@@ -103,6 +166,7 @@ export function OrderTable({ orders, statuses, flashing, rowErrors, savingIds, o
                 <td className={`px-3 py-3.5 ${flash}`}>
                   <p className="truncate text-sm font-medium text-ink">{order.customerName || "No customer name"}</p>
                   <p className="truncate text-xs text-ink-2">{order.email || "No email"}</p>
+                  {requestLine(order) ? <p className="truncate text-xs text-ink-2">{requestLine(order)}</p> : null}
                 </td>
                 <td className={`px-3 py-3.5 ${flash}`}>
                   <ItemsSummary order={order} />
@@ -111,12 +175,12 @@ export function OrderTable({ orders, statuses, flashing, rowErrors, savingIds, o
                   <Total order={order} />
                 </td>
                 <td className={`px-4 py-3 ${flash}`} onClick={(event) => event.stopPropagation()}>
-                  <StatusSelect
+                  <RowStatus
+                    order={order}
                     statuses={statuses}
-                    value={order.statusKey}
-                    onChange={(key) => onChangeStatus(order.id, key)}
-                    label={`Status for order ${order.name}`}
+                    role={role}
                     busy={savingIds.has(order.id)}
+                    onChangeStatus={onChangeStatus}
                   />
                   <RowError message={rowErrors[order.id]} />
                 </td>
@@ -131,7 +195,7 @@ export function OrderTable({ orders, statuses, flashing, rowErrors, savingIds, o
 
 // Cards below 880px. The order number is a stretched button over the card;
 // the status control sits above it so both stay usable.
-export function OrderCards({ orders, statuses, flashing, rowErrors, savingIds, onOpen, onChangeStatus }: ListProps) {
+export function OrderCards({ orders, statuses, role, flashing, rowErrors, savingIds, onOpen, onChangeStatus }: ListProps) {
   return (
     <ul className="flex flex-col gap-2 desk:hidden">
       {orders.map((order) => (
@@ -141,19 +205,23 @@ export function OrderCards({ orders, statuses, flashing, rowErrors, savingIds, o
             flashing.has(order.id) ? "od-flash" : ""
           }`}
         >
-          <div className="flex items-baseline justify-between gap-3">
-            <button
-              type="button"
-              onClick={() => onOpen(order.id)}
-              className="font-mono text-[15px] font-semibold tabular-nums text-ink after:absolute after:inset-0 after:rounded-panel after:content-['']"
-            >
-              <span className="sr-only">Open order </span>
-              {order.name}
-            </button>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <button
+                type="button"
+                onClick={() => onOpen(order.id)}
+                className="font-mono text-[15px] font-semibold tabular-nums text-ink after:absolute after:inset-0 after:rounded-panel after:content-['']"
+              >
+                <span className="sr-only">{order.kind === "draft" ? "Open request " : "Open order "}</span>
+                {order.name}
+              </button>
+              <KindMarks order={order} />
+            </div>
             <Total order={order} />
           </div>
           <p className="mt-2 truncate text-sm font-medium text-ink">{order.customerName || "No customer name"}</p>
           <p className="truncate text-xs text-ink-2">{order.email || "No email"}</p>
+          {requestLine(order) ? <p className="truncate text-xs text-ink-2">{requestLine(order)}</p> : null}
           <div className="mt-2">
             <ItemsSummary order={order} />
           </div>
@@ -162,12 +230,12 @@ export function OrderCards({ orders, statuses, flashing, rowErrors, savingIds, o
               {formatDate(order.createdAt)}, {formatTime(order.createdAt)}
             </p>
             <div className="relative z-10 flex min-w-0 flex-col items-end">
-              <StatusSelect
+              <RowStatus
+                order={order}
                 statuses={statuses}
-                value={order.statusKey}
-                onChange={(key) => onChangeStatus(order.id, key)}
-                label={`Status for order ${order.name}`}
+                role={role}
                 busy={savingIds.has(order.id)}
+                onChangeStatus={onChangeStatus}
               />
               <RowError message={rowErrors[order.id]} />
             </div>

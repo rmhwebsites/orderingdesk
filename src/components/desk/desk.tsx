@@ -2,8 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { InfoIcon } from "@phosphor-icons/react/Info";
+import { XIcon } from "@phosphor-icons/react/X";
 import {
   applyLiveEvent,
+  arrivalNotice,
   optimisticStatus,
   rollbackStatus,
   selectOrders,
@@ -11,10 +14,10 @@ import {
   totalOrders,
   touchesPurchaseOrders,
   type DeskFilter,
+  type DeskKind,
   type DeskState,
   type LiveEffects,
 } from "@/lib/desk-state";
-import { formatMoney } from "@/lib/format";
 import { roleAtLeast } from "@/lib/roles";
 import type { LiveEvent, LiveOrderStatus } from "@/lib/live-events";
 import type { OrderSummary } from "@/server/desk/read";
@@ -35,33 +38,72 @@ import { OrderCards, OrderTable } from "./order-list";
 import { PoModal } from "./po-modal";
 import { StatusStrip } from "./status-strip";
 import { Toolbar } from "./toolbar";
+import { ui } from "@/components/ui";
 
 type DeskPayload = {
   statuses: StatusView[];
   statusCounts: Record<string, number>;
   orders: OrderSummary[];
   hasMore: boolean;
+  draftCount: number;
+  deletedDraftCount: number;
+  drafts: { enabled: boolean; missingScopes: string[] };
 };
+
+type DraftsState = { draftCount: number; deletedDraftCount: number; enabled: boolean; missingScopes: string[] };
+
+// A status change the server answered with a reason to show.
+class StatusRefused extends Error {}
+
+const BANNER_KEY = (workspaceId: string) => `od:drafts-banner-dismissed:${workspaceId}`;
+
+function bannerDismissed(workspaceId: string): boolean {
+  try {
+    return window.localStorage.getItem(BANNER_KEY(workspaceId)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function dismissBanner(workspaceId: string): void {
+  try {
+    window.localStorage.setItem(BANNER_KEY(workspaceId), "1");
+  } catch {
+    // Storage blocked: the banner just comes back next time.
+  }
+}
+
+// Platform admins only (draft orders spec section 11.8): this store's app
+// lacks the draft scopes, so requests are not synced.
+function DraftsBanner({ settingsHref, onDismiss }: { settingsHref: string; onDismiss: () => void }) {
+  return (
+    <div
+      role="status"
+      data-tone="blue"
+      className="flex items-start gap-2.5 rounded-panel bg-tone-fill px-3.5 py-3 text-sm text-tone-text"
+    >
+      <InfoIcon size={18} aria-hidden className="mt-px shrink-0" />
+      <p className="min-w-0 flex-1">
+        Draft orders are not synced for this store. Grant read_draft_orders and write_draft_orders to the Shopify app,
+        then use Refresh connection in{" "}
+        <a href={settingsHref} className="font-semibold underline underline-offset-2">
+          Settings
+        </a>
+        .
+      </p>
+      <button type="button" onClick={onDismiss} className={`${ui.iconButton} -my-2 -mr-2 size-9 text-tone-text`}>
+        <XIcon size={16} aria-hidden />
+        <span className="sr-only">Dismiss this message</span>
+      </button>
+    </div>
+  );
+}
 
 type LoadState = { status: "loading" } | { status: "error"; message: string } | { status: "ready" };
 
 const FLASH_MS = 1800;
 const MEMBERS_REFRESH_MS = 60000;
 const DRAWER_TITLE_ID = "order-drawer-title";
-
-function announcement(orders: OrderSummary[]): { title: string; body?: string } {
-  if (orders.length === 1) {
-    const [order] = orders;
-    const who = order.customerName ? ` from ${order.customerName}` : "";
-    return { title: `New order ${order.name}${who}`, body: formatMoney(order.total, order.currency) || undefined };
-  }
-  const names = orders.slice(0, 3).map((order) => order.name);
-  const rest = orders.length - names.length;
-  return {
-    title: `${orders.length} new orders`,
-    body: rest > 0 ? `${names.join(", ")} and ${rest} more` : names.join(", "),
-  };
-}
 
 function withDetailStatus(detail: DrawerDetail, change: LiveOrderStatus): DrawerDetail {
   if (detail.status !== "ready" || detail.order.id !== change.id) {
@@ -92,7 +134,9 @@ export function Desk() {
   const [hasMore, setHasMore] = useState(false);
   const [desk, setDesk] = useState<DeskState>({ orders: [], statusCounts: {}, timeline: null });
   const deskRef = useRef(desk);
-  const [filter, setFilter] = useState<DeskFilter>({ query: "", statusKey: null, sort: "newest" });
+  const [filter, setFilter] = useState<DeskFilter>({ query: "", statusKey: null, sort: "newest", kind: "all" });
+  const [drafts, setDrafts] = useState<DraftsState>({ draftCount: 0, deletedDraftCount: 0, enabled: false, missingScopes: [] });
+  const [bannerHidden, setBannerHidden] = useState(true);
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   // Orders whose status change is saving: their status control saves
   // nothing else meanwhile (src/lib/status-commit.ts).
@@ -165,6 +209,12 @@ export function Desk() {
       commit(next);
       setStatuses(payload.statuses);
       setHasMore(payload.hasMore);
+      setDrafts({
+        draftCount: payload.draftCount ?? 0,
+        deletedDraftCount: payload.deletedDraftCount ?? 0,
+        enabled: payload.drafts?.enabled ?? false,
+        missingScopes: payload.drafts?.missingScopes ?? [],
+      });
       setLoad({ status: "ready" });
 
       const loadedIds = new Set(payload.orders.map((order) => order.id));
@@ -177,7 +227,7 @@ export function Desk() {
         const found = payload.orders.filter((order) => toAnnounce.includes(order.id));
         toast(
           found.length > 0
-            ? { ...announcement(found), tone: "good" }
+            ? { ...arrivalNotice(found), tone: "good" }
             : { title: `${toAnnounce.length} new ${toAnnounce.length === 1 ? "order" : "orders"}`, tone: "good" },
         );
       }
@@ -304,6 +354,13 @@ export function Desk() {
 
   const handleEffects = useCallback(
     (effects: LiveEffects) => {
+      // An order card folded into its request card: a drawer open on the old
+      // card follows to the request card (same history, notes and POs).
+      if (effects.merged && openRef.current === effects.merged.fromId) {
+        const params = new URLSearchParams(window.location.search);
+        params.set("order", effects.merged.toId);
+        window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
+      }
       if (effects.refetch) {
         pendingAnnounce.current.push(...effects.announceOrderIds);
         pendingFlash.current.push(...effects.flashOrderIds);
@@ -380,7 +437,11 @@ export function Desk() {
           triggersPo?: boolean;
         } | null;
         if (!response.ok || !body) {
-          throw new Error(body?.error ?? "Not saved");
+          // A rule the server refused (a request into a linked status, staff
+          // reopening a rejected request) says why; anything else is generic.
+          throw new StatusRefused(
+            (response.status === 400 || response.status === 403) && body?.error ? body.error : "Not saved. Try again.",
+          );
         }
         pendingStatus.current.delete(orderId);
         if (body.unchanged || !body.event || !body.order) {
@@ -402,12 +463,13 @@ export function Desk() {
             });
           }
         }
-      } catch {
+      } catch (e) {
         pendingStatus.current.delete(orderId);
         if (optimistic) {
           commit(rollbackStatus(deskRef.current, orderId, nextKey, optimistic.previousKey));
         }
-        setRowErrors((current) => ({ ...current, [orderId]: "Not saved. Try again." }));
+        const message = e instanceof StatusRefused ? e.message : "Not saved. Try again.";
+        setRowErrors((current) => ({ ...current, [orderId]: message }));
       } finally {
         setSavingIds((current) => {
           const next = new Set(current);
@@ -440,6 +502,94 @@ export function Desk() {
     [applyEvent],
   );
 
+  // Approve a request (draft orders spec section 9.1): the error to show
+  // inline, or null. The server is idempotent, so a retry after a lost
+  // answer never creates a second order.
+  const approve = useCallback(
+    async (orderId: string): Promise<string | null> => {
+      let response: Response;
+      try {
+        response = await fetch(`/api/orders/${encodeURIComponent(orderId)}/approve`, { method: "POST" });
+      } catch {
+        return "Could not reach the server. Try again; an approval that already went through is never sent twice.";
+      }
+      const body = (await response.json().catch(() => null)) as {
+        error?: string;
+        kind?: "approved" | "already-approved" | "completed-in-shopify";
+        order?: LiveOrderStatus;
+        orderName?: string;
+        message?: string;
+        events?: EventView[];
+        triggersPo?: boolean;
+      } | null;
+      if (!response.ok || !body?.kind) {
+        return body?.error ?? `Not approved (the server answered ${response.status}). Try again.`;
+      }
+      if (body.kind === "approved") {
+        for (const event of body.events ?? []) {
+          if (event.type === "status" && body.order) {
+            applyEvent({ kind: "order.status", event, order: body.order });
+          } else {
+            applyEvent({ kind: "order.activity", event });
+          }
+        }
+        toast({ title: `Approved. Order ${body.orderName ?? ""} created in Shopify.`, tone: "good" });
+        if (body.triggersPo && canManagePos) {
+          setPoModal({ orderId, po: null });
+        }
+      } else if (body.kind === "already-approved") {
+        toast({ title: `Already approved. This request is order ${body.orderName ?? ""}.`, tone: "info" });
+      } else {
+        toast({ title: body.message ?? "This draft was already completed in Shopify.", tone: "info" });
+      }
+      void reload();
+      if (openRef.current === orderId) {
+        void loadDrawer(orderId, true);
+      }
+      return null;
+    },
+    [applyEvent, toast, canManagePos, reload, loadDrawer],
+  );
+
+  // Reject a request with its reason (draft orders spec section 9.2).
+  const reject = useCallback(
+    async (orderId: string, reason: string): Promise<string | null> => {
+      let response: Response;
+      try {
+        response = await fetch(`/api/orders/${encodeURIComponent(orderId)}/reject`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reason }),
+        });
+      } catch {
+        return "Could not reach the server. Your reason is still here, so you can try again.";
+      }
+      const body = (await response.json().catch(() => null)) as {
+        error?: string;
+        kind?: "rejected" | "unchanged";
+        order?: LiveOrderStatus;
+        events?: EventView[];
+      } | null;
+      if (!response.ok || !body?.kind) {
+        return body?.error ?? `Not rejected (the server answered ${response.status}). Try again.`;
+      }
+      if (body.kind === "rejected") {
+        for (const event of body.events ?? []) {
+          if (event.type === "status" && body.order) {
+            applyEvent({ kind: "order.status", event, order: body.order });
+          } else {
+            applyEvent({ kind: "order.note", event });
+          }
+        }
+        toast({ title: "Rejected. The reason is saved as a note.", tone: "good" });
+      } else {
+        toast({ title: "This request was already rejected.", tone: "info" });
+      }
+      return null;
+    },
+    [applyEvent, toast],
+  );
+
   // Opening pushes a history entry so the browser's back closes the drawer;
   // a deep link (?order=) is closed by replacing the entry instead.
   const openOrder = useCallback((orderId: string) => {
@@ -461,6 +611,20 @@ export function Desk() {
     window.history.replaceState(null, "", query ? `${window.location.pathname}?${query}` : window.location.pathname);
   }, []);
 
+  useEffect(() => {
+    setBannerHidden(bannerDismissed(workspace.id));
+  }, [workspace.id]);
+
+  // The Deleted filter goes away with the last deleted request.
+  useEffect(() => {
+    if (filter.kind === "deleted" && drafts.deletedDraftCount === 0) {
+      setFilter((current) => ({ ...current, kind: "all" }));
+    }
+  }, [filter.kind, drafts.deletedDraftCount]);
+
+  const showKindFilter = drafts.enabled || drafts.draftCount > 0 || drafts.deletedDraftCount > 0;
+  const showBanner =
+    role === "platform" && !drafts.enabled && drafts.missingScopes.length > 0 && !bannerHidden && load.status === "ready";
   const chips = useMemo(() => statusChips(statuses, desk.statusCounts), [statuses, desk.statusCounts]);
   const visible = useMemo(() => selectOrders(desk.orders, filter), [desk.orders, filter]);
   const total = totalOrders(desk.statusCounts);
@@ -473,6 +637,16 @@ export function Desk() {
       <h1 id="desk-heading" tabIndex={-1} className="font-display text-2xl font-semibold tracking-tight focus:outline-none">
         Orders
       </h1>
+
+      {showBanner ? (
+        <DraftsBanner
+          settingsHref={`${workspace.basePath}/settings#store`}
+          onDismiss={() => {
+            dismissBanner(workspace.id);
+            setBannerHidden(true);
+          }}
+        />
+      ) : null}
 
       {load.status === "loading" ? <DeskSkeleton /> : null}
 
@@ -504,17 +678,28 @@ export function Desk() {
               onSort={(sort) => setFilter((current) => ({ ...current, sort }))}
               shown={visible.length}
               loaded={desk.orders.length}
+              kindFilter={
+                showKindFilter
+                  ? {
+                      kind: filter.kind ?? "all",
+                      onKind: (kind: DeskKind) => setFilter((current) => ({ ...current, kind })),
+                      draftCount: drafts.draftCount,
+                      deletedCount: drafts.deletedDraftCount,
+                    }
+                  : null
+              }
             />
             {visible.length === 0 ? (
               <NoMatches
                 query={filter.query}
-                onClear={() => setFilter((current) => ({ ...current, query: "", statusKey: null }))}
+                onClear={() => setFilter((current) => ({ ...current, query: "", statusKey: null, kind: "all" }))}
               />
             ) : (
               <>
                 <OrderTable
                   orders={visible}
                   statuses={statuses}
+                  role={role}
                   flashing={flashing}
                   rowErrors={rowErrors}
                   savingIds={savingIds}
@@ -524,6 +709,7 @@ export function Desk() {
                 <OrderCards
                   orders={visible}
                   statuses={statuses}
+                  role={role}
                   flashing={flashing}
                   rowErrors={rowErrors}
                   savingIds={savingIds}
@@ -555,9 +741,13 @@ export function Desk() {
             statusBusy={savingIds.has(drawerOrderId)}
             members={members}
             selfUserId={userId}
+            role={role}
             shopDomain={connection?.shopDomain ?? null}
+            drafts={{ draftsEnabled: drafts.enabled }}
             onChangeStatus={(statusKey) => void changeStatus(drawerOrderId, statusKey)}
             onAddNote={(text) => addNote(drawerOrderId, text)}
+            onApprove={() => approve(drawerOrderId)}
+            onReject={(reason) => reject(drawerOrderId, reason)}
             onClose={closeOrder}
             onRetry={() => void loadDrawer(drawerOrderId, false)}
             canManagePos={canManagePos}

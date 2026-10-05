@@ -25,6 +25,7 @@ export function StatusSelect({
   size = "sm",
   disabled = false,
   busy = false,
+  hint = null,
 }: {
   statuses: StatusView[];
   value: string;
@@ -33,8 +34,12 @@ export function StatusSelect({
   size?: "sm" | "md";
   disabled?: boolean;
   busy?: boolean;
+  // Why the control is disabled (for example "Only a manager can reopen a
+  // rejected request."), read with it and shown on hover.
+  hint?: string | null;
 }) {
   const hintId = useId();
+  const whyId = useId();
   const input = useRef(IDLE_STATUS_INPUT);
   const [staged, setStaged] = useState<string | null>(null);
   const shown = staged ?? value;
@@ -55,14 +60,16 @@ export function StatusSelect({
     <span data-tone={current?.color ?? "slate"} className="relative inline-flex max-w-full">
       <select
         aria-label={current ? label : `${label}. Unknown status ${shown}`}
-        aria-describedby={staged !== null ? hintId : undefined}
+        aria-describedby={[staged !== null ? hintId : null, hint ? whyId : null].filter(Boolean).join(" ") || undefined}
         aria-busy={busy || undefined}
         title={
           staged !== null
             ? "Press Enter to save this status"
-            : current
-              ? undefined
-              : `Unknown status: ${shown}. Choose a status to move this order.`
+            : hint
+              ? hint
+              : current
+                ? undefined
+                : `Unknown status: ${shown}. Choose a status to move this order.`
         }
         value={shown}
         disabled={disabled}
@@ -96,6 +103,11 @@ export function StatusSelect({
         aria-hidden
         className={`pointer-events-none absolute top-1/2 -translate-y-1/2 text-tone-text ${size === "md" ? "right-3.5" : "right-3"}`}
       />
+      {hint ? (
+        <span id={whyId} className="sr-only">
+          {hint}
+        </span>
+      ) : null}
       {staged !== null ? (
         <span id={hintId} className="sr-only">
           Not saved yet. Press Enter to save, or Escape to keep the current status.
