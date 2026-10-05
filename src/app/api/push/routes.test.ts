@@ -121,6 +121,26 @@ describe("/api/push/subscribe", () => {
     expect(await response.json()).toEqual({ error: "This browser's push service is not supported" });
   });
 
+  // A session on a client host (the tenant runs it) cannot reach the
+  // person's devices recorded on the hub.
+  it("never lets a client-host session evict, take over or remove the person's hub devices", async () => {
+    state.session = { user: { id: "u_staff", email: "staff@example.com" } };
+    expect((await SUBSCRIBE(json("POST", subscription))).status).toBe(200);
+    state.host = "orders.impactrentals.store";
+    for (let i = 0; i < 12; i++) {
+      const junk = { ...subscription, endpoint: `https://fcm.googleapis.com/fcm/send/junk-${i}` };
+      expect((await SUBSCRIBE(json("POST", junk))).status).toBe(200);
+    }
+    const moved = await SUBSCRIBE(json("POST", { ...subscription, keys: { ...subscription.keys, auth: "zyxwvutsrqponmlkjihgfe" } }));
+    expect(moved.status).toBe(409);
+    expect((await UNSUBSCRIBE(json("DELETE", { endpoint: subscription.endpoint }))).status).toBe(404);
+    const [hub] = await state
+      .db!.select()
+      .from(schema.pushSubscriptions)
+      .where(eq(schema.pushSubscriptions.endpoint, subscription.endpoint));
+    expect(hub).toEqual(expect.objectContaining({ userId: "u_staff", host: "orderingdesk.test", keys: subscription.keys }));
+  });
+
   it("removes the caller's own subscription and answers 404 for anyone else's", async () => {
     state.session = { user: { id: "u_staff", email: "staff@example.com" } };
     await SUBSCRIBE(json("POST", subscription));

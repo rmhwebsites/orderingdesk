@@ -344,6 +344,92 @@ describe("notifyActivity", () => {
   });
 });
 
+// A client host belongs to one tenant, who controls its DNS and TLS. A
+// device subscribed there (by its own service worker, or by anyone holding
+// a session there) may only ever receive that workspace's notices. The hub,
+// which we run, gets every workspace's; a null host reads as the hub.
+describe("delivery by host", () => {
+  const OTHER_HOST = "orders.tenantb.example";
+
+  async function tenantB() {
+    await db
+      .update(schema.workspaces)
+      .set({ name: "Tenant B Secret Client", customDomain: OTHER_HOST, customDomainStatus: "active" })
+      .where(eq(schema.workspaces.id, "ws_other"));
+    // The manager belongs to both workspaces; their phone subscribed on
+    // IMPACT's client host, their laptop on the hub.
+    await seedMember(db, "ws_other", "u_manager", "staff");
+    await subscribe("s_outsider_b_host", "u_outsider", OTHER_HOST);
+    await seedOrder(db, "ws_other", {
+      id: "b1",
+      name: "#B-7001",
+      createdAt: NOW - 60000,
+      shopify: snapshotOf({ name: "#B-7001", customerName: "Jordan Pell", total: "4321.00", currency: "USD" }),
+    });
+  }
+
+  it("never pushes another workspace's new order to a device on this workspace's client host", async () => {
+    await tenantB();
+    await notifyNewOrders(db, env, "ws_other", ["b1"], opts);
+    const ids = pushed.map((entry) => entry.target.id).sort();
+    expect(ids).not.toContain("s_manager_phone");
+    // The hub and tenant B's own host still get it.
+    expect(ids).toEqual(["s_manager_laptop", "s_outsider", "s_outsider_b_host"]);
+    expect(pushed.find((entry) => entry.target.id === "s_outsider_b_host")?.notice.url).toBe(`https://${OTHER_HOST}/?order=b1`);
+    for (const { notice } of pushed) {
+      expect(JSON.stringify(notice)).not.toContain(".impactrentals.store");
+    }
+  });
+
+  it("never pushes another workspace's purchase order send or activity there either", async () => {
+    await tenantB();
+    await db.insert(schema.notificationPrefs).values({ id: "p_b_manager", userId: "u_manager", workspaceId: "ws_other", pushAllActivity: true });
+    await notifyPoSent(
+      db,
+      env,
+      "ws_other",
+      { poId: "pob", poNumber: "TB-2026-0001", orderId: "b1", orderName: "#B-7001", vendorName: "Quiet Vendor", actorId: "u_outsider" },
+      opts,
+    );
+    await notifyActivity(
+      db,
+      env,
+      "ws_other",
+      {
+        id: "eb",
+        orderId: "b1",
+        type: "status",
+        text: "Status set to Shipped",
+        actorId: "u_outsider",
+        meta: null,
+        createdAt: NOW,
+        source: "app",
+      },
+      opts,
+    );
+    const ids = pushed.map((entry) => entry.target.id);
+    expect(ids).not.toContain("s_manager_phone");
+    // The PO push and the activity push each reach the manager's laptop.
+    expect(ids.filter((id) => id === "s_manager_laptop")).toHaveLength(2);
+  });
+
+  it("keeps a hub device getting every workspace's notices", async () => {
+    await tenantB();
+    await order("o1");
+    await notifyNewOrders(db, env, WS, ["o1"], opts);
+    await notifyNewOrders(db, env, "ws_other", ["b1"], opts);
+    const laptop = pushed.filter((entry) => entry.target.id === "s_manager_laptop").map((entry) => entry.notice.title);
+    expect(laptop).toEqual(["New order #o1", "New order #B-7001"]);
+  });
+
+  it("delivers nothing to a client host that is no longer active", async () => {
+    await db.update(schema.workspaces).set({ customDomainStatus: "error" }).where(eq(schema.workspaces.id, WS));
+    await order("o1");
+    await notifyNewOrders(db, env, WS, ["o1"], opts);
+    expect(pushed.map((entry) => entry.target.id).sort()).toEqual(["s_all", "s_manager_laptop", "s_staff"]);
+  });
+});
+
 describe("notifyPoSent", () => {
   it("pushes and emails the new-order audience, but not the sender's own devices", async () => {
     await order("o1", { name: "#1001" });

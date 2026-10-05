@@ -190,6 +190,43 @@ describe("saveSubscription and removeSubscription", () => {
     expect(rows.map((row) => row.endpoint)).not.toContain("https://fcm.googleapis.com/fcm/send/1");
   });
 
+  // A client host is run by its tenant: a session there (or one captured
+  // there) must not be able to push out the person's devices on the hub or
+  // on another workspace's host.
+  it("caps devices per host, so saving on one host never evicts a device on another", async () => {
+    await saveSubscription(db, { userId: "u1", host: "orderingdesk.test", userAgent: "Hub phone", now: 0 }, input("https://fcm.googleapis.com/fcm/send/hub"));
+    await saveSubscription(db, { userId: "u1", host: "orders.other.example", userAgent: null, now: 1 }, input("https://fcm.googleapis.com/fcm/send/other"));
+    for (let i = 0; i < 12; i++) {
+      await saveSubscription(
+        db,
+        { userId: "u1", host: "orders.impactrentals.store", userAgent: null, now: 10 + i },
+        input(`https://fcm.googleapis.com/fcm/send/junk-${i}`),
+      );
+    }
+    const rows = await db.select({ endpoint: schema.pushSubscriptions.endpoint, host: schema.pushSubscriptions.host }).from(schema.pushSubscriptions);
+    expect(rows.filter((row) => row.host === "orders.impactrentals.store")).toHaveLength(10);
+    expect(rows.map((row) => row.endpoint)).toContain("https://fcm.googleapis.com/fcm/send/hub");
+    expect(rows.map((row) => row.endpoint)).toContain("https://fcm.googleapis.com/fcm/send/other");
+    expect(rows.map((row) => row.endpoint)).not.toContain("https://fcm.googleapis.com/fcm/send/junk-0");
+  });
+
+  it("refuses to move an endpoint recorded on one host to another host", async () => {
+    await saveSubscription(db, { userId: "u1", host: "orderingdesk.test", userAgent: "Hub phone", now: 1 }, input());
+    const attacker = await browserKeys();
+    for (const ctx of [
+      { userId: "u1", host: "orders.impactrentals.store" },
+      { userId: "u2", host: "orders.impactrentals.store" },
+      { userId: "u1", host: null },
+    ]) {
+      const saved = await saveSubscription(db, { ...ctx, userAgent: "Other", now: 2 }, { endpoint: "https://fcm.googleapis.com/fcm/send/abc", keys: attacker });
+      expect(saved.kind).toBe("conflict");
+    }
+    const rows = await db.select().from(schema.pushSubscriptions);
+    expect(rows).toEqual([
+      expect.objectContaining({ userId: "u1", host: "orderingdesk.test", keys, userAgent: "Hub phone", createdAt: 1 }),
+    ]);
+  });
+
   it.each([
     ["no body", null],
     ["a plain http endpoint", { endpoint: "http://fcm.googleapis.com/fcm/send/x", keys: { p256dh: "BAAA".repeat(22), auth: "abcdefghijklmnopqrstuv" } }],
@@ -215,12 +252,23 @@ describe("saveSubscription and removeSubscription", () => {
 
   it("removes only the caller's own endpoint", async () => {
     await saveSubscription(db, { userId: "u1", host: null, userAgent: null, now: 1 }, input());
-    expect(await removeSubscription(db, "u2", { endpoint: "https://fcm.googleapis.com/fcm/send/abc" })).toEqual({ kind: "not-found" });
+    expect(await removeSubscription(db, { userId: "u2", host: null }, { endpoint: "https://fcm.googleapis.com/fcm/send/abc" })).toEqual({ kind: "not-found" });
     expect(await db.select().from(schema.pushSubscriptions)).toHaveLength(1);
-    expect(await removeSubscription(db, "u1", { endpoint: "https://fcm.googleapis.com/fcm/send/abc" })).toEqual({ kind: "removed" });
+    expect(await removeSubscription(db, { userId: "u1", host: null }, { endpoint: "https://fcm.googleapis.com/fcm/send/abc" })).toEqual({ kind: "removed" });
     expect(
       await db.select().from(schema.pushSubscriptions).where(eq(schema.pushSubscriptions.userId, "u1")),
     ).toEqual([]);
-    expect((await removeSubscription(db, "u1", { nope: true })).kind).toBe("invalid");
+    expect((await removeSubscription(db, { userId: "u1", host: null }, { nope: true })).kind).toBe("invalid");
+  });
+
+  it("removes a device only from the host it was recorded on", async () => {
+    await saveSubscription(db, { userId: "u1", host: "orderingdesk.test", userAgent: null, now: 1 }, input());
+    expect(
+      await removeSubscription(db, { userId: "u1", host: "orders.impactrentals.store" }, { endpoint: "https://fcm.googleapis.com/fcm/send/abc" }),
+    ).toEqual({ kind: "not-found" });
+    expect(await db.select().from(schema.pushSubscriptions)).toHaveLength(1);
+    expect(
+      await removeSubscription(db, { userId: "u1", host: "orderingdesk.test" }, { endpoint: "https://fcm.googleapis.com/fcm/send/abc" }),
+    ).toEqual({ kind: "removed" });
   });
 });

@@ -10,6 +10,10 @@
 //   prints a pair. Without them nothing is sent and the key route says so.
 // - Subscriptions are per person and per browser (push_subscriptions, the
 //   endpoint is unique), recorded with the host the browser subscribed on.
+//   Saving, the per-person cap and removal only ever touch rows of the host
+//   the request came in on (client hosts are run by their tenants), and
+//   src/server/notify.ts sends a workspace's notices only to the hub and to
+//   that workspace's own client host.
 //   Only the browsers' own push services are accepted as endpoints, so
 //   the Worker never posts to an address a signed-in person made up.
 // - A push service answering 404 or 410 means the subscription is gone for
@@ -23,14 +27,15 @@
 // bundles this into the custom worker.
 
 import { buildPushPayload } from "@block65/webcrypto-web-push";
-import { and, desc, eq, inArray, notInArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, notInArray } from "drizzle-orm";
 import type { Db } from "../db";
 import { pushSubscriptions } from "../db/schema";
 
 // The library pads every message to 4096 octets; this is the most it can
 // carry. Our notices stay far below it (encodePushNotice clips).
 export const PUSH_PAYLOAD_MAX_BYTES = 3993;
-export const MAX_SUBSCRIPTIONS_PER_USER = 10;
+// Devices kept per person on each host (the hub and each client host).
+export const MAX_SUBSCRIPTIONS_PER_HOST = 10;
 
 const TITLE_MAX = 80;
 const BODY_MAX = 160;
@@ -221,12 +226,25 @@ function validKey(value: unknown, min: number, max: number): string | null {
   return typeof value === "string" && value.length >= min && value.length <= max && KEY_TEXT.test(value) ? value : null;
 }
 
-export type SaveSubscriptionResult = { kind: "saved" } | { kind: "invalid"; error: string };
+export type SaveSubscriptionResult = { kind: "saved" } | { kind: "conflict" } | { kind: "invalid"; error: string };
+
+// The rows recorded on one host (null matches only null).
+function onHost(host: string | null) {
+  return host === null ? isNull(pushSubscriptions.host) : eq(pushSubscriptions.host, host);
+}
 
 // Body: a PushSubscription's toJSON() ({endpoint, keys: {p256dh, auth}}).
-// Upserts by endpoint for the caller (a browser someone else used to
-// register belongs to whoever registers it now), then keeps the caller's
-// MAX_SUBSCRIPTIONS_PER_USER newest.
+//
+// Everything is scoped to the host the request came in on, because a
+// client host is run by its tenant and a session there must never reach
+// the person's devices on the hub or on another workspace's host:
+// - Upserts by endpoint for the caller (a browser someone else used to
+//   register on this host belongs to whoever registers it now). An endpoint
+//   recorded on another host is never moved or rewritten: "conflict". A
+//   real browser's subscription belongs to one origin, so its endpoint only
+//   ever comes back from the host it was made on.
+// - Then keeps the caller's MAX_SUBSCRIPTIONS_PER_HOST newest on this
+//   host; devices on other hosts are left alone.
 export async function saveSubscription(
   db: Db,
   ctx: { userId: string; host: string | null; userAgent: string | null; now?: number },
@@ -247,22 +265,29 @@ export async function saveSubscription(
   }
   const now = ctx.now ?? Date.now();
   const userAgent = ctx.userAgent ? ctx.userAgent.slice(0, USER_AGENT_MAX) : null;
-  await db
+  const written = await db
     .insert(pushSubscriptions)
     .values({ id: crypto.randomUUID(), userId: ctx.userId, endpoint, keys: { p256dh, auth }, userAgent, createdAt: now, host: ctx.host })
     .onConflictDoUpdate({
       target: pushSubscriptions.endpoint,
-      set: { userId: ctx.userId, keys: { p256dh, auth }, userAgent, createdAt: now, host: ctx.host },
-    });
+      set: { userId: ctx.userId, keys: { p256dh, auth }, userAgent, createdAt: now },
+      // Only a row recorded on this same host is taken over.
+      setWhere: onHost(ctx.host),
+    })
+    .returning({ id: pushSubscriptions.id });
+  if (written.length === 0) {
+    return { kind: "conflict" };
+  }
+  const scope = and(eq(pushSubscriptions.userId, ctx.userId), onHost(ctx.host));
   const keep = await db
     .select({ id: pushSubscriptions.id })
     .from(pushSubscriptions)
-    .where(eq(pushSubscriptions.userId, ctx.userId))
+    .where(scope)
     .orderBy(desc(pushSubscriptions.createdAt), desc(pushSubscriptions.id))
-    .limit(MAX_SUBSCRIPTIONS_PER_USER);
+    .limit(MAX_SUBSCRIPTIONS_PER_HOST);
   await db.delete(pushSubscriptions).where(
     and(
-      eq(pushSubscriptions.userId, ctx.userId),
+      scope,
       notInArray(
         pushSubscriptions.id,
         keep.map((row) => row.id),
@@ -275,15 +300,20 @@ export async function saveSubscription(
 export type RemoveSubscriptionResult = { kind: "removed" } | { kind: "not-found" } | { kind: "invalid"; error: string };
 
 // Body {endpoint}: removes that browser's subscription when it is the
-// caller's; anyone else's (or none) is not-found, the same answer.
-export async function removeSubscription(db: Db, userId: string, body: unknown): Promise<RemoveSubscriptionResult> {
+// caller's and was recorded on the host the request came in on; anyone
+// else's, another host's (or none) is not-found, the same answer.
+export async function removeSubscription(
+  db: Db,
+  ctx: { userId: string; host: string | null },
+  body: unknown,
+): Promise<RemoveSubscriptionResult> {
   const endpoint = isRecord(body) && typeof body.endpoint === "string" ? body.endpoint : null;
   if (!endpoint || endpoint.length > ENDPOINT_MAX) {
     return { kind: "invalid", error: "endpoint is required" };
   }
   const removed = await db
     .delete(pushSubscriptions)
-    .where(and(eq(pushSubscriptions.endpoint, endpoint), eq(pushSubscriptions.userId, userId)))
+    .where(and(eq(pushSubscriptions.endpoint, endpoint), eq(pushSubscriptions.userId, ctx.userId), onHost(ctx.host)))
     .returning({ id: pushSubscriptions.id });
   return removed.length > 0 ? { kind: "removed" } : { kind: "not-found" };
 }

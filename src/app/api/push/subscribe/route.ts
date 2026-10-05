@@ -12,9 +12,12 @@ function subscribedHost(env: CloudflareEnv, host: HostResolution): string | null
   return host.kind === "hub" ? hubHostname(env) : null;
 }
 
-// This browser's push subscription for the signed-in person. Body: the
-// PushSubscription's toJSON() ({endpoint, keys: {p256dh, auth}}). 200 {ok};
-// 400 {error} for anything else; 401 signed out.
+// This browser's push subscription for the signed-in person, recorded for
+// the host this request came in on (src/server/push.ts saveSubscription
+// keeps every host's devices apart). Body: the PushSubscription's toJSON()
+// ({endpoint, keys: {p256dh, auth}}). 200 {ok}; 409 {error} when that
+// endpoint is recorded on another host; 400 {error} for anything else; 401
+// signed out.
 export async function POST(request: Request) {
   try {
     const { db, env, host, userId } = await requireSession();
@@ -24,22 +27,27 @@ export async function POST(request: Request) {
       { userId, host: subscribedHost(env, host), userAgent: request.headers.get("user-agent") },
       body,
     );
-    if (result.kind === "invalid") {
-      return NextResponse.json({ error: result.error }, { status: 400 });
+    switch (result.kind) {
+      case "invalid":
+        return NextResponse.json({ error: result.error }, { status: 400 });
+      case "conflict":
+        return NextResponse.json({ error: "This browser's push is registered on another address." }, { status: 409 });
+      case "saved":
+        return NextResponse.json({ ok: true });
     }
-    return NextResponse.json({ ok: true });
   } catch (e) {
     return guardResponse(e);
   }
 }
 
 // Body {endpoint}: stops push to this browser. 200 {ok}; 404 when the
-// signed-in person has no subscription with that endpoint; 400 without one.
+// signed-in person has no subscription with that endpoint on this host;
+// 400 without one.
 export async function DELETE(request: Request) {
   try {
-    const { db, userId } = await requireSession();
+    const { db, env, host, userId } = await requireSession();
     const body = (await request.json().catch(() => null)) as unknown;
-    const result = await removeSubscription(db, userId, body);
+    const result = await removeSubscription(db, { userId, host: subscribedHost(env, host) }, body);
     switch (result.kind) {
       case "invalid":
         return NextResponse.json({ error: result.error }, { status: 400 });

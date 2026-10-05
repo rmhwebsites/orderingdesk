@@ -18,13 +18,21 @@
 //   opted into all activity, never about their own change.
 //
 // Audience: workspace members (platform admins who are not members get
-// nothing). Push goes to every device of a member whose push_new_orders is
+// nothing). Push goes to the devices of a member whose push_new_orders is
 // on (default on); email to the workspace notification list plus members
 // whose email_new_orders is on (default on), deduplicated by address, one
 // message per address so nobody sees the others. Push links open the order
 // on the host the device subscribed on: the workspace's client host for a
 // device that subscribed there, else the hub. Email links use the client
 // host when it is active.
+//
+// Devices by host (deliversTo): a client host is run by its tenant, who
+// controls its DNS and TLS and so can serve their own service worker there
+// and read every push it receives. A workspace's notices therefore go only
+// to devices that subscribed on the hub (or with no host recorded, which
+// reads as the hub) and on that workspace's own active client host, never
+// to a device on another workspace's client host or on a client host that
+// is no longer active.
 //
 // Push payloads hold the order number, the customer's first name, the
 // total and the link (activity: the order number and what happened; a
@@ -51,7 +59,7 @@ import {
 } from "./email/notifications";
 import { sendEmail, senderFor } from "./email/send";
 import { loadMailWorkspace, type MailWorkspace } from "./email/workspace";
-import { appOrigin, workspaceOrigin } from "./host";
+import { appOrigin, hubHostname, workspaceOrigin } from "./host";
 import { sendPushToTargets, subscriptionsFor, type PushNotice, type PushTarget } from "./push";
 
 export type { PoSentNotice } from "./email/notifications";
@@ -93,6 +101,18 @@ function onOwnHost(workspace: LinkWorkspace, host: string | null): boolean {
 
 function orderQuery(orderId: string | null): string {
   return orderId ? `?order=${encodeURIComponent(orderId)}` : "";
+}
+
+// Whether a device that subscribed on `host` may receive this workspace's
+// notices: the hub (or no host recorded), or the workspace's own active
+// client host. Any other host is another tenant's (or one no longer
+// checked) and gets nothing.
+export function deliversTo(env: CloudflareEnv, workspace: LinkWorkspace, host: string | null): boolean {
+  if (host === null) {
+    return true;
+  }
+  const hub = hubHostname(env);
+  return (hub !== null && host === hub) || onOwnHost(workspace, host);
 }
 
 // The desk (or one order in it) for a device that subscribed on `host`.
@@ -224,9 +244,12 @@ function emailRecipients(list: string[], members: Member[]): string[] {
 
 // ---- Sending ------------------------------------------------------------
 
+// Every device of these people that may receive this workspace's notices
+// (deliversTo), each sent what noticeFor builds for it.
 async function pushTo(
   db: Db,
   env: CloudflareEnv,
+  workspace: LinkWorkspace,
   userIds: string[],
   noticeFor: (target: PushTarget) => PushNotice | null,
   opts: NotifyOptions & { urgency: "normal" | "high"; ttl: number },
@@ -235,7 +258,7 @@ async function pushTo(
     return 0;
   }
   try {
-    const targets = await subscriptionsFor(db, userIds);
+    const targets = (await subscriptionsFor(db, userIds)).filter((target) => deliversTo(env, workspace, target.host));
     const counts = await sendPushToTargets(db, env, targets, noticeFor, opts);
     return counts.sent;
   } catch (e) {
@@ -350,7 +373,7 @@ export async function notifyNewOrders(
       : fresh.map((order) => (target: PushTarget) => newOrderNotice(order, context(target, order.id)));
     const pushUserIds = members.filter((member) => member.pushNewOrders).map((member) => member.userId);
     for (const noticeFor of noticeBuilders) {
-      result.pushed += await pushTo(db, env, pushUserIds, noticeFor, { ...opts, urgency: "high", ttl: 86400 });
+      result.pushed += await pushTo(db, env, workspace, pushUserIds, noticeFor, { ...opts, urgency: "high", ttl: 86400 });
     }
 
     const recipients = emailRecipients(list, members);
@@ -389,6 +412,7 @@ export async function notifyPoSent(
     result.pushed = await pushTo(
       db,
       env,
+      workspace,
       members.filter((member) => member.pushNewOrders && member.userId !== po.actorId).map((member) => member.userId),
       (target) =>
         poSentNotice(po, {
@@ -446,6 +470,7 @@ export async function notifyActivity(
     const pushed = await pushTo(
       db,
       env,
+      workspace,
       members.map((member) => member.userId),
       (target) =>
         activityNotice(event, orderRows[0].name, {
