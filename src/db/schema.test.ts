@@ -204,6 +204,34 @@ describe("schema migrations", () => {
     });
   });
 
+  // Migration 0009: a purchase order written without the send columns (as
+  // before it) reads as never sent, in USD, with no failure and no lease;
+  // PO numbers stay unique per workspace.
+  it("defaults the purchase order send columns and keeps PO numbers unique per workspace", () => {
+    const insert = db.prepare(
+      "INSERT INTO purchase_orders (id, workspace_id, order_id, vendor_id, po_number, line_items, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    );
+    insert.run("po1", "ws1", "o1", "v1", "PO-2026-0001", "[]", "user1", 1);
+    expect(
+      db
+        .prepare(
+          "SELECT status, currency, last_error, send_started_at, send_attempt, sent_to, sent_by, send_count, updated_at FROM purchase_orders WHERE id = ?",
+        )
+        .get("po1"),
+    ).toEqual({
+      status: "draft",
+      currency: "USD",
+      last_error: null,
+      send_started_at: null,
+      send_attempt: null,
+      sent_to: null,
+      sent_by: null,
+      send_count: 0,
+      updated_at: null,
+    });
+    expect(() => insert.run("po2", "ws1", "o1", "v1", "PO-2026-0001", "[]", "user1", 1)).toThrow(/UNIQUE/);
+  });
+
   it("keeps custom domains unique and allows any number of workspaces without one", () => {
     const insert = db.prepare(
       "INSERT INTO workspaces (id, name, slug, created_by, created_at, custom_domain) VALUES (?, ?, ?, ?, ?, ?)",

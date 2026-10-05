@@ -174,20 +174,50 @@ export const vendors = sqliteTable("vendors", {
   archived: integer("archived", { mode: "boolean" }).notNull().default(false),
 });
 
+// Purchase orders to vendors (src/server/po/). Never sent automatically: a
+// manager reviews one and confirms its recipients every time.
 export const purchaseOrders = sqliteTable("purchase_orders", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id),
   orderId: text("order_id").notNull(),
   vendorId: text("vendor_id").notNull(),
+  // <prefix>-<YYYY>-<NNNN>, minted at the first send attempt
+  // (src/server/po/number.ts). Until then a placeholder, "draft:<id>",
+  // which can never look like a minted number (prefixes are uppercase
+  // letters and digits) and keeps the column unique.
   poNumber: text("po_number").notNull(),
   lineItems: text("line_items", { mode: "json" }).notNull(),
+  // The ship-to address as lines of text.
   shipTo: text("ship_to", { mode: "json" }),
   notes: text("notes"),
+  // draft: never sent; sent: the vendor email went out at least once;
+  // failed: the last send attempt failed (last_error says why).
   status: text("status", { enum: ["draft", "sent", "failed"] }).notNull().default("draft"),
+  // R2 key under pos/<workspaceId>/ of the PDF last rendered for a send.
   pdfKey: text("pdf_key"),
+  // The first successful send.
   sentAt: integer("sent_at"),
   createdBy: text("created_by").notNull(),
   createdAt: integer("created_at").notNull(),
+  // Migration 0009 (all additive). The order's currency when the PO was
+  // created; line costs are in it.
+  currency: text("currency").notNull().default("USD"),
+  // Why the last send attempt failed, in plain language; null otherwise.
+  lastError: text("last_error"),
+  // The send lease: set when a send attempt claims the PO, cleared when it
+  // ends. A second attempt while it is fresh is refused, so one PO never
+  // goes out twice from overlapping requests.
+  sendStartedAt: integer("send_started_at"),
+  // The request id of the attempt that last claimed the PO: the same
+  // request repeated (a lost response, a retried tap) answers what that
+  // attempt did instead of sending again.
+  sendAttempt: text("send_attempt"),
+  // The recipients of the last successful send.
+  sentTo: text("sent_to", { mode: "json" }).$type<{ to: string[]; cc: string[] }>(),
+  sentBy: text("sent_by"),
+  // Successful sends (a resend after the first counts too).
+  sendCount: integer("send_count").notNull().default(0),
+  updatedAt: integer("updated_at"),
 }, (t) => [
   uniqueIndex("po_number_unique").on(t.workspaceId, t.poNumber),
   index("po_order").on(t.orderId),
