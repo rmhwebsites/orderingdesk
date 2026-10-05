@@ -158,10 +158,20 @@ export async function enableDevicePush(): Promise<EnableResult> {
   }
 }
 
+// This browser's subscription without registering anything first (for
+// signing out, where no service worker may have been set up).
+async function existingSubscription(): Promise<PushSubscription | null> {
+  if (!("serviceWorker" in navigator)) {
+    return null;
+  }
+  const registration = await navigator.serviceWorker.getRegistration("/");
+  return registration ? registration.pushManager.getSubscription() : null;
+}
+
 // Stops push to this browser: the server forgets it, then the browser.
 export async function disableDevicePush(): Promise<boolean> {
   try {
-    const subscription = await currentSubscription();
+    const subscription = await existingSubscription();
     if (!subscription) {
       return true;
     }

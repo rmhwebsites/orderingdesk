@@ -647,7 +647,7 @@ sender name and their reply-to address.
    is untouched; IMPACT's mail stays on Namecheap Private Email). This is
    possible only when the client's zone is in your Cloudflare account,
    because Cloudflare adds the sending records there.
-3. Press Verify in the workspace's Settings, Notifications and email (or
+3. Press Verify in the workspace's Settings, Workspace email (or
    POST /api/workspaces/<workspace id>/sender/verify from a signed-in
    orderingdesk.com tab). A test email arrives at your address from
    accounts@orders.<client domain>; from then on the client's email comes
@@ -984,3 +984,100 @@ an address on a domain you have onboarded.
   approve tagged staff in Settings > Team, attach orders.impactrentals.store
   (see "Attaching a client host"), onboard it for Email Sending, Verify the
   sender. Then Phase 6 (push and notification emails) and Phase 7 (POs).
+
+## STATE UPDATE, 2026-10-04 Phase 6 notifications (supersedes above)
+
+- Branch build/m1-core, on top of 765ef29: 9a045c6 (push sender,
+  subscription routes, migration 0007), c5972fb (installable app),
+  1184599 (new order and activity notifications, branded email), fe3be05
+  (Your notifications in Settings), 8ec345f (activity bell), plus a
+  sign-out change and this docs commit. Not pushed, not deployed.
+- NEW MIGRATION 0007 (drizzle/0007_notifications.sql): orders.notified_at
+  and push_subscriptions.host, both nullable, additive. Applied locally.
+  DEPLOY ORDER: `npm run db:migrate:remote` FIRST, then deploy the code.
+  Every order insert now names notified_at, so code deployed before the
+  migration fails every sync (the sync test pinning the minimum schema is
+  raised to 0007).
+- NEW SECRETS (operator): VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY,
+  VAPID_SUBJECT (mailto: an address that reads mail). Generate the pair
+  once with `node scripts/generate-vapid.mjs` and set each with
+  `npx wrangler secret put`. Changing the pair later strands every browser
+  subscription. Without them push is off (GET /api/push/key answers 503,
+  Settings says push is not set up) and email still works. A local pair is
+  in .dev.vars (gitignored).
+- New dependency: @block65/webcrypto-web-push 2.0.0 (WebCrypto, runs on
+  Workers). The lockfile regeneration also took patch updates of
+  @opennextjs/cloudflare 1.20.8, @opennextjs/aws 4.1.7 and wrangler
+  4.147.0.
+- Installable app (src/server/pwa/): GET /site.webmanifest and
+  GET /app-icon/<192.png|512.png|maskable-512.png|apple-180.png> answer
+  for the routed host. The hub is Ordering Desk with an OD monogram (lime
+  on ink); an active client host is its workspace: its symbol PNG when the
+  PNG copy (or a PNG upload) is square and at least 144px, else the first
+  letter of its name drawn in the workspace primary color. Icons are drawn
+  on the server (a small stroke font, PNG via CompressionStream), no
+  library. public/sw.js shows push notifications and focuses or opens
+  their link; it caches nothing and has no fetch handler. The workspace
+  shell registers it and re-sends this browser's subscription on each
+  load (a shared device then belongs to whoever is signed in); iPhone and
+  iPad users in Safari see a dismissible "Install on your phone" hint.
+  Signing out (hub sign-out button) forgets this browser's subscription.
+- Push (src/server/push.ts): subscriptions per person per browser, with
+  the host they were made on; only the browsers' own push services are
+  accepted as endpoints (FCM, Mozilla, Apple, WNS); 404 or 410 from a push
+  service deletes the subscription; at most 10 per person. Routes:
+  GET /api/push/key, POST and DELETE /api/push/subscribe (signed in).
+- Fan-out (src/server/notify.ts), all after the change commits, never
+  throwing, logging counts only:
+  - notifyNewOrders from the cron sync, the Sync button and webhooks. Each
+    order is claimed once (UPDATE orders SET notified_at WHERE it is
+    null), so a cron run and a webhook that race announce it once.
+    Orders created more than 24 hours ago are claimed silently (a first
+    sync backfills 60 days); more than 5 at once become one summary push
+    and one summary email.
+  - Push to members whose new-order push is on (default on), linking to
+    the order on the host the device subscribed on (the client host for a
+    device that subscribed there, else the hub). Payload: order number,
+    customer first name, total, link; on the hub the workspace name too.
+  - Email to the workspace notification list plus members whose email is
+    on (default on), deduplicated by address, ONE MESSAGE PER ADDRESS
+    (nobody sees the other recipients), workspace sender via senderFor,
+    branded via renderEmail, subject "New order #1001 from <customer>".
+    The summary carries the customer name, items and total, never the
+    customer's email or address.
+  - notifyActivity: status changes (from the app or from Shopify) and
+    notes, pushed to members who opted into all activity, never about
+    their own change; a note's text is never in the push.
+  - notifyPoSent(db, env, workspaceId, {poId, poNumber, orderId,
+    orderName, vendorName, actorId}) is ready for Phase 7: the same
+    audience; the sender's own devices get no push.
+- Settings: "Your notifications" first for everyone (this device's push
+  with Enable push on this device / Turn off on this device, the iPhone
+  steps where needed, and three switches per workspace: push for new
+  orders and purchase orders, email for the same, push for all other
+  activity). GET/PUT /api/workspaces/[id]/notification-prefs. The
+  manager section formerly "Notifications and email" is now "Workspace
+  email" (same id, #notifications).
+- Bell (top bar, last control): unread = events newer than
+  workspace_members.last_seen_at not made by the viewer (99+ cap),
+  dropdown of the 30 newest with order links, Mark all read
+  (POST /api/workspaces/[id]/seen). Successful Shopify status writes stay
+  out of the bell; failed ones show. It reloads on every live event and
+  resync, and toasts status changes and notes by others. Platform admins
+  who are not members see the feed with no count (no per-user record was
+  added).
+- Known limits and things not verified live:
+  - No real push was sent: the VAPID secrets are not set and local dev
+    has no push service. Verify on a phone after the secrets are set
+    (Android Chrome, and an iPhone with the app added to the home screen).
+  - A workspace symbol with transparent corners shows black corners on
+    the iPhone home screen (iOS fills transparency).
+  - A browser whose push service is not FCM, Mozilla, Apple or WNS is
+    refused (400) when it subscribes.
+  - Live sockets do not run under `next dev`, so there the bell refreshes
+    only when opened; in production it follows the room's events.
+  - An order_new event is stamped with its sync run's start, so an order
+    landing during a long run just after Mark all read can count as read.
+  - Client hosts still have no sign-out button (only the hub has one), so
+    signing out there cannot forget the device yet.
+
