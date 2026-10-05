@@ -19,6 +19,7 @@ import {
   SettingsSection,
   ToneChip,
 } from "./kit";
+import { OrderHistoryPanel } from "./order-history";
 
 type Mode = "client_credentials" | "legacy_token";
 
@@ -122,6 +123,7 @@ function Instructions() {
         <li>
           Give it these Admin API access scopes, then release the version: read_orders and write_orders,
           read_customers, read_merchant_managed_fulfillment_orders and write_merchant_managed_fulfillment_orders.
+          Add read_all_orders too if you will import orders older than 60 days (Order history, below).
         </li>
         <li>Install the app on the store and approve those permissions there.</li>
         <li>In the app&apos;s settings, copy its Client ID and Client secret.</li>
@@ -294,6 +296,9 @@ export function StoreConnectionSection({
   const [confirming, setConfirming] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [disconnectError, setDisconnectError] = useState<string | null>(null);
+  // Bumped after a connect or disconnect, so Order history reloads (the
+  // grant, or the store itself, may have changed).
+  const [historySignal, setHistorySignal] = useState(0);
   const disconnectRef = useRef<HTMLButtonElement>(null);
 
   function saved(next: SavedConnection, warning: string | null) {
@@ -324,6 +329,7 @@ export function StoreConnectionSection({
         ? { tone: "warn", text: warning }
         : { tone: "good", text: `Connected to ${next.shopName}. Every permission checked out.` },
     );
+    setHistorySignal((signal) => signal + 1);
   }
 
   async function disconnect() {
@@ -342,6 +348,7 @@ export function StoreConnectionSection({
     setConnection((current) =>
       current ? { ...current, status: "disabled", webhooksRegisteredAt: null, lastError: null } : current,
     );
+    setHistorySignal((signal) => signal + 1);
     // The disconnect controls are gone: the section heading holds focus.
     focusSoon(() => sectionHeading("store"));
   }
@@ -407,6 +414,14 @@ export function StoreConnectionSection({
           </>
         ) : null}
       </Panel>
+      {canEdit && connection ? (
+        <OrderHistoryPanel
+          workspaceId={workspaceId}
+          initial={connection.backfill}
+          connected={connection.status !== "disabled"}
+          refreshSignal={historySignal}
+        />
+      ) : null}
     </SettingsSection>
   );
 }

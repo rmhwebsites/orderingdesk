@@ -195,7 +195,7 @@ export async function startBackfill(db: Db, workspaceId: string, body: unknown, 
     return { kind: "conflict", error: "The store connection needs attention. Fix it, then start the import." };
   }
   if (row.backfillStatus === "running") {
-    return { kind: "conflict", error: "An import is already running. Cancel it to start another." };
+    return { kind: "conflict", error: "An import is already running. Stop it to start another." };
   }
   if (needsReadAllOrders(parsed.since, now) && !canReadAllOrders(row.scopes)) {
     return { kind: "scope", error: SCOPE_MISSING };
