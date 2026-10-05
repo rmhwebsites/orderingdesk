@@ -366,6 +366,8 @@ export async function saveConnection(
       ...modeFields,
       scopes: check.accessScopes,
       shopName: check.shopName,
+      // The domain Shopify names the store by on webhooks (see the column).
+      canonicalShopDomain: check.myshopifyDomain,
       // Set again below once this save's webhooks are registered.
       webhooksRegisteredAt: null,
     };

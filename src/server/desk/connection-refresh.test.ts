@@ -31,7 +31,9 @@ const REQUIRED = [
 
 type Call = { url: string; token: string | null; query: string; variables: Record<string, unknown> };
 
-function shop(script: { scopes?: string[]; verifyStatus?: number; createError?: string; mintStatus?: number } = {}) {
+function shop(
+  script: { scopes?: string[]; verifyStatus?: number; createError?: string; mintStatus?: number; myshopifyDomain?: string } = {},
+) {
   const calls: Call[] = [];
   const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -53,7 +55,7 @@ function shop(script: { scopes?: string[]; verifyStatus?: number; createError?: 
       }
       return Response.json({
         data: {
-          shop: { name: "IMPACT Rentals" },
+          shop: { name: "IMPACT Rentals", ...(script.myshopifyDomain ? { myshopifyDomain: script.myshopifyDomain } : {}) },
           currentAppInstallation: { accessScopes: (script.scopes ?? REQUIRED).map((handle) => ({ handle })) },
         },
       });
@@ -138,6 +140,21 @@ describe("refreshConnection", () => {
     expect(row.scopes).toEqual([...REQUIRED, "write_draft_orders", "read_companies"]);
     expect(await decryptSecret(row.encryptedAccessToken!, KEY, WS)).toBe(MINTED);
     expect(JSON.stringify(result)).not.toContain(MINTED);
+  });
+
+  it("records the store's own myshopify domain, so webhooks naming it are accepted", async () => {
+    // IMPACT was connected as impactrentals.myshopify.com, an alias of
+    // 40kra0-b6.myshopify.com, which is what Shopify puts in
+    // X-Shopify-Shop-Domain. Refresh connection (Ryan's one step) records it.
+    const db = await setup();
+    const store = shop({ scopes: [...REQUIRED, "write_draft_orders"], myshopifyDomain: "40kra0-b6.myshopify.com" });
+    expect((await refreshConnection(db, ctx(store.impl))).kind).toBe("refreshed");
+    expect(await stored(db)).toMatchObject({ shopDomain: SHOP, canonicalShopDomain: "40kra0-b6.myshopify.com" });
+
+    // A disconnected store is never written.
+    const off = await setup({ status: "disabled" });
+    await refreshConnection(off, ctx(store.impl));
+    expect((await stored(off)).canonicalShopDomain).toBeNull();
   });
 
   it("registers only the base topics while the draft scopes are missing, and says what is missing", async () => {

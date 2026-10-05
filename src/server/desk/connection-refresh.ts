@@ -83,9 +83,12 @@ export async function refreshConnection(db: Db, ctx: ConnectionContext): Promise
   }
 
   // Only on the store the check ran against, while it is still connected.
+  // The store's own myshopify domain too: Shopify names the store by it on
+  // webhooks, and a store connected under an alias (IMPACT) has its
+  // deliveries accepted from here on.
   await db
     .update(storeConnections)
-    .set({ scopes: check.accessScopes, shopName: check.shopName })
+    .set({ scopes: check.accessScopes, shopName: check.shopName, canonicalShopDomain: check.myshopifyDomain })
     .where(
       and(
         eq(storeConnections.workspaceId, ctx.workspaceId),

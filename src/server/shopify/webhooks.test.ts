@@ -214,6 +214,42 @@ describe("receiveShopifyWebhook: verification", () => {
     expect((await deliver(db, env, { topic: "orders/updated", payload, shop: "Impact-Rentals.myshopify.com" })).status).toBe(200);
   });
 
+  // IMPACT is connected as impactrentals.myshopify.com, an alias of the
+  // store's own 40kra0-b6.myshopify.com, and Shopify names the store by its
+  // own domain in X-Shopify-Shop-Domain. Saving or refreshing the connection
+  // records it; the receiver accepts exactly the stored domain or that one.
+  it("accepts the store's own myshopify domain once the connection recorded it, and nothing looser", async () => {
+    const { env } = fakeEnv();
+    const recorded = await setup({ canonicalShopDomain: "40kra0-b6.myshopify.com" });
+    const canonical = await deliver(recorded, env, { topic: "orders/updated", payload, shop: "40kra0-b6.myshopify.com" });
+    expect(canonical.status).toBe(200);
+    expect(canonical.work).toBeTypeOf("function");
+    expect(
+      (await deliver(recorded, env, { topic: "orders/updated", payload, shop: SHOP, webhookId: "second-delivery" })).status,
+    ).toBe(200);
+    for (const shop of ["someone-else.myshopify.com", "40kra0-b6.myshopify.com.evil.example", "b6.myshopify.com", ""]) {
+      expect(await deliver(recorded, env, { topic: "orders/updated", payload, shop, webhookId: "x-" + shop }), shop).toEqual({
+        status: 401,
+      });
+    }
+    // The signature is still checked first: the right shop with a wrong
+    // signature is refused.
+    expect(
+      await deliver(recorded, env, {
+        topic: "orders/updated",
+        payload,
+        shop: "40kra0-b6.myshopify.com",
+        hmac: await sign(encoder.encode(JSON.stringify(payload)), "shpss_wrong_secret"),
+      }),
+    ).toEqual({ status: 401 });
+
+    // Not recorded yet (before Refresh connection): only the stored domain.
+    const unrecorded = await setup();
+    expect(await deliver(unrecorded, env, { topic: "orders/updated", payload, shop: "40kra0-b6.myshopify.com" })).toEqual({
+      status: 401,
+    });
+  });
+
   // A legacy token's app secret is unknown, so its deliveries cannot be
   // verified: the cron sync carries those stores.
   it("rejects deliveries for a legacy-token, disconnected or unknown workspace", async () => {

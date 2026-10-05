@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 
 // Migration 0010 (draft orders spec section 2): the orders table is rebuilt
 // so shopify_order_id can be null while a card is still a draft, four draft
-// columns are added, two store_connections cursors are added, Approved is
+// columns are added, store_connections gains the draft cursor columns and
+// the store's own myshopify domain (canonical_shop_domain), Approved is
 // linked to draft_completed and a Rejected status is added where there is
 // room. Production data has to come through whole: this replays it on a
 // database migrated through 0009 and holding rows in the old shape, then
@@ -164,6 +165,9 @@ describe("migration 0010 on rows in the 0009 shape", () => {
         draft_sync_cursor_since: null,
         draft_last_sync_at: 0,
         draft_checked_at: 0,
+        // The store's own myshopify domain: unknown until the connection is
+        // saved or refreshed (webhooks name the store by it).
+        canonical_shop_domain: null,
       })),
     );
   });

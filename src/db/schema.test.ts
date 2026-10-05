@@ -304,8 +304,10 @@ describe("schema migrations", () => {
     expect(() => insert.run("o_draft_dup", "ws1", null, "8001", "#D1", "{}", "new", 1, 1)).toThrow(/UNIQUE/);
     expect(() => insert.run("o_neither", "ws1", null, null, "#X", "{}", "new", 1, 1)).toThrow(/CHECK/);
     expect(
-      db.prepare("SELECT draft_last_sync_at, draft_checked_at, draft_sync_cursor FROM store_connections WHERE workspace_id = ?").get("ws1"),
-    ).toEqual({ draft_last_sync_at: 0, draft_checked_at: 0, draft_sync_cursor: null });
+      db
+        .prepare("SELECT draft_last_sync_at, draft_checked_at, draft_sync_cursor, canonical_shop_domain FROM store_connections WHERE workspace_id = ?")
+        .get("ws1"),
+    ).toEqual({ draft_last_sync_at: 0, draft_checked_at: 0, draft_sync_cursor: null, canonical_shop_domain: null });
   });
 });
 

@@ -26,10 +26,10 @@ function detailOf(result: Awaited<ReturnType<typeof testShopConnection>>): strin
   return "detail" in result ? result.detail : "";
 }
 
-const verified = (handles: string[]) =>
+const verified = (handles: string[], shopFields: Record<string, unknown> = { myshopifyDomain: "40kra0-b6.myshopify.com" }) =>
   json({
     data: {
-      shop: { name: "IMPACT Rentals" },
+      shop: { name: "IMPACT Rentals", ...shopFields },
       currentAppInstallation: { accessScopes: handles.map((handle) => ({ handle })) },
     },
   });
@@ -43,6 +43,7 @@ describe("testShopConnection", () => {
       kind: "ok",
       shopName: "IMPACT Rentals",
       accessScopes: ["read_orders", "read_customers"],
+      myshopifyDomain: "40kra0-b6.myshopify.com",
     });
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe(`https://${DOMAIN}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`);
@@ -60,9 +61,33 @@ describe("testShopConnection", () => {
     const { impl, calls } = stub(() => verified(["read_orders"]));
     await testShopConnection(DOMAIN, TOKEN, impl);
     const query = String(calls[0].body.query).replace(/\s+/g, " ").trim();
-    expect(query).toBe("{ shop { name } currentAppInstallation { accessScopes { handle } } }");
+    expect(query).toBe("{ shop { name myshopifyDomain } currentAppInstallation { accessScopes { handle } } }");
     expect(query).not.toMatch(/\b(first|last|after|before)\s*:/);
     expect(calls[0].body.variables).toBeUndefined();
+  });
+
+  // The store's own myshopify domain, which can differ from the one the
+  // store was connected with (impactrentals.myshopify.com is an alias of
+  // 40kra0-b6.myshopify.com): Shopify names the store by it in
+  // X-Shopify-Shop-Domain on every webhook.
+  it("reads the store's own myshopify domain, and drops anything that is not one", async () => {
+    const table: Array<[Record<string, unknown>, string | null]> = [
+      [{ myshopifyDomain: "40kra0-b6.myshopify.com" }, "40kra0-b6.myshopify.com"],
+      [{ myshopifyDomain: " 40KRA0-B6.myshopify.com " }, "40kra0-b6.myshopify.com"],
+      [{}, null],
+      [{ myshopifyDomain: null }, null],
+      [{ myshopifyDomain: 7 }, null],
+      [{ myshopifyDomain: "" }, null],
+      [{ myshopifyDomain: "impactrentals.store" }, null],
+      [{ myshopifyDomain: "40kra0-b6.myshopify.com.evil.example" }, null],
+    ];
+    for (const [fields, expected] of table) {
+      const value = JSON.stringify(fields);
+      const { impl } = stub(() => verified(["read_orders"], fields));
+      const result = await testShopConnection(DOMAIN, TOKEN, impl);
+      expect(result.kind, String(value)).toBe("ok");
+      expect(result.kind === "ok" ? result.myshopifyDomain : "not ok", String(value)).toBe(expected);
+    }
   });
 
   it("reports a missing store (HTTP 404) as no-store", async () => {

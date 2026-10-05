@@ -404,6 +404,28 @@ describe("saveConnection", () => {
     });
   });
 
+  it("records the store's own myshopify domain beside the one it was connected with", async () => {
+    // impactrentals.myshopify.com is an alias of 40kra0-b6.myshopify.com:
+    // webhooks name the store by the latter.
+    const db = await setup();
+    const aliased = shopFetch(200, {
+      data: {
+        shop: { name: "IMPACT Rentals", myshopifyDomain: "40kra0-b6.myshopify.com" },
+        currentAppInstallation: { accessScopes: FULL_SCOPES.map((handle) => ({ handle })) },
+      },
+    });
+    const result = await saveConnection(db, ctx(aliased.impl), { shopDomain: "impactrentals", token: TOKEN });
+    expect(result.kind).toBe("saved");
+    expect(await connectionRow(db)).toMatchObject({
+      shopDomain: "impactrentals.myshopify.com",
+      canonicalShopDomain: "40kra0-b6.myshopify.com",
+    });
+
+    // A store that does not say keeps none (an older answer, a stub).
+    await saveConnection(db, ctx(okShop().impl), { shopDomain: "impactrentals", token: TOKEN });
+    expect((await connectionRow(db)).canonicalShopDomain).toBeNull();
+  });
+
   it("answers a Shopify 404 as no store at this address, and saves nothing", async () => {
     const db = await setup();
     const result = await saveConnection(db, ctx(shopFetch(404, { errors: "Not Found" }).impl), {

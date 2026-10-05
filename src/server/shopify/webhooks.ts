@@ -7,7 +7,10 @@
 // 2. X-Shopify-Hmac-Sha256 is base64(HMAC-SHA256(raw body, the workspace's
 //    client secret)), compared in constant time over the exact bytes
 //    received, and
-// 3. X-Shopify-Shop-Domain is the workspace's store.
+// 3. X-Shopify-Shop-Domain is the workspace's store: exactly its stored
+//    domain, or the store's own myshopify domain recorded with it when the
+//    connection was saved or refreshed (an aliased store's deliveries carry
+//    the latter).
 // Every rejection is the same 401, so a probe learns nothing about which
 // workspaces exist or how they are connected. Then each X-Shopify-Webhook-Id
 // is applied once (webhook_deliveries, insert or ignore: a repeat is a 200
@@ -200,6 +203,7 @@ export async function receiveShopifyWebhook(
       shopDomain: storeConnections.shopDomain,
       authMode: storeConnections.authMode,
       encryptedClientSecret: storeConnections.encryptedClientSecret,
+      canonicalShopDomain: storeConnections.canonicalShopDomain,
     })
     .from(storeConnections)
     .where(eq(storeConnections.workspaceId, input.workspaceId))
@@ -222,8 +226,12 @@ export async function receiveShopifyWebhook(
   if (!(await verifyShopifyHmac(input.rawBody, secret, hmac))) {
     return rejected;
   }
+  // Exactly the stored domain, or the store's own myshopify domain recorded
+  // with it: Shopify sends the latter, and a store connected under an alias
+  // (IMPACT: impactrentals.myshopify.com for 40kra0-b6.myshopify.com) has
+  // a stored domain that differs. Never any other host.
   const shop = (input.headers.get("x-shopify-shop-domain") ?? "").trim().toLowerCase();
-  if (shop !== connection.shopDomain) {
+  if (shop.length === 0 || (shop !== connection.shopDomain && shop !== connection.canonicalShopDomain)) {
     return rejected;
   }
 

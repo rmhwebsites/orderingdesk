@@ -481,7 +481,12 @@ export function isValidShopDomain(domain: string): boolean {
 
 export type ShopConnectionResult =
   // accessScopes: the handles of the scopes granted to the token's app.
-  | { kind: "ok"; shopName: string; accessScopes: string[] }
+  // myshopifyDomain: the store's own myshopify.com domain, which may differ
+  // from the one it was reached at (an alias, such as
+  // impactrentals.myshopify.com for 40kra0-b6.myshopify.com). Shopify names
+  // the store by it in X-Shopify-Shop-Domain on every webhook. Null when
+  // Shopify sent none or something that is not a myshopify.com host.
+  | { kind: "ok"; shopName: string; accessScopes: string[]; myshopifyDomain: string | null }
   | { kind: "auth" }
   // HTTP 404: no store answers at this myshopify.com address.
   | { kind: "no-store" }
@@ -495,7 +500,7 @@ const CONNECTION_TEST_TIMEOUT_MS = 15000;
 // Two objects and a short list (not a connection): nothing for the cost
 // limit to multiply, and no variables.
 const CONNECTION_TEST_QUERY =
-  "{ shop { name } currentAppInstallation { accessScopes { handle } } }";
+  "{ shop { name myshopifyDomain } currentAppInstallation { accessScopes { handle } } }";
 
 // Verifies a domain and token pair with a small fixed query before the token
 // is stored, returning the shop name and the token's scopes. Same
@@ -579,9 +584,16 @@ export async function testShopConnection(
   const accessScopes = installation.accessScopes
     .map((scope) => (isRecord(scope) && typeof scope.handle === "string" ? scope.handle : null))
     .filter((handle): handle is string => handle !== null);
+  // Held to the same host allowlist as every domain the app stores.
+  const domain = typeof shop.myshopifyDomain === "string" ? shop.myshopifyDomain.trim().toLowerCase() : "";
   // The name goes back to the browser; scrubbed like every other string
   // that originated outside this worker.
-  return { kind: "ok", shopName: scrub(shop.name, token), accessScopes };
+  return {
+    kind: "ok",
+    shopName: scrub(shop.name, token),
+    accessScopes,
+    myshopifyDomain: SHOP_DOMAIN.test(domain) ? domain : null,
+  };
 }
 
 // Strips every secret in the list from a detail string (see scrub).

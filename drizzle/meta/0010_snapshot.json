@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "c9f04e95-98fe-4d2f-b07f-d30985544095",
+  "id": "a8808bd1-c11e-473c-9480-7adf562e6361",
   "prevId": "876f9867-d12f-4093-8fa5-b0e2db5cdab2",
   "tables": {
     "events": {
@@ -1228,6 +1228,13 @@
           "notNull": true,
           "autoincrement": false,
           "default": 0
+        },
+        "canonical_shop_domain": {
+          "name": "canonical_shop_domain",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         }
       },
       "indexes": {},

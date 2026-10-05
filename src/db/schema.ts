@@ -115,6 +115,13 @@ export const storeConnections = sqliteTable("store_connections", {
   draftLastSyncAt: integer("draft_last_sync_at").notNull().default(0),
   // When the hourly check of every open draft card last ran to completion.
   draftCheckedAt: integer("draft_checked_at").notNull().default(0),
+  // The store's own myshopify.com domain (shop.myshopifyDomain), recorded
+  // when the connection is saved or refreshed. It can differ from
+  // shop_domain, which may be an alias (IMPACT: impactrentals.myshopify.com
+  // for 40kra0-b6.myshopify.com), and it is the domain Shopify puts in
+  // X-Shopify-Shop-Domain, so the webhook receiver accepts exactly either.
+  // Null until then, or when Shopify did not say.
+  canonicalShopDomain: text("canonical_shop_domain"),
 });
 
 // The Shopify states and draft order outcomes a status can follow (see
