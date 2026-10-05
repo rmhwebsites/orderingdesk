@@ -77,7 +77,27 @@ export type SendResult =
   | { kind: "sent"; po: PoView; event: EventView; notice: PoSentNotice; emailed: string[]; first: boolean }
   | { kind: "failed"; error: string; po: PoView; event: EventView };
 
-type SendRequest = { requestId: string; confirm: boolean; recipients: PoRecipients | null; resend: boolean };
+type SendRequest = {
+  requestId: string;
+  confirm: boolean;
+  recipients: PoRecipients | null;
+  resend: boolean;
+  // The sender's IANA time zone, for the date on the PDF and in the email
+  // (UTC without a real one).
+  timeZone: string | null;
+};
+
+function parseTimeZone(value: unknown): string | null {
+  if (typeof value !== "string" || value.length === 0 || value.length > 64) {
+    return null;
+  }
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value });
+    return value;
+  } catch {
+    return null;
+  }
+}
 
 function parseRecipients(value: unknown): PoRecipients | null {
   if (!isRecord(value) || !Array.isArray(value.to) || !Array.isArray(value.cc)) {
@@ -101,6 +121,7 @@ function parseRequest(body: unknown): SendRequest | string {
     confirm: body.confirm === true,
     recipients: parseRecipients(body.recipients),
     resend: body.resend === true,
+    timeZone: parseTimeZone(body.timeZone),
   };
 }
 
@@ -218,6 +239,8 @@ export async function sendPurchaseOrder(
   }
 
   const fence = and(eq(purchaseOrders.id, row.id), eq(purchaseOrders.sendAttempt, request.requestId));
+  // The PO's date: when it first went out (a resend keeps it), else now.
+  const poDate = request.resend && row.sentAt ? row.sentAt : claimedAt;
   let number: string | null = null;
   let storedKey: string | null = null;
   try {
@@ -247,7 +270,8 @@ export async function sendPurchaseOrder(
           replyTo: mail.replyTo,
           logo: await loadLogoBytes(deps.bucket, ctx.workspaceId, mail.branding),
           poNumber: number,
-          date: claimedAt,
+          date: poDate,
+          timeZone: request.timeZone,
           orderName: orderRows[0].name,
           vendor: { name: vendor.name, email: vendor.email },
           shipTo: readShipTo(row.shipTo),
@@ -284,7 +308,8 @@ export async function sendPurchaseOrder(
       subtotalCents: subtotal,
       shipTo: readShipTo(row.shipTo),
       notes: row.notes ?? null,
-      date: claimedAt,
+      date: poDate,
+      timeZone: request.timeZone,
     });
     const sender = senderFor(deps.env, mail);
     try {

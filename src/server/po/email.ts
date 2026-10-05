@@ -22,6 +22,8 @@ export type VendorPoEmailInput = {
   shipTo: string[];
   notes: string | null;
   date: number;
+  // The sender's time zone for the date, or null for UTC.
+  timeZone?: string | null;
 };
 
 const LABEL_STYLE = "padding:6px 16px 6px 0;vertical-align:top;font-size:14px;line-height:20px;font-weight:700;white-space:nowrap;";
@@ -45,7 +47,7 @@ export function vendorPoEmail(env: CloudflareEnv, workspace: MailWorkspace, po: 
   const shipTo = po.shipTo.filter((line) => line.trim().length > 0);
   const rows: Array<[string, string]> = [
     ["Purchase order", escapeHtml(po.poNumber)],
-    ["Date", escapeHtml(formatDate(po.date, "UTC"))],
+    ["Date", escapeHtml(formatDate(po.date, po.timeZone ?? "UTC"))],
     ["Reference", escapeHtml(`Order ${po.orderName}`)],
     ["Items", escapeHtml(`${plural(po.lines.length, "line")}, ${plural(units, "unit")}`)],
     ["Total", escapeHtml(total)],

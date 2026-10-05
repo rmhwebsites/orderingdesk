@@ -171,6 +171,15 @@ describe("a confirmed send", () => {
     ]);
   });
 
+  it("dates the PDF and the email in the sender's time zone, ignoring one that is not real", async () => {
+    clock = Date.UTC(2026, 9, 5, 1, 30);
+    await send(confirmed({ timeZone: "America/Toronto" }));
+    expect(sent[0].html).toContain("Oct 4, 2026");
+    await db.update(schema.purchaseOrders).set({ status: "draft" }).where(eq(schema.purchaseOrders.id, poId));
+    await send(confirmed({ timeZone: "Mars/Olympus_Mons" }));
+    expect(sent[1].html).toContain("Oct 5, 2026");
+  });
+
   it("sends from the workspace's own verified address when it has one", async () => {
     await db
       .update(schema.workspaces)
@@ -289,6 +298,14 @@ describe("never twice by accident", () => {
       "Purchase order IMP-2026-0001 sent again to Northline Supply",
     ]);
     expect(first.kind).toBe("sent");
+  });
+
+  it("keeps the first send's date when sending again days later", async () => {
+    await send(confirmed());
+    clock = NOW + 3 * 24 * 60 * 60 * 1000;
+    await send(confirmed({ resend: true }));
+    expect(sent[1].html).toContain("Oct 4, 2026");
+    expect(sent[1].html).not.toContain("Oct 7, 2026");
   });
 
   it("refuses a resend of a PO that was never sent", async () => {

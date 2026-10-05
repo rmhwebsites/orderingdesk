@@ -8,9 +8,10 @@ import { sendPurchaseOrder } from "@/server/po/send";
 type RouteContext = { params: Promise<{ poId: string }> };
 
 // Sends the PO to its vendor (managers and platform admins; 404 for staff).
-// Body {requestId, confirm: true, recipients: {to, cc}, resend?}: confirm
-// must be true and recipients exactly who it would go to now, or nothing is
-// sent (src/server/po/send.ts).
+// Body {requestId, confirm: true, recipients: {to, cc}, resend?, timeZone?}:
+// confirm must be true and recipients exactly who it would go to now, or
+// nothing is sent (src/server/po/send.ts). timeZone (the sender's) dates the
+// PDF and the email.
 // - 200 {po}: sent. 200 {po, unchanged: "already-sent" | "replayed"}:
 //   nothing sent by this request (po says how the PO stands).
 // - 400 {error} bad input, 400 {error, recipients} no confirmation,

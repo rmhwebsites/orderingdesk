@@ -151,6 +151,12 @@ describe("renderPoPdf", () => {
     expect(Buffer.from(withLogo).toString("latin1")).toContain("/Subtype /Image");
   });
 
+  it("dates the PO in the sender's time zone when given one, else UTC", async () => {
+    const lateEvening = Date.UTC(2026, 9, 5, 1, 30);
+    expect(pdfText(await renderPoPdf(input({ date: lateEvening, timeZone: "America/Toronto" })))).toContain("Oct 4, 2026");
+    expect(pdfText(await renderPoPdf(input({ date: lateEvening, timeZone: null })))).toContain("Oct 5, 2026");
+  });
+
   it("keeps the line breaks in notes", async () => {
     const text = pdfText(await renderPoPdf(input({ notes: "Line one\nLine two\n\nLine four" })));
     expect(text.split("\n")).toEqual(expect.arrayContaining(["Line one", "Line two", "Line four"]));

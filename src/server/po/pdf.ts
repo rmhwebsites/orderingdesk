@@ -33,8 +33,10 @@ export type PoPdfInput = {
   // PNG or JPEG bytes, or null (the workspace name is shown instead).
   logo: Uint8Array | null;
   poNumber: string;
-  // When the PO is sent (ms); shown as a UTC calendar date.
+  // When the PO is sent (ms), shown as a calendar date in timeZone (the
+  // sender's), or in UTC without one.
   date: number;
+  timeZone?: string | null;
   orderName: string;
   vendor: { name: string; email: string };
   shipTo: string[];
@@ -296,7 +298,7 @@ function drawHeader(w: Writer, input: PoPdfInput, logo: PDFImage | null): void {
   right -= 26;
   const rows: Array<[string, string]> = [
     ["PO number", clean(fonts, input.poNumber)],
-    ["Date", formatDate(input.date, "UTC")],
+    ["Date", formatDate(input.date, input.timeZone ?? "UTC")],
     ["Order", clean(fonts, input.orderName)],
   ];
   for (const [label, value] of rows) {
