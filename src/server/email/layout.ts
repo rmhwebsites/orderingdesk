@@ -159,12 +159,14 @@ function decodeEntities(text: string): string {
 }
 
 // The plain-text reading of the (simple) body HTML templates write: links
-// become "label (url)", block ends become blank lines, tags go, entities
-// are decoded.
+// become "label (url)", the cells of a label and value table row become
+// "Label: value", block ends become blank lines, tags go, entities are
+// decoded.
 function htmlToText(html: string): string {
   return decodeEntities(
     html
       .replace(/<a\s[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, (_match, href: string, label: string) => `${label} (${href})`)
+      .replace(/<\/td>\s*<td[^>]*>/gi, ": ")
       .replace(/<br\s*\/?>/gi, "\n")
       .replace(/<\/(p|div|h[1-6]|li|tr|table)>/gi, "\n\n")
       .replace(/<li[^>]*>/gi, "- ")

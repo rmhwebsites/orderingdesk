@@ -51,6 +51,22 @@ describe("vendorPoEmail", () => {
     expect(email.text).toContain("The PDF is attached");
   });
 
+  // The vendor may read the plain-text part (a text-only client).
+  it("keeps each label apart from its value in the plain-text part", () => {
+    const { text } = vendorPoEmail(env, workspace(), po());
+    for (const expected of [
+      "Purchase order: IMP-2026-0041",
+      "Date: Oct 4, 2026",
+      "Reference: Order #1001",
+      "Items: 2 lines, 5 units",
+      "Total: CA$35.00",
+      "Ship to: Riley Oakes\n12 Harbour St",
+    ]) {
+      expect(text).toContain(expected);
+    }
+    expect(text).not.toContain("DateOct");
+  });
+
   it("escapes every value in the body and keeps the subject on one line", () => {
     const email = vendorPoEmail(
       env,

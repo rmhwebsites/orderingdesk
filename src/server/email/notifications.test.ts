@@ -42,6 +42,16 @@ describe("newOrderEmail", () => {
     expect(email.text).toContain("Open the order: https://orders.impactrentals.store/?order=o1");
   });
 
+  // Text-only mail clients and watch previews show the plain-text part.
+  it("keeps each summary label apart from its value in the plain-text part", () => {
+    const email = newOrderEmail(env, workspace, order, "https://orders.impactrentals.store/?order=o1");
+    expect(email.text).toContain("Order: #1001");
+    expect(email.text).toContain("Customer: Riley Oakes");
+    expect(email.text).toContain("Total: CA$120.00");
+    expect(email.text).toContain("Items: 2 x Hard Hat (White)\n1 x Safety Vest");
+    expect(email.text).not.toContain("Order#1001");
+  });
+
   it("is branded to the workspace (its primary color and name)", () => {
     const email = newOrderEmail(env, workspace, order, "https://orders.impactrentals.store/?order=o1");
     expect(email.html).toContain("#1d4ed8");
@@ -85,6 +95,7 @@ describe("newOrdersDigestEmail", () => {
     expect(email.html).toContain("#100");
     expect(email.html).toContain("#106");
     expect(email.html).toContain('href="https://orders.impactrentals.store/"');
+    expect(email.text).toContain("#100: Riley Oakes, CA$120.00");
   });
 });
 
@@ -100,5 +111,8 @@ describe("poSentEmail", () => {
     expect(email.html).toContain("IMP-2026-0041");
     expect(email.html).toContain("North Supply");
     expect(email.html).toContain("#1001");
+    expect(email.text).toContain("Purchase order: IMP-2026-0041");
+    expect(email.text).toContain("Order: #1001");
+    expect(email.text).toContain("Vendor: North Supply");
   });
 });

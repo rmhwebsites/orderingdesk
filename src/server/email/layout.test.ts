@@ -154,4 +154,15 @@ describe("renderEmail layout", () => {
     expect(text).toContain("If you did not request this email, you can safely ignore it.");
     expect(text).not.toContain("<");
   });
+
+  it("reads a label and value table as one 'Label: value' line per row in the plain-text part", () => {
+    const { text } = render(workspace(), {
+      bodyHtml:
+        '<table role="presentation"><tr><td style="font-weight:700;">Order</td><td style="padding:6px 0;">#1042</td></tr>' +
+        '<tr><td style="font-weight:700;">Ship to</td>\n<td>Dana Whitfield<br>12 Harbour St</td></tr></table>',
+    });
+    expect(text).toContain("Order: #1042");
+    expect(text).toContain("Ship to: Dana Whitfield\n12 Harbour St");
+    expect(text).not.toContain("Order#1042");
+  });
 });
