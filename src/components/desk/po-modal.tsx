@@ -124,12 +124,57 @@ export function PoModalBody({ children }: { children: React.ReactNode }) {
   return <div className="flex-1 shrink-[1000] overflow-y-auto overscroll-contain px-4 py-5 sm:px-6">{children}</div>;
 }
 
+const FOOTER_ID = "po-footer";
+const STATUS_ID = "po-status";
+const HEADING_ID = "po-heading";
+
 export function PoModalFooter({ children }: { children: React.ReactNode }) {
   return (
-    <footer className="flex max-h-[60dvh] flex-col gap-3 overflow-y-auto overscroll-contain border-t border-line px-4 py-4 sm:px-6">
+    <footer
+      id={FOOTER_ID}
+      className="flex max-h-[60dvh] flex-col gap-3 overflow-y-auto overscroll-contain border-t border-line px-4 py-4 sm:px-6"
+    >
       {children}
     </footer>
   );
+}
+
+type ModalMessage = { tone: "bad" | "warn" | "info"; text: string };
+
+// The footer's message (a save or send that did not go through, or someone
+// else sending the PO). Focusable from script, so focus can land on it when
+// every footer button is disabled.
+export function PoModalStatus({ message }: { message: ModalMessage | null }) {
+  if (!message) {
+    return null;
+  }
+  return (
+    <div id={STATUS_ID} tabIndex={-1} className="rounded-panel outline-none">
+      <InlineMessage tone={message.tone}>{message.text}</InlineMessage>
+    </div>
+  );
+}
+
+type FocusCandidate = { disabled?: boolean; getAttribute(name: string): string | null };
+
+function canTakeFocus(element: FocusCandidate): boolean {
+  return element.disabled !== true && element.getAttribute("aria-disabled") !== "true";
+}
+
+// Where focus goes after a save or a send that left the modal open: the
+// button that was pressed when it is enabled again, else the first enabled
+// control in the footer, else the first fallback there is (the status
+// message, then the modal heading). Never a disabled button, which cannot
+// take focus and would drop it to the page.
+export function footerFocusTarget<T extends FocusCandidate>(
+  preferred: T | null,
+  footerControls: readonly T[],
+  fallbacks: readonly (T | null)[],
+): T | null {
+  if (preferred && canTakeFocus(preferred)) {
+    return preferred;
+  }
+  return footerControls.find(canTakeFocus) ?? fallbacks.find((element): element is T => element !== null) ?? null;
 }
 
 // The form's own buttons. Review and send opens the confirmation step;
@@ -164,9 +209,18 @@ export function DraftActions({
 }
 
 // After a save or a send that did not close the modal, focus goes back to
-// the footer button (disabled while it ran), or Close once the PO is sent.
+// the footer button (disabled while it ran), or Close once the PO is sent;
+// when that button is disabled (someone else is sending the PO), the first
+// enabled footer control, else the status message, else the heading.
 function focusFooter(id: "po-save-draft" | "po-send") {
-  focusSoon(() => document.getElementById(id) ?? document.getElementById("po-done"));
+  focusSoon(() => {
+    const footer = document.getElementById(FOOTER_ID);
+    const controls = footer
+      ? Array.from(footer.querySelectorAll<HTMLElement & { disabled?: boolean }>("button, a[href], input, select, textarea"))
+      : [];
+    const preferred = (document.getElementById(id) ?? document.getElementById("po-done")) as (HTMLElement & { disabled?: boolean }) | null;
+    return footerFocusTarget(preferred, controls, [document.getElementById(STATUS_ID), document.getElementById(HEADING_ID)]);
+  });
 }
 
 type VendorDraft = { name: string; email: string; cc: string };
@@ -403,7 +457,9 @@ export function PoModal({
   onSaved: (po: PoView) => void;
   onSent: (po: PoView) => void;
 }) {
-  const titleId = useId();
+  // One review modal is open at a time; the fixed id lets focusFooter find
+  // the heading.
+  const titleId = HEADING_ID;
   const [loaded, setLoaded] = useState<Loaded>({ status: "loading" });
   const [vendors, setVendors] = useState<VendorView[]>([]);
   const [po, setPo] = useState<PoView | null>(initialPo);
@@ -413,7 +469,7 @@ export function PoModal({
   // After a Save or Send found problems, the form is checked again on
   // every change, so each message goes as soon as its field is fixed.
   const [checkMode, setCheckMode] = useState<{ requireCosts: boolean } | null>(null);
-  const [message, setMessage] = useState<{ tone: "bad" | "warn" | "info"; text: string } | null>(null);
+  const [message, setMessage] = useState<ModalMessage | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
   const [askDiscard, setAskDiscard] = useState(false);
@@ -680,7 +736,7 @@ export function PoModal({
     <ModalShell labelledBy={titleId} onRequestClose={requestClose}>
       <header className="flex items-start justify-between gap-3 border-b border-line px-4 py-4 sm:px-6">
         <div className="min-w-0">
-          <h2 id={titleId} className="font-display text-lg font-semibold text-ink">
+          <h2 id={titleId} tabIndex={-1} className="font-display text-lg font-semibold text-ink outline-none">
             {loaded.status === "ready" ? `Purchase order for ${loaded.orderName}` : "Purchase order"}
           </h2>
           {header ? <p className="mt-0.5 font-mono text-sm tabular-nums text-ink-2">{header}</p> : null}
@@ -870,7 +926,7 @@ export function PoModal({
       {ready ? (
         <PoModalFooter>
           {errors ? <InlineMessage tone="bad">Check the highlighted fields.</InlineMessage> : null}
-          {message ? <InlineMessage tone={message.tone}>{message.text}</InlineMessage> : null}
+          <PoModalStatus message={message} />
           {flow.pending ? (
             <SendConfirm
               pending={flow.pending}
@@ -878,7 +934,7 @@ export function PoModal({
               onConfirm={() => void flow.confirm()}
               onCancel={() => {
                 flow.cancel();
-                focusSoon(() => document.getElementById("po-send"));
+                focusFooter("po-send");
               }}
             />
           ) : askDiscard ? (
@@ -889,7 +945,7 @@ export function PoModal({
                 if (event.key === "Escape") {
                   event.stopPropagation();
                   setAskDiscard(false);
-                  focusSoon(() => document.getElementById("po-send"));
+                  focusFooter("po-send");
                 }
               }}
             >
@@ -900,7 +956,7 @@ export function PoModal({
                   type="button"
                   onClick={() => {
                     setAskDiscard(false);
-                    focusSoon(() => document.getElementById("po-send"));
+                    focusFooter("po-send");
                   }}
                   className={ui.buttonSecondary}
                 >

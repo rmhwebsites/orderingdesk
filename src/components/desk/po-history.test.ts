@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ToastProvider } from "@/components/toasts";
 import { PoRowActions, PurchaseOrders } from "./po-history";
-import { DraftActions, PoModalBody, PoModalFooter } from "./po-modal";
+import { DraftActions, footerFocusTarget, PoModalBody, PoModalFooter, PoModalStatus } from "./po-modal";
 import { CONFIRM_ARM_MS, confirmArmed, confirmFocus, pendingFromPo, reconfirmPending, SendConfirm, type PendingSend } from "./po-send-confirm";
 import type { PoView } from "@/server/po/service";
 
@@ -326,5 +326,52 @@ describe("PO modal footer", () => {
     const body = renderToStaticMarkup(createElement(PoModalBody, null, "Form")).match(/class="([^"]*)"/)?.[1].split(" ") ?? [];
     expect(body).toContain("overflow-y-auto");
     expect(body).toContain("shrink-[1000]");
+  });
+});
+
+// After a save or a send that leaves the modal open, focus must land on
+// something that can take it: a disabled button (Review and send while
+// someone else is sending the PO) cannot, and focus would drop to the page.
+describe("footerFocusTarget", () => {
+  const control = (name: string, opts: { disabled?: boolean; ariaDisabled?: boolean } = {}) => ({
+    name,
+    disabled: opts.disabled ?? false,
+    getAttribute: (attribute: string) => (attribute === "aria-disabled" && opts.ariaDisabled ? "true" : null),
+  });
+  const status = control("status");
+  const heading = control("heading");
+
+  it("goes back to the button that was pressed when it is enabled", () => {
+    const send = control("po-send");
+    expect(footerFocusTarget(send, [control("po-save-draft"), send], [status, heading])?.name).toBe("po-send");
+  });
+
+  it("takes the first enabled footer control when that button is disabled", () => {
+    const send = control("po-send", { disabled: true });
+    expect(footerFocusTarget(send, [control("po-save-draft"), send], [status, heading])?.name).toBe("po-save-draft");
+    expect(footerFocusTarget(null, [control("po-done")], [status, heading])?.name).toBe("po-done");
+  });
+
+  it("skips controls marked aria-disabled", () => {
+    const busy = control("po-send", { ariaDisabled: true });
+    expect(footerFocusTarget(busy, [busy, control("po-save-draft")], [heading])?.name).toBe("po-save-draft");
+  });
+
+  // Someone else is sending the PO: Save draft and Review and send are both
+  // disabled, so focus goes to the message that says why, else the heading.
+  it("falls back to the status message, then the heading, when every footer control is disabled", () => {
+    const disabled = [control("po-save-draft", { disabled: true }), control("po-send", { disabled: true })];
+    expect(footerFocusTarget(disabled[1], disabled, [status, heading])?.name).toBe("status");
+    expect(footerFocusTarget(disabled[1], disabled, [null, heading])?.name).toBe("heading");
+    expect(footerFocusTarget(null, [], [null, null])).toBeNull();
+  });
+});
+
+describe("PoModalStatus", () => {
+  it("can take focus from script, and renders nothing without a message", () => {
+    const html = renderToStaticMarkup(createElement(PoModalStatus, { message: { tone: "info", text: "This purchase order is being sent right now." } }));
+    expect(html).toMatch(/^<div id="po-status" tabindex="-1"/);
+    expect(html).toContain("This purchase order is being sent right now.");
+    expect(renderToStaticMarkup(createElement(PoModalStatus, { message: null }))).toBe("");
   });
 });
