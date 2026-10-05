@@ -41,7 +41,26 @@ function readDeviceState(): Promise<DeviceState> {
   );
 }
 
-const DEVICE_TOGGLE_ID = "alerts-device-push";
+export const DEVICE_TOGGLE_ID = "alerts-device-push";
+export const DEVICE_BLOCKED_ID = "alerts-device-blocked";
+
+// Where focus goes once the device button has worked: the button shown now,
+// or, when push ended up blocked (no button is shown), the message that says
+// how to allow it.
+export function deviceFocusId(kind: DeviceState["kind"]): string {
+  return kind === "blocked" ? DEVICE_BLOCKED_ID : DEVICE_TOGGLE_ID;
+}
+
+// Focusable from script (not by Tab): where focus lands when turning push on
+// ends blocked.
+export function DeviceBlockedMessage() {
+  return (
+    <p id={DEVICE_BLOCKED_ID} tabIndex={-1} className="max-w-[65ch] rounded-control text-sm text-ink-2 outline-none">
+      Notifications are blocked for this site in your browser settings. Allow them there, then reload this page and
+      turn push on.
+    </p>
+  );
+}
 
 function DevicePanel() {
   const [state, setState] = useState<DeviceState>({ kind: "checking" });
@@ -62,8 +81,9 @@ function DevicePanel() {
   }, []);
 
   // The button is disabled while it works (and swapped for the other one
-  // after), which drops focus to the page: hand it to the button shown now.
-  const refocus = () => focusSoon(() => document.getElementById(DEVICE_TOGGLE_ID));
+  // after, or for no button once push is blocked), which drops focus to the
+  // page: hand it to what is shown now.
+  const refocus = (kind: DeviceState["kind"]) => focusSoon(() => document.getElementById(deviceFocusId(kind)));
 
   async function enable() {
     setBusy(true);
@@ -71,14 +91,17 @@ function DevicePanel() {
     setDone(null);
     const result = await enableDevicePush();
     setBusy(false);
-    refocus();
     if (result.ok) {
       setState({ kind: "on" });
       setDone("Push is on for this device.");
+      refocus("on");
       return;
     }
     if (result.reason === "denied") {
       setState({ kind: "blocked" });
+      refocus("blocked");
+    } else {
+      refocus("off");
     }
     setError(result.message);
   }
@@ -89,7 +112,7 @@ function DevicePanel() {
     setDone(null);
     const ok = await disableDevicePush();
     setBusy(false);
-    refocus();
+    refocus(ok ? "off" : "on");
     if (ok) {
       setState({ kind: "off" });
       setDone("Push is off for this device.");
@@ -132,12 +155,7 @@ function DevicePanel() {
         </p>
       ) : null}
 
-      {state.kind === "blocked" ? (
-        <p className="max-w-[65ch] text-sm text-ink-2">
-          Notifications are blocked for this site in your browser settings. Allow them there, then reload this page and
-          turn push on.
-        </p>
-      ) : null}
+      {state.kind === "blocked" ? <DeviceBlockedMessage /> : null}
 
       {state.kind === "off" ? (
         <>

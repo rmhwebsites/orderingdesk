@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { MyNotificationsSection } from "./my-notifications";
+import { DEVICE_BLOCKED_ID, DEVICE_TOGGLE_ID, DeviceBlockedMessage, deviceFocusId, MyNotificationsSection } from "./my-notifications";
 
 // Settings > Your notifications, rendered on the server (no DOM in vitest:
 // the device's push state is read in the browser after mounting, so the
@@ -38,5 +38,22 @@ describe("MyNotificationsSection", () => {
     const html = render(false);
     expect(html).toContain("You are not a member of IMPACT Rentals, so it does not send you notifications.");
     expect(html).not.toContain('role="switch"');
+  });
+});
+
+// Turning push on can end blocked (the browser denied it), which shows no
+// button at all: focus must land on the message that says what to do, not
+// drop to the page.
+describe("focus after the device button", () => {
+  it("goes to the blocked message when push ends up blocked, else to the button shown now", () => {
+    expect(deviceFocusId("blocked")).toBe(DEVICE_BLOCKED_ID);
+    expect(deviceFocusId("on")).toBe(DEVICE_TOGGLE_ID);
+    expect(deviceFocusId("off")).toBe(DEVICE_TOGGLE_ID);
+  });
+
+  it("can put focus on the blocked message from script", () => {
+    const html = renderToStaticMarkup(createElement(DeviceBlockedMessage));
+    expect(html).toMatch(new RegExp(`^<p id="${DEVICE_BLOCKED_ID}" tabindex="-1"`));
+    expect(html).toContain("Notifications are blocked for this site");
   });
 });
