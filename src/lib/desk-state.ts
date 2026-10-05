@@ -159,6 +159,17 @@ export function applyLiveEvent(
   }
 }
 
+// Whether a live event is a purchase order entry (drafted, sent, failed)
+// for the order open in the drawer, whose PO history should then reload.
+export function touchesPurchaseOrders(event: LiveEvent, openOrderId: string | null): boolean {
+  return (
+    openOrderId !== null &&
+    event.kind === "order.activity" &&
+    event.event.orderId === openOrderId &&
+    (event.event.type === "po_draft" || event.event.type === "po_sent" || event.event.type === "po_failed")
+  );
+}
+
 // Shows a status change before the server confirms it. Null when there is
 // nothing to change (unknown order, same status).
 export function optimisticStatus(

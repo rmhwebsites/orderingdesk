@@ -36,7 +36,8 @@ export type LiveEvent =
   // A member added a note; event is the timeline entry.
   | { kind: "order.note"; event: EventView }
   // A system timeline entry, such as the outcome of writing a status to
-  // Shopify.
+  // Shopify, or a purchase order drafted, sent or failed (po_* events; open
+  // drawers reload the order's purchase orders).
   | { kind: "order.activity"; event: EventView };
 
 const EVENT_TYPES = new Set([
@@ -45,6 +46,7 @@ const EVENT_TYPES = new Set([
   "note",
   "po_sent",
   "po_draft",
+  "po_failed",
   "sync_error",
   "shopify_write",
 ]);

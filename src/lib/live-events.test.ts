@@ -43,6 +43,15 @@ describe("parseLiveEvent", () => {
     expect(parseLiveEvent(JSON.stringify({ kind: "order.activity" }))).toBeNull();
   });
 
+  // Purchase order entries (drafted, sent, failed) reach open drawers the
+  // same way.
+  it("accepts purchase order activity entries", () => {
+    for (const type of ["po_draft", "po_sent", "po_failed"]) {
+      const activity = { kind: "order.activity", event: { ...event, type, text: "Purchase order IMP-2026-0001", meta: { poId: "po1" } } };
+      expect(parseLiveEvent(JSON.stringify(activity))).toEqual(activity);
+    }
+  });
+
   // The order history import's refresh: a count, never ids to announce.
   it("accepts an import refresh with a positive whole count only", () => {
     expect(parseLiveEvent(JSON.stringify({ kind: "orders.imported", count: 12 }))).toEqual({ kind: "orders.imported", count: 12 });

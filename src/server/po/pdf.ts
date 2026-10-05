@@ -410,13 +410,14 @@ function drawTotals(w: Writer, input: PoPdfInput): void {
   w.y = y - 26;
 }
 
+// Notes keep their line breaks; each paragraph wraps on its own.
 function drawNotes(w: Writer, input: PoPdfInput): void {
   const { fonts, palette } = w;
-  const notes = input.notes ? clean(fonts, input.notes) : "";
-  if (!notes) {
+  const paragraphs = (input.notes ?? "").split(/\r?\n/).map((paragraph) => clean(fonts, paragraph));
+  if (paragraphs.every((paragraph) => paragraph.length === 0)) {
     return;
   }
-  const lines = wrap(fonts.regular, notes, 10, CONTENT_W);
+  const lines = paragraphs.flatMap((paragraph) => (paragraph ? wrap(fonts.regular, paragraph, 10, CONTENT_W) : [""]));
   w.ensure(16 + ROW_LEADING);
   w.text("Notes", MARGIN, w.y, { bold: true, size: 9, color: palette.heading });
   w.y -= 16;

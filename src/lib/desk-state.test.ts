@@ -8,6 +8,7 @@ import {
   selectOrders,
   statusChips,
   totalOrders,
+  touchesPurchaseOrders,
   type DeskState,
 } from "./desk-state";
 
@@ -230,6 +231,23 @@ describe("applyLiveEvent: order.activity", () => {
     expect(applyLiveEvent(opened, activity("a1"), ME).state).toBe(opened);
     const closed = state();
     expect(applyLiveEvent(closed, activity("a1"), ME).state).toBe(closed);
+  });
+});
+
+describe("touchesPurchaseOrders", () => {
+  const entry = (type: string, orderId = "o1") => ({
+    kind: "order.activity" as const,
+    event: timelineEvent("p1", { orderId, type: type as EventView["type"], actorId: ME }),
+  });
+
+  it("is true for a purchase order entry on the open order only", () => {
+    for (const type of ["po_draft", "po_sent", "po_failed"]) {
+      expect(touchesPurchaseOrders(entry(type), "o1")).toBe(true);
+    }
+    expect(touchesPurchaseOrders(entry("po_sent", "o2"), "o1")).toBe(false);
+    expect(touchesPurchaseOrders(entry("po_sent"), null)).toBe(false);
+    expect(touchesPurchaseOrders(entry("shopify_write"), "o1")).toBe(false);
+    expect(touchesPurchaseOrders({ kind: "orders.imported", count: 2 }, "o1")).toBe(false);
   });
 });
 

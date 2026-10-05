@@ -245,6 +245,7 @@ const EVENT_ICONS: Record<EventView["type"], typeof ChatTextIcon> = {
   order_new: ShoppingBagIcon,
   po_draft: FileTextIcon,
   po_sent: FileTextIcon,
+  po_failed: WarningIcon,
   sync_error: WarningIcon,
   shopify_write: StorefrontIcon,
 };

@@ -11,8 +11,9 @@
 //   Orders created more than a day ago are claimed silently (a store's
 //   first sync backfills two months). More than DIGEST_AFTER fresh orders
 //   at once become one summary push and email instead of a flood.
-// - notifyPoSent: ready for Phase 7's explicit Send to vendor; same
-//   audience, and the sender's own devices get no push.
+// - notifyPoSent: after a reviewed Send to vendor (src/server/po/send.ts);
+//   same audience, the sender's own devices get no push, and addresses
+//   already on the vendor email get no second email.
 // - notifyActivity: status changes and notes, pushed only to members who
 //   opted into all activity, never about their own change.
 //
@@ -366,14 +367,17 @@ export async function notifyNewOrders(
   return result;
 }
 
-// ---- Purchase orders (Phase 7 calls this after Send to vendor) -----------
+// ---- Purchase orders (called after a reviewed Send to vendor) ------------
 
+// alreadyEmailed: the addresses on the vendor email itself (its To and CC,
+// which include the notification list); they already have the PO and its
+// PDF, so they get no second email about the same send.
 export async function notifyPoSent(
   db: Db,
   env: CloudflareEnv,
   workspaceId: string,
   po: PoSentNotice,
-  opts?: NotifyOptions,
+  opts?: NotifyOptions & { alreadyEmailed?: readonly string[] },
 ): Promise<{ pushed: number; emailed: number }> {
   const result = { pushed: 0, emailed: 0 };
   try {
@@ -394,10 +398,11 @@ export async function notifyPoSent(
         }),
       { ...opts, urgency: "normal", ttl: 86400 },
     );
+    const skip = new Set((opts?.alreadyEmailed ?? []).map((email) => email.trim().toLowerCase()));
     result.emailed = await emailEach(
       env,
       workspace,
-      emailRecipients(list, members),
+      emailRecipients(list, members).filter((email) => !skip.has(email)),
       poSentEmail(env, workspace, po, emailLink(env, workspace, po.orderId)),
     );
     log({ workspaceId, poSent: true, pushed: result.pushed, emailed: result.emailed });

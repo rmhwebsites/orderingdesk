@@ -359,4 +359,20 @@ describe("notifyPoSent", () => {
     expect(result.emailed).toBe(4);
     expect(sent.map((message) => message.subject)).toEqual(Array(4).fill("Purchase order IMP-2026-0041 sent to North Supply"));
   });
+
+  // The vendor email already copies the notification list, with the PDF:
+  // those addresses get no second email about the same send.
+  it("skips addresses that were already on the vendor email", async () => {
+    await order("o1", { name: "#1001" });
+    const result = await notifyPoSent(
+      db,
+      env,
+      WS,
+      { poId: "po1", poNumber: "IMP-2026-0041", orderId: "o1", orderName: "#1001", vendorName: "North Supply", actorId: "u_manager" },
+      { ...opts, alreadyEmailed: ["orders@north.example", "ORDERS@impactrentals.store", "staff@example.com"] },
+    );
+    expect(result.emailed).toBe(2);
+    expect(sent.map((message) => message.to).sort()).toEqual([["all@example.com"], ["manager@example.com"]]);
+    expect(pushed.map((entry) => entry.target.id).sort()).toEqual(["s_all", "s_staff"]);
+  });
 });

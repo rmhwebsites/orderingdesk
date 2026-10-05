@@ -4,7 +4,7 @@ import { headers } from "next/headers";
 import { NextResponse } from "next/server";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { getDb, type Db } from "@/db";
-import { orders, workspaceMembers, workspaces } from "@/db/schema";
+import { orders, purchaseOrders, workspaceMembers, workspaces } from "@/db/schema";
 import { roleAtLeast, type Role } from "@/lib/roles";
 import { isPlatformAdmin } from "./access";
 import { getAuth } from "./auth";
@@ -173,6 +173,38 @@ export async function requireMemberByOrder(orderId: string, required: Role) {
   const { role, workspaceId } = await resolveOrderAccess(guarded.db, orderId, guarded.viewer, required);
   assertHostAllows(guarded.host, workspaceId);
   return { ...guarded, role, workspaceId };
+}
+
+// The db-taking core of requireMemberByPo: like resolveOrderAccess, for a
+// purchase order. A missing PO and a non-member (or under-ranked) caller
+// get the same 404.
+export async function resolvePoAccess(
+  db: Db,
+  poId: string,
+  viewer: Viewer,
+  required: Role,
+): Promise<{ role: Role; workspaceId: string; orderId: string }> {
+  const rows = await db
+    .select({ workspaceId: purchaseOrders.workspaceId, orderId: purchaseOrders.orderId })
+    .from(purchaseOrders)
+    .where(eq(purchaseOrders.id, poId))
+    .limit(1);
+  const po = rows[0];
+  if (!po) {
+    throw notFound();
+  }
+  // The PO's foreign key guarantees its workspace exists.
+  const role = await resolveWorkspaceRole(db, viewer, po.workspaceId, required, true);
+  return { role, workspaceId: po.workspaceId, orderId: po.orderId };
+}
+
+// Guard for purchase-order-scoped routes (/api/pos/[poId]/...): 401
+// without a session first, then resolvePoAccess and the host scope.
+export async function requireMemberByPo(poId: string, required: Role) {
+  const guarded = await requireSession();
+  const access = await resolvePoAccess(guarded.db, poId, guarded.viewer, required);
+  assertHostAllows(guarded.host, access.workspaceId);
+  return { ...guarded, ...access };
 }
 
 // Guard for /w/[slug] server components. EVERY server component under

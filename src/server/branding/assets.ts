@@ -489,6 +489,9 @@ function notFound(): Response {
 // only under that workspace's prefix. Served immutable (every upload gets a
 // new random name), never sniffed, never as a document that can run
 // anything: an SVG opened directly is sandboxed with no script or network.
+// Purchase order PDFs share the bucket under pos/<workspaceId>/ and are
+// never reachable here: the key read is always branding/<id>/<a name in the
+// branding pattern>, and neither part can hold a slash or "..".
 export async function serveBrandFile(bucket: Pick<R2Bucket, "get">, workspaceId: string, file: string): Promise<Response> {
   const match = WORKSPACE_ID.test(workspaceId) ? file.match(BRAND_FILE) : null;
   if (!match) {

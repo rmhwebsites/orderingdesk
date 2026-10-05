@@ -148,10 +148,11 @@ export const events = sqliteTable("events", {
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id),
   orderId: text("order_id"),
   // shopify_write: the outcome of writing a status to Shopify (the status
-  // tag, and a fulfillment for a status linked to fulfilled). TypeScript-only
-  // enum: the column has no CHECK, so adding a value needs no migration.
+  // tag, and a fulfillment for a status linked to fulfilled). po_failed: a
+  // purchase order send attempt that failed. TypeScript-only enum: the
+  // column has no CHECK, so adding a value needs no migration.
   type: text("type", {
-    enum: ["order_new", "status", "note", "po_sent", "po_draft", "sync_error", "shopify_write"],
+    enum: ["order_new", "status", "note", "po_sent", "po_draft", "po_failed", "sync_error", "shopify_write"],
   }).notNull(),
   text: text("text").notNull(),
   actorId: text("actor_id"),

@@ -33,6 +33,7 @@ const ICONS: Record<ActivityItem["type"], typeof BellIcon> = {
   note: ChatTextIcon,
   po_draft: FileTextIcon,
   po_sent: FileTextIcon,
+  po_failed: WarningIcon,
   sync_error: WarningIcon,
   // Only failed Shopify writes reach the feed.
   shopify_write: StorefrontIcon,

@@ -216,6 +216,29 @@ describe("serveBrandFile", () => {
       expect((await serveBrandFile(store.bucket, workspaceId, name)).status).toBe(404);
     }
   });
+
+  // Purchase order PDFs share the bucket under pos/<workspaceId>/; this
+  // public route must never reach one, whatever the path.
+  it("never reads a purchase order PDF", async () => {
+    const hex = "a".repeat(32);
+    const poKey = `pos/${WS}/po1-${hex}.pdf`;
+    store.objects.set(poKey, { bytes: encoder.encode("%PDF-1.7"), contentType: "application/pdf" });
+    const requested: string[] = [];
+    const spy = { get: async (key: string) => (requested.push(key), store.bucket.get(key)) };
+    for (const [workspaceId, name] of [
+      [WS, `po1-${hex}.pdf`],
+      [WS, `../../${poKey}`],
+      [WS, `..%2F..%2F${poKey}`],
+      ["..", `pos/${WS}/po1-${hex}.pdf`],
+      [`../pos/${WS}`, `po1-${hex}.pdf`],
+      ["pos", `logo-light-${hex}.png`],
+      [WS, `logo-light-${hex}.png/../../../${poKey}`],
+    ]) {
+      expect((await serveBrandFile(spy as never, workspaceId, name)).status).toBe(404);
+    }
+    expect(requested.every((key) => key.startsWith(`branding/`) && !key.includes(".."))).toBe(true);
+    expect(requested.some((key) => key.includes(".pdf"))).toBe(false);
+  });
 });
 
 describe("saveBrandTheme", () => {

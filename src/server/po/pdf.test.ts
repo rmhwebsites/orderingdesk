@@ -151,7 +151,12 @@ describe("renderPoPdf", () => {
     expect(Buffer.from(withLogo).toString("latin1")).toContain("/Subtype /Image");
   });
 
-  it("works without a primary color, reply-to, ship-to, notes or a minted date in the far future", async () => {
+  it("keeps the line breaks in notes", async () => {
+    const text = pdfText(await renderPoPdf(input({ notes: "Line one\nLine two\n\nLine four" })));
+    expect(text.split("\n")).toEqual(expect.arrayContaining(["Line one", "Line two", "Line four"]));
+  });
+
+  it("works without a primary color, reply-to, ship-to or notes", async () => {
     const bytes = await renderPoPdf(input({ primaryColor: null, replyTo: null, shipTo: [], notes: null }));
     const text = pdfText(bytes);
     expect(text).toContain("No ship-to address");
