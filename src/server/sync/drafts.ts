@@ -88,7 +88,7 @@ function innermostMessage(e: unknown): string {
 }
 
 // Another row already carries this order id (order_unique).
-function isOrderIdTaken(e: unknown): boolean {
+export function isOrderIdTaken(e: unknown): boolean {
   const message = innermostMessage(e);
   return message.includes("UNIQUE constraint failed") && message.includes("shopify_order_id");
 }
@@ -194,7 +194,7 @@ export type AttachResult =
   // nothing was written and the next signal retries.
   | { kind: "retry" };
 
-type DraftRow = {
+export type DraftRow = {
   id: string;
   shopifyOrderId: string | null;
   shopifyDraftId: string | null;
@@ -203,7 +203,7 @@ type DraftRow = {
   shopify: unknown;
 };
 
-async function readCard(db: Db, workspaceId: string, rowId: string): Promise<DraftRow | undefined> {
+export async function readCard(db: Db, workspaceId: string, rowId: string): Promise<DraftRow | undefined> {
   const found = await db
     .select({
       id: orders.id,
@@ -219,7 +219,7 @@ async function readCard(db: Db, workspaceId: string, rowId: string): Promise<Dra
   return found[0];
 }
 
-function completedEvent(workspaceId: string, row: DraftRow, input: AttachInput, orderName: string) {
+export function completedEvent(workspaceId: string, row: DraftRow, input: AttachInput, orderName: string) {
   const draftName = row.draftName ?? row.name;
   return {
     id: `evt-draft-order-${workspaceId}-${row.shopifyDraftId ?? row.id}`,
@@ -238,7 +238,7 @@ function completedEvent(workspaceId: string, row: DraftRow, input: AttachInput, 
 // when the card now carries the order, ignoring an entry whose id exists
 // (whichever signal attached first wrote it). Values in the events table's
 // column order.
-function insertCompletedEvent(db: Db, event: ReturnType<typeof completedEvent>) {
+export function insertCompletedEvent(db: Db, event: ReturnType<typeof completedEvent>) {
   const attached = sql`exists (select 1 from ${orders} where ${orders.id} = ${event.orderId} and ${orders.shopifyOrderId} = ${event.meta.shopifyOrderId})`;
   return db
     .insert(events)
