@@ -1435,3 +1435,183 @@ an address on a domain you have onboarded.
   `npm run build` only); a 409 refresh in local dev (save from a second tab
   while the step is open) is still worth a look. The "line has no unit
   cost" notice stays above the buttons, since the send is disabled then.
+
+
+## STATE UPDATE, 2026-10-05 DRAFT ORDERS (requests) built (supersedes above)
+
+- Branch build/m1-core, on top of 0799cd5 (what production runs). Spec:
+  docs/plans/2026-10-04-draft-orders.md (read its section 18 first).
+  Stage 1 (backend): 9e108a8 (spec), 8242e59 (Admin API 2026-10), 595302d
+  (migration 0010), b064c43, 9edc5dd, 44417b3, f7f1600, 7aba8bc, 017d3a8.
+  Stage 2 (product): 4611407 (status sync rules for drafts), 7511cef
+  (status change rules and role), cadd8c9 (Approve and Reject), 2395af4
+  (POs only on order cards), 7312334 (request notifications), 3ee44dd
+  (read model and pure helpers), 7254e8a (desk UI), 31d2cc0 (settings),
+  plus this docs commit. NOT pushed, NOT deployed. Stage 1 must not ship
+  without stage 2 (until stage 2 a draft card behaved like an order).
+- NEW MIGRATION 0010 (drizzle/0010_draft_orders.sql): rebuilds orders
+  (shopify_order_id nullable; shopify_draft_id, draft_name, draft_snapshot,
+  draft_deleted_at; a CHECK that one id is set; unique per draft), four
+  draft cursor columns on store_connections, Approved linked to
+  draft_completed, and a pink Rejected (draft_rejected) appended to every
+  workspace that has room and none yet. Proven on production-shaped data in
+  stage 1 (row counts, foreign_key_check, the 9 open orders). No new
+  dependency, secret, binding or wrangler change.
+
+### What shipped
+
+- Drafts are cards. Every OPEN and INVOICE_SENT draft becomes a card with a
+  Draft chip and its name (#D12), synced in the same run as orders (drafts
+  first) and live through draft_orders/* webhooks once registered. The
+  first draft sync inserts the requests already waiting (today #D19, #D20,
+  #D24) silently: no push, no email, not in the bell.
+- New request notification, once per card (notified_at claim): push "New
+  request #D12" (first name, branch, else the total) and branded email
+  "New Request #D12 from <Name>" with company, location, up to six public
+  cart attributes and the items, no requester email or address. Summaries
+  say "n new requests", "n new orders" or "n new orders and requests". The
+  order made from a request is the same row, already claimed: never a
+  "new order". Activity pushes title a request "Request #D12" and now
+  include a draft deleted in Shopify.
+- Approve (managers and platform admins; 403 for staff): POST
+  /api/orders/[orderId]/approve. Re-reads the draft first; refuses a
+  deleted draft, a workspace with no status linked to Draft approved, a
+  store without the draft scopes, a total that is not exactly 0 (the drawer
+  then says "Complete this draft in Shopify. The card follows when you do.")
+  and a draft Shopify is still calculating (asked again 3 times, 500 ms
+  apart). Then draftOrderComplete with variables exactly {id}, sent ONCE:
+  a refusal, timeout or transport failure is followed by a read
+  (completed counts as done), never a resend. One batch attaches the card
+  to the order (same id, notes, history, POs), sets the approved status
+  (from any status, Rejected included) and writes both timeline entries. A
+  double click answers already-approved; a draft completed in Shopify
+  already is followed instead. After the response: the order is fetched
+  and written onto the card (no notification) and the ORDER gets the tag
+  "Ordering Desk: Approved". If the approved status starts a purchase
+  order, the PO review opens for the manager.
+- Reject (managers and platform admins): POST .../reject {reason}, 1 to
+  4000 characters, saved as a note (labelled "Reason" in the timeline);
+  the card moves to the status linked to Draft rejected and the DraftOrder
+  gets "Ordering Desk: Rejected" after the response. Nothing is deleted,
+  nobody is emailed. A second reject is "unchanged" (no second note).
+- Status rules (server and UI): a request moves freely between statuses
+  with no Shopify link (staff included); never into a fulfilled, delivered,
+  Draft approved or Draft rejected status by the status control; only a
+  manager or platform admin moves it out of Rejected; an order never moves
+  into Rejected ("Rejected is for requests that are still drafts.").
+  triggersPo only for orders.
+- Shopify to app: completing a draft in Shopify moves the card to the
+  approved status from any status (to the fulfilled or delivered status
+  when the order already is), with "Status set to Approved: the draft was
+  completed in Shopify as order #1234". A Rejected tag added in Shopify on
+  a request moves it to Rejected ("Marked rejected in Shopify"). Tags on a
+  draft never move it to a linked order status; tags on an order never
+  move it to Rejected. A draft card's status tag is written to its
+  DraftOrder; deleted drafts are skipped; drafts are never fulfilled.
+- Deleted in Shopify: the card stays with a "Deleted in Shopify" chip and a
+  timeline entry, leaves the default list ("All") and shows under its own
+  "Deleted" filter. Approve is refused; Reject still records the decision.
+- Desk: All / Drafts / Orders (plus Deleted) filter beside the search,
+  request line "For <employee> · <branch>" on rows and cards, "from draft
+  #D12" on order cards that were requests, search over draft name, company,
+  location and request fields. Drawer: draft status chip, Request section
+  (requester, company, location, cart attributes with IMPACT's four keys
+  first, note, PO number), items with personalization (only https
+  cdn.shopify.com URLs become an image or "Print PDF" link; underscore keys
+  hidden behind "Show all properties"; everything else plain text with line
+  breaks), totals, ship-to with company and phone, review panel. POs only
+  on order cards (409 for a request at the API).
+- Platform admins see a dismissable banner on the desk when the store's app
+  lacks the draft scopes. Settings > Store connection shows "Draft orders:
+  synced / off" and has Refresh connection (platform admins). The statuses
+  editor offers "Draft approved (order created)" and "Draft rejected".
+
+### Deploy order (operator)
+
+1. `npm test` and `npm run build` green (they are at the final commit).
+2. Backup: export production D1 to Impact Rentals/backups and record a
+   time-travel bookmark (as on 2026-10-05).
+3. `npm run db:migrate:remote` FIRST (production is at 0009; this applies
+   0010), then `npm run deploy`. Code deployed before 0010 fails every sync
+   (it names the new columns).
+4. Shopify falls back to another API version on Oct 16, 2026 15:00 UTC.
+   If this work cannot deploy before then, cherry-pick 8242e59 (the
+   2026-10 pin) alone.
+5. Watch `npx wrangler tail`: the `[shopify] {"apiVersionServed":...}` line
+   (absent when 2026-10 is served), the first draft sync (three requests,
+   silent), no MAX_COST_EXCEEDED.
+
+### Ryan's one step
+
+- In Ordering Desk, Settings > Store connection, press **Refresh
+  connection** once. It registers the draft order webhooks (the app already
+  has read_draft_orders, write_draft_orders and read_companies). Until then
+  requests still arrive with the 10 minute sync. Optional: set the app's
+  webhook API version to 2026-10 in the Dev Dashboard and release it.
+
+### Stage 0: the supervised first approval (with Ryan)
+
+Use the owner's own test request (#D19, the owner's TEST account) or a new $0 test
+request, never a real employee's first.
+
+- [ ] Before: the card shows the request fields and the business card
+      preview and "Print PDF"; push and email arrived for a NEW request
+      submitted from the storefront within seconds (not for #D19, #D20,
+      #D24, which were inserted silently).
+- [ ] Approve from the drawer: the order appears in Shopify; note its
+      financial status (expected PAID, like Mark as paid on #D23 to #1024)
+      and fulfillment status (UNFULFILLED).
+- [ ] Whether Shopify emailed the requester an order confirmation (store
+      notification setting; the confirm step warns it may).
+- [ ] The card now shows the order number with "from draft #D19", the
+      Approved status, the "Order ... created from draft ..." entry; notes
+      and history kept; NO new-order push or email.
+- [ ] The order in Shopify carries "Ordering Desk: Approved" (the draft
+      tag replaced).
+- [ ] Press Approve again on the same card: "Already approved".
+- [ ] Reject a second test request with a reason: the reason is a note,
+      the draft in Shopify has the tag "Ordering Desk: Rejected", nothing
+      else changed, nobody was emailed.
+- [ ] Complete a test draft with Mark as paid in Shopify: the card follows
+      (Approved, "completed in Shopify" entry) with no new-order alert.
+- [ ] Open in Shopify links: they use the connected domain's handle
+      (impactrentals); the store's canonical myshopify domain is
+      40kra0-b6.myshopify.com. Check both an order and a draft link open
+      the right admin page (this predates drafts for order links).
+
+### Known limits and things not verified live
+
+- No mutation ran against the real store: draftOrderComplete (financial
+  status, Shopify's email, userErrors for an already completed draft),
+  tagsAdd on a draft or a completed draft, and the served API version and
+  real query costs are checked only by stubs and the schema validator.
+- Whether cart attributes carry over to the order is unknown; the order
+  card falls back to the draft snapshot for request fields.
+- A draft created and completed within a second or two can announce once
+  as an order and once as a request before the two cards merge (spec
+  18.1). Parent lookup covers the newest 200 open requests; older ones rely
+  on the draft webhook, the drafts phase or the hourly check.
+- A desk tag write while a manager has the same draft open and unsaved in
+  Shopify admin may be overwritten by their save; the next status change
+  writes it again.
+- Company and location are known only from the draft; orders that never
+  were drafts do not show them. Orders and drafts list their first 35
+  line items; the drawer then says "Showing the first 35 items. Open in
+  Shopify for the rest." (Shopify's total line count is not fetched).
+- "All" means every card except requests whose draft Shopify deleted (they
+  have the Deleted filter). "Drafts (n)" counts requests not deleted.
+- The Approve confirmation does not reuse the settings ConfirmStep: like
+  the PO send step it focuses its question and ignores a press in its
+  first 400 ms, because completing a draft cannot be undone.
+- A store with the draft scopes but without read_companies would fail
+  every drafts fetch (purchasingEntity); IMPACT has the scope.
+- Live sockets do not run under `next dev`, so local checks of realtime
+  (order.merged moving an open drawer, the toasts) were by unit test only.
+- Checked in local dev at 1280 px and 375 px, light and dark, as platform
+  admin and as staff: list chips and filter, request drawer, approve
+  confirmation (error path: the local sample store's credentials are
+  unreadable, so nothing reaches Shopify), reject form and success,
+  deleted and priced requests, converted order card, banner, settings.
+  Local sample data (local D1 only): requests #D31, #D30 ($48, custom
+  item), #D28 (deleted), #D27 (rejected), order #1015 from #D26, and a
+  sample store connection with an unreadable token.
