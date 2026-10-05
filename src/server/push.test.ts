@@ -7,6 +7,7 @@ import {
   PUSH_PAYLOAD_MAX_BYTES,
   encodePushNotice,
   pushConfigured,
+  pushServiceEndpoint,
   removeSubscription,
   saveSubscription,
   sendPush,
@@ -250,6 +251,17 @@ describe("saveSubscription and removeSubscription", () => {
     }
   });
 
+  it("refuses a host that merely shares a push service's domain, storing nothing", async () => {
+    for (const endpoint of [
+      "https://storage.googleapis.com/bucket/collect",
+      "https://www.googleapis.com/fcm/send/abc",
+      "https://bugzilla.mozilla.com/wpush/v2/abc",
+    ]) {
+      expect(await saveSubscription(db, { userId: "u1", host: null, userAgent: null, now: 1 }, input(endpoint))).toMatchObject({ kind: "invalid" });
+    }
+    expect(await db.select().from(schema.pushSubscriptions)).toEqual([]);
+  });
+
   it("removes only the caller's own endpoint", async () => {
     await saveSubscription(db, { userId: "u1", host: null, userAgent: null, now: 1 }, input());
     expect(await removeSubscription(db, { userId: "u2", host: null }, { endpoint: "https://fcm.googleapis.com/fcm/send/abc" })).toEqual({ kind: "not-found" });
@@ -270,5 +282,58 @@ describe("saveSubscription and removeSubscription", () => {
     expect(
       await removeSubscription(db, { userId: "u1", host: "orderingdesk.test" }, { endpoint: "https://fcm.googleapis.com/fcm/send/abc" }),
     ).toEqual({ kind: "removed" });
+  });
+});
+
+// Only the endpoints the browsers' own push services hand out today, so the
+// Worker never posts to an address a signed-in person made up.
+describe("pushServiceEndpoint", () => {
+  it.each([
+    ["Chrome (FCM, legacy path)", "https://fcm.googleapis.com/fcm/send/dQw4w9WgXcQ:APA91bH"],
+    ["Chrome (FCM, web push path)", "https://fcm.googleapis.com/wp/dQw4w9WgXcQ:APA91bH"],
+    ["Firefox", "https://updates.push.services.mozilla.com/wpush/v2/gAAAAABk"],
+    ["Firefox without VAPID", "https://updates.push.services.mozilla.com/wpush/v1/gAAAAABk"],
+    ["Safari", "https://web.push.apple.com/QGuQyavXutnMH-3ofDZ1Bk"],
+    ["Edge on Windows", "https://wns2-par02p.notify.windows.com/w/?token=BQYAAAB%2bx"],
+    ["Edge on Windows, another region", "https://sg2p.notify.windows.com/w/?token=BQYAAAB"],
+    ["Edge on Windows, a third region", "https://db5p.notify.windows.com/w/?token=BQYAAAB"],
+  ])("accepts %s", (_label, endpoint) => {
+    expect(pushServiceEndpoint(endpoint)).toBe(endpoint);
+  });
+
+  it.each([
+    ["another Google API host", "https://storage.googleapis.com/fcm/send/x"],
+    ["another Google API host with an FCM path", "https://www.googleapis.com/fcm/send/x"],
+    ["the retired GCM host", "https://android.googleapis.com/gcm/send/x"],
+    ["FCM outside its push paths", "https://fcm.googleapis.com/v1/projects/x/messages:send"],
+    ["FCM with its path prefix only", "https://fcm.googleapis.com/wp/"],
+    ["FCM with a path that climbs out of its prefix", "https://fcm.googleapis.com/wp/../v1/projects/x"],
+    ["another Mozilla host", "https://bugzilla.mozilla.com/wpush/v2/x"],
+    ["a host under Mozilla's push host", "https://evil.updates.push.services.mozilla.com/wpush/v2/x"],
+    ["Mozilla outside its push path", "https://updates.push.services.mozilla.com/admin/x"],
+    ["another Apple push host", "https://api.push.apple.com/3/device/x"],
+    ["Apple with no token", "https://web.push.apple.com/"],
+    ["WNS without a region label", "https://notify.windows.com/w/?token=x"],
+    ["WNS two labels deep", "https://a.b.notify.windows.com/w/?token=x"],
+    ["WNS outside its push path", "https://sg2p.notify.windows.com/?token=x"],
+    ["a look-alike host", "https://fcm.googleapis.com.evil.example/wp/x"],
+    ["a trailing-dot host", "https://fcm.googleapis.com./wp/x"],
+    ["plain http", "http://fcm.googleapis.com/wp/x"],
+    ["a port", "https://fcm.googleapis.com:8443/wp/x"],
+    ["the default port written out", "https://fcm.googleapis.com:443/wp/x"],
+    ["credentials", "https://user:pw@fcm.googleapis.com/wp/x"],
+    ["a user name only", "https://user@web.push.apple.com/x"],
+    ["white space", "https://fcm.googleapis.com/wp/x y"],
+    ["an IP address", "https://142.250.0.1/wp/x"],
+    ["not a URL", "fcm.googleapis.com/wp/x"],
+    ["something too long", `https://fcm.googleapis.com/wp/${"a".repeat(2100)}`],
+  ])("refuses %s", (_label, endpoint) => {
+    expect(pushServiceEndpoint(endpoint)).toBeNull();
+  });
+
+  it("refuses anything but a string", () => {
+    for (const value of [null, undefined, 42, {}, ["https://fcm.googleapis.com/wp/x"]]) {
+      expect(pushServiceEndpoint(value)).toBeNull();
+    }
   });
 });

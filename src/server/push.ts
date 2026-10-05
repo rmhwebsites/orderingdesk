@@ -195,18 +195,45 @@ export async function sendPushToTargets(
   return counts;
 }
 
-// The browsers' own push services: Chrome, Edge on Android and other
-// Chromium browsers (FCM), Firefox (Mozilla), Safari and iOS (Apple), Edge
-// on Windows (WNS).
-const PUSH_SERVICE_SUFFIXES = [".googleapis.com", ".mozilla.com", ".push.apple.com", ".notify.windows.com"];
+// The endpoints the browsers' own push services hand out (checked October
+// 2026), each by its exact host and the path its tokens live under:
+// - Chrome, Edge on Android and other Chromium browsers (FCM):
+//   https://fcm.googleapis.com/fcm/send/<token> (older subscriptions) or
+//   https://fcm.googleapis.com/wp/<token>.
+// - Firefox (Mozilla autopush):
+//   https://updates.push.services.mozilla.com/wpush/v2/<token> (v1 without
+//   VAPID).
+// - Safari on macOS, iPhone and iPad (Apple): https://web.push.apple.com/<token>.
+// - Edge on desktop (WNS): https://<region>.notify.windows.com/w/?token=...,
+//   the region one label such as wns2-par02p, sg2p or db5p.
+// Any other host, even one under the same domain (storage.googleapis.com,
+// bugzilla.mozilla.com, api.push.apple.com), is refused.
+// The token follows the path prefix, or (WNS) is the token query parameter.
+type PushService = { host: (hostname: string) => boolean; paths: readonly string[]; token: "path" | "query" };
+
+const WNS_HOST = /^[a-z0-9]+(?:-[a-z0-9]+)*\.notify\.windows\.com$/;
+
+const PUSH_SERVICES: readonly PushService[] = [
+  { host: (hostname) => hostname === "fcm.googleapis.com", paths: ["/fcm/send/", "/wp/"], token: "path" },
+  { host: (hostname) => hostname === "updates.push.services.mozilla.com", paths: ["/wpush/"], token: "path" },
+  { host: (hostname) => hostname === "web.push.apple.com", paths: ["/"], token: "path" },
+  { host: (hostname) => WNS_HOST.test(hostname), paths: ["/w/"], token: "query" },
+];
+
 const KEY_TEXT = /^[A-Za-z0-9_-]+={0,2}$/;
+// White space and control characters, which the URL parser would drop.
+const UNPRINTABLE = /[\u0000- \u007f]/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function validEndpoint(value: unknown): string | null {
-  if (typeof value !== "string" || value.length === 0 || value.length > ENDPOINT_MAX) {
+// The endpoint as given when it is one of the browsers' push services:
+// https, the exact host with no port and no credentials (the text itself
+// must start with https://<host>/, so neither can hide in it), and a token
+// under the service's path. null for anything else.
+export function pushServiceEndpoint(value: unknown): string | null {
+  if (typeof value !== "string" || value.length === 0 || value.length > ENDPOINT_MAX || UNPRINTABLE.test(value)) {
     return null;
   }
   let url: URL;
@@ -218,8 +245,20 @@ function validEndpoint(value: unknown): string | null {
   if (url.protocol !== "https:" || url.username || url.password || url.port) {
     return null;
   }
-  const host = url.hostname.toLowerCase();
-  return PUSH_SERVICE_SUFFIXES.some((suffix) => host.endsWith(suffix)) ? value : null;
+  const hostname = url.hostname;
+  if (!value.toLowerCase().startsWith(`https://${hostname}/`)) {
+    return null;
+  }
+  const service = PUSH_SERVICES.find((entry) => entry.host(hostname));
+  if (!service) {
+    return null;
+  }
+  const path = url.pathname;
+  const hasToken =
+    service.token === "path"
+      ? service.paths.some((prefix) => path.startsWith(prefix) && path.length > prefix.length)
+      : service.paths.includes(path) && (url.searchParams.get("token") ?? "").length > 0;
+  return hasToken ? value : null;
 }
 
 function validKey(value: unknown, min: number, max: number): string | null {
@@ -253,7 +292,7 @@ export async function saveSubscription(
   if (!isRecord(body)) {
     return { kind: "invalid", error: "A push subscription is required" };
   }
-  const endpoint = validEndpoint(body.endpoint);
+  const endpoint = pushServiceEndpoint(body.endpoint);
   if (!endpoint) {
     return { kind: "invalid", error: "This browser's push service is not supported" };
   }
