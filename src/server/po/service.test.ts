@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { eq } from "drizzle-orm";
 import type { Db } from "@/db";
 import * as schema from "@/db/schema";
-import { openTestDb } from "@/server/desk/test-helpers";
+import { openTestDb, seedDraft } from "@/server/desk/test-helpers";
 import {
   createPurchaseOrder,
   listOrderPurchaseOrders,
@@ -112,6 +112,15 @@ describe("createPurchaseOrder", () => {
     const elsewhere = await createPurchaseOrder(db, { workspaceId: WS, orderId: "o_other", userId: "u_manager", now: NOW }, draftBody());
     expect(elsewhere.kind).toBe("not-found");
     expect(await db.select().from(schema.purchaseOrders)).toHaveLength(0);
+  });
+
+  // Draft orders spec section 13 (decision D11).
+  it("refuses a request that is still a draft: a purchase order needs the Shopify order", async () => {
+    await seedDraft(db, WS, { id: "d1" });
+    const result = await createPurchaseOrder(db, { workspaceId: WS, orderId: "d1", userId: "u_manager", now: NOW }, draftBody());
+    expect(result).toEqual({ kind: "draft", error: "Approve the request first. A purchase order needs the Shopify order." });
+    expect(await db.select().from(schema.purchaseOrders)).toHaveLength(0);
+    expect(await db.select().from(schema.events).where(eq(schema.events.type, "po_draft"))).toHaveLength(0);
   });
 });
 

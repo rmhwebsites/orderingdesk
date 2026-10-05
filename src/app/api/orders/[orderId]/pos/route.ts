@@ -31,7 +31,8 @@ export async function GET(_request: Request, context: RouteContext) {
 
 // A new draft (managers and platform admins; 404 for staff). Body
 // {vendorId, lines: [{description, sku, quantity, unitCost}], shipTo:
-// [lines], notes}. 201 {po}; 400 {error}. Nothing is sent: sending is
+// [lines], notes}. 201 {po}; 400 {error}; 409 {error} for a request that is
+// still a draft (it needs its Shopify order first). Nothing is sent: sending is
 // POST /api/pos/[poId]/send with an explicit confirmation.
 export async function POST(request: Request, context: RouteContext) {
   try {
@@ -44,6 +45,8 @@ export async function POST(request: Request, context: RouteContext) {
         return NextResponse.json({ error: result.error }, { status: 400 });
       case "not-found":
         return NextResponse.json({ error: "Not found" }, { status: 404 });
+      case "draft":
+        return NextResponse.json({ error: result.error }, { status: 409 });
       case "created": {
         const { env, ctx } = getCloudflareContext();
         ctx.waitUntil(broadcast(env, workspaceId, { kind: "order.activity", event: result.event }));

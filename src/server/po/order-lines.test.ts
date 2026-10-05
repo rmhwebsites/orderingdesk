@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import type { Db } from "@/db";
 import * as schema from "@/db/schema";
 import { encryptSecret } from "@/server/crypto";
-import { openTestDb, snapshotOf } from "@/server/desk/test-helpers";
+import { openTestDb, seedDraft, snapshotOf } from "@/server/desk/test-helpers";
 import { orderLinesForPo } from "./order-lines";
 import { ORDER, seedPoWorkspace, WS } from "./test-helpers";
 
@@ -115,5 +115,13 @@ describe("orderLinesForPo", () => {
 
   it("answers not-found for an order outside the workspace", async () => {
     expect((await orderLinesForPo(db, env, { workspaceId: WS, orderId: "o_other" })).kind).toBe("not-found");
+  });
+
+  it("offers no lines for a request that is still a draft", async () => {
+    await seedDraft(db, WS, { id: "d1" });
+    expect(await orderLinesForPo(db, env, { workspaceId: WS, orderId: "d1" })).toEqual({
+      kind: "draft",
+      error: "Approve the request first. A purchase order needs the Shopify order.",
+    });
   });
 });

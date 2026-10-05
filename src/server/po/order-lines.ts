@@ -13,11 +13,14 @@ import { readSnapshot } from "@/lib/order-snapshot";
 import { linesFromOrderItems, PO_LINES_MAX, type PoLine } from "@/lib/po";
 import { isRecord } from "@/server/desk/shapes";
 import { failureText, fetchAllLineItems } from "@/server/shopify/admin";
+import { PO_NEEDS_ORDER } from "./service";
 import { getAccessToken } from "@/server/shopify/token";
 
 export type OrderLinesResult =
   | { kind: "ok"; lines: PoLine[]; source: "stored" | "shopify" }
   | { kind: "not-found" }
+  // A request that is still a draft has no order lines to buy (409).
+  | { kind: "draft"; error: string }
   | { kind: "unavailable"; error: string };
 
 const PARTIAL = "This order has more items than Ordering Desk stores";
@@ -36,6 +39,9 @@ export async function orderLinesForPo(
   const order = rows[0];
   if (!order) {
     return { kind: "not-found" };
+  }
+  if (order.shopifyOrderId === null) {
+    return { kind: "draft", error: PO_NEEDS_ORDER };
   }
   const complete = isRecord(order.shopify) && order.shopify.itemsTruncated === false;
   if (complete) {

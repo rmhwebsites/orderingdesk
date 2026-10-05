@@ -429,9 +429,15 @@ function currencyOf(snapshot: unknown): string {
 
 // ---- Writing -------------------------------------------------------------
 
+// Purchase orders are only for order cards (decision D11): a request has
+// no Shopify order to buy for yet.
+export const PO_NEEDS_ORDER = "Approve the request first. A purchase order needs the Shopify order.";
+
 export type CreatePoResult =
   | { kind: "invalid"; error: string }
   | { kind: "not-found" }
+  // The card is still a request (draft orders spec section 13): 409.
+  | { kind: "draft"; error: string }
   | { kind: "created"; po: PoView; event: EventView };
 
 // A new draft for the order, with a po_draft event in the same batch. The
@@ -447,7 +453,7 @@ export async function createPurchaseOrder(
   }
   const [orderRows, vendor] = await Promise.all([
     db
-      .select({ id: orders.id, shopify: orders.shopify })
+      .select({ id: orders.id, shopify: orders.shopify, shopifyOrderId: orders.shopifyOrderId })
       .from(orders)
       .where(and(eq(orders.id, ctx.orderId), eq(orders.workspaceId, ctx.workspaceId)))
       .limit(1),
@@ -456,6 +462,9 @@ export async function createPurchaseOrder(
   const order = orderRows[0];
   if (!order) {
     return { kind: "not-found" };
+  }
+  if (order.shopifyOrderId === null) {
+    return { kind: "draft", error: PO_NEEDS_ORDER };
   }
   if (!vendor) {
     return { kind: "invalid", error: NO_VENDOR };
