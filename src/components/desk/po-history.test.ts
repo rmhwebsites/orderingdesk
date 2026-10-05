@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ToastProvider } from "@/components/toasts";
-import { PurchaseOrders } from "./po-history";
+import { PoRowActions, PurchaseOrders } from "./po-history";
 import { DraftActions, PoModalBody, PoModalFooter } from "./po-modal";
 import { CONFIRM_ARM_MS, confirmArmed, confirmFocus, pendingFromPo, reconfirmPending, SendConfirm, type PendingSend } from "./po-send-confirm";
 import type { PoView } from "@/server/po/service";
@@ -77,9 +77,63 @@ function pendingOf(overrides: Partial<PendingSend> = {}, po: PoView = poFixture(
   return { ...pending, ...overrides };
 }
 
+// The visible text of every button, in order.
+function buttonLabels(html: string): string[] {
+  return [...html.matchAll(/<button[^>]*>([\s\S]*?)<\/button>/g)].map((match) =>
+    match[1]
+      .replace(/<span class="sr-only">[\s\S]*?<\/span>/g, "")
+      .replace(/<[^>]+>/g, "")
+      .trim(),
+  );
+}
+
+function rowActions(po: PoView, pending = false): string {
+  return renderToStaticMarkup(
+    createElement(PoRowActions, { po, canManage: true, pending, onEdit: () => {}, onRetry: () => {}, onResend: () => {} }),
+  );
+}
+
 function confirmStep(pending: PendingSend, busy = false): string {
   return renderToStaticMarkup(createElement(SendConfirm, { pending, busy, onConfirm: () => {}, onCancel: () => {} }));
 }
+
+// Opening a send and sending never share a label: the drawer's button only
+// opens the confirmation step; the step's own button is the irreversible
+// send.
+describe("PoRowActions", () => {
+  it("opens a resend with Review and send again, never the final send's label", () => {
+    const sent = poFixture({ state: "sent", sendCount: 1, sentAt: 2, pdfUrl: "/api/pos/po1/pdf" });
+    const opener = buttonLabels(rowActions(sent));
+    expect(opener).toEqual(["Review and send again"]);
+    const finalStep = buttonLabels(confirmStep(pendingOf({ resend: true })));
+    expect(finalStep).toContain("Send again to Northline Supply");
+    expect(opener.some((label) => finalStep.includes(label))).toBe(false);
+  });
+
+  it("offers Retry for a failed PO and Review and send for a draft, never Send to vendor", () => {
+    expect(buttonLabels(rowActions(poFixture({ state: "failed", lastError: "refused" })))).toEqual(["Edit", "Retry"]);
+    expect(buttonLabels(rowActions(poFixture()))).toEqual(["Review and send"]);
+    for (const state of ["draft", "failed", "sent"] as const) {
+      expect(rowActions(poFixture({ state }))).not.toContain("Send to vendor");
+    }
+  });
+
+  it("hides the send buttons while that PO's step is open, and from staff", () => {
+    expect(buttonLabels(rowActions(poFixture({ state: "sent" }), true))).toEqual([]);
+    const staff = renderToStaticMarkup(
+      createElement(PoRowActions, {
+        po: poFixture({ state: "sent", pdfUrl: "/api/pos/po1/pdf" }),
+        canManage: false,
+        pending: false,
+        onEdit: () => {},
+        onRetry: () => {},
+        onResend: () => {},
+      }),
+    );
+    expect(buttonLabels(staff)).toEqual([]);
+    expect(staff).toContain("Open PDF");
+  });
+});
 
 describe("pendingFromPo", () => {
   it("takes who it goes to, what it says and that content's version from the PO the step opens on", () => {
@@ -148,13 +202,13 @@ describe("SendConfirm", () => {
     expect(html).toContain("Cancel");
   });
 
-  it("says Send again for a resend", () => {
+  it("names the vendor on the final button of a resend", () => {
     const html = confirmStep(
       pendingOf({ recipients: { to: ["orders@northline.example"], cc: [] }, resend: true, requestId: "request-2", message: "Who it goes to changed." }),
     );
     expect(html).toContain("again to Northline Supply?");
     expect(html).toContain("No copies");
-    expect(html).toContain("Send again");
+    expect(buttonLabels(html)).toEqual(["Cancel", "Send again to Northline Supply"]);
     expect(html).toContain("Who it goes to changed.");
   });
 

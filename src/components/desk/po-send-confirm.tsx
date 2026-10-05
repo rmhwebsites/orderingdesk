@@ -254,7 +254,7 @@ export function SendConfirm({
           className={ui.buttonPrimary}
         >
           <PaperPlaneTiltIcon size={16} aria-hidden />
-          {busy ? "Sending" : pending.resend ? "Send again" : "Send to vendor"}
+          {busy ? "Sending" : pending.resend ? `Send again to ${pending.vendorName}` : "Send to vendor"}
         </button>
       </div>
     </div>
@@ -262,7 +262,7 @@ export function SendConfirm({
 }
 
 const OFFLINE =
-  "Could not reach the server, so it is not known whether it went out. Send again to check: the same request never sends twice.";
+  "Could not reach the server, so it is not known whether it went out. Press the send button again to check: the same request never sends twice.";
 
 export function useSendFlow(handlers: {
   onSent: (po: PoView, resend: boolean) => void;

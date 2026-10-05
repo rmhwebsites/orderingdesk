@@ -3,7 +3,10 @@
 // The order drawer's Purchase orders section: every PO of the order with
 // its number, vendor, state, total and date, Open PDF, and for managers
 // and platform admins Create purchase order, Edit (draft or failed), Retry
-// (failed) and Send again (sent), each send behind the confirmation step.
+// (failed) and Review and send again (sent), each send behind the
+// confirmation step. These buttons only open the step; its own button
+// ("Send to vendor", or "Send again to <vendor>") is the one that sends, so
+// opening and sending never share a label.
 // Staff see the history and the PDFs only. It reloads when its refreshKey
 // changes (a save, a send, or a purchase order event from someone else).
 
@@ -37,6 +40,58 @@ function poLabel(po: PoView): string {
 function totalOf(po: PoView): string | null {
   const cents = po.subtotal === null ? null : costToCents(po.subtotal);
   return cents === null ? null : formatCents(cents, po.currency);
+}
+
+// A row's buttons: Open PDF for everyone; for managers and platform admins
+// Review and send (draft) or Edit (failed), which open the review modal,
+// and Retry (failed) or Review and send again (sent), which open the
+// confirmation step. Retry and Review and send again hide while that row's
+// step is open.
+export function PoRowActions({
+  po,
+  canManage,
+  pending,
+  onEdit,
+  onRetry,
+  onResend,
+}: {
+  po: PoView;
+  canManage: boolean;
+  pending: boolean;
+  onEdit: () => void;
+  onRetry: () => void;
+  onResend: () => void;
+}) {
+  const canSend = canManage && po.recipients !== null && po.state !== "sending";
+  return (
+    <div className="flex flex-wrap gap-2">
+      {po.pdfUrl ? (
+        <a href={po.pdfUrl} target="_blank" rel="noopener noreferrer" className={`${ui.buttonSecondary} ${small}`}>
+          <FilePdfIcon size={14} aria-hidden />
+          Open PDF
+          <span className="sr-only"> for {po.number ?? "this purchase order"} (opens in a new tab)</span>
+        </a>
+      ) : null}
+      {canManage && (po.state === "draft" || po.state === "failed") ? (
+        <button type="button" onClick={onEdit} className={`${ui.buttonSecondary} ${small}`}>
+          <PencilSimpleIcon size={14} aria-hidden />
+          {po.state === "draft" ? "Review and send" : "Edit"}
+        </button>
+      ) : null}
+      {canSend && po.state === "failed" && !pending ? (
+        <button id={`po-${po.id}-retry`} type="button" onClick={onRetry} className={`${ui.buttonSecondary} ${small}`}>
+          <ArrowClockwiseIcon size={14} aria-hidden />
+          Retry
+        </button>
+      ) : null}
+      {canSend && po.state === "sent" && !pending ? (
+        <button id={`po-${po.id}-resend`} type="button" onClick={onResend} className={`${ui.buttonSecondary} ${small}`}>
+          <PaperPlaneTiltIcon size={14} aria-hidden />
+          Review and send again
+        </button>
+      ) : null}
+    </div>
+  );
 }
 
 export function PurchaseOrders({
@@ -163,7 +218,6 @@ export function PurchaseOrders({
             const chip = poStateChip(po);
             const total = totalOf(po);
             const pending = flow.pending?.poId === po.id ? flow.pending : null;
-            const canSend = canManage && po.recipients !== null && po.state !== "sending";
             return (
               <li key={po.id} className="flex flex-col gap-2.5 py-3.5 first:pt-0 last:pb-0">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
@@ -196,43 +250,14 @@ export function PurchaseOrders({
                   <InlineMessage tone="warn">This vendor was removed. Edit the purchase order to pick another before sending.</InlineMessage>
                 ) : null}
 
-                <div className="flex flex-wrap gap-2">
-                  {po.pdfUrl ? (
-                    <a href={po.pdfUrl} target="_blank" rel="noopener noreferrer" className={`${ui.buttonSecondary} ${small}`}>
-                      <FilePdfIcon size={14} aria-hidden />
-                      Open PDF
-                      <span className="sr-only"> for {po.number ?? "this purchase order"} (opens in a new tab)</span>
-                    </a>
-                  ) : null}
-                  {canManage && (po.state === "draft" || po.state === "failed") ? (
-                    <button type="button" onClick={() => onEdit(po)} className={`${ui.buttonSecondary} ${small}`}>
-                      <PencilSimpleIcon size={14} aria-hidden />
-                      {po.state === "draft" ? "Review and send" : "Edit"}
-                    </button>
-                  ) : null}
-                  {canSend && po.state === "failed" && !pending ? (
-                    <button
-                      id={`po-${po.id}-retry`}
-                      type="button"
-                      onClick={() => flow.start(po, { label: poLabel(po), resend: false })}
-                      className={`${ui.buttonSecondary} ${small}`}
-                    >
-                      <ArrowClockwiseIcon size={14} aria-hidden />
-                      Retry
-                    </button>
-                  ) : null}
-                  {canSend && po.state === "sent" && !pending ? (
-                    <button
-                      id={`po-${po.id}-resend`}
-                      type="button"
-                      onClick={() => flow.start(po, { label: poLabel(po), resend: true })}
-                      className={`${ui.buttonSecondary} ${small}`}
-                    >
-                      <PaperPlaneTiltIcon size={14} aria-hidden />
-                      Send again
-                    </button>
-                  ) : null}
-                </div>
+                <PoRowActions
+                  po={po}
+                  canManage={canManage}
+                  pending={pending !== null}
+                  onEdit={() => onEdit(po)}
+                  onRetry={() => flow.start(po, { label: poLabel(po), resend: false })}
+                  onResend={() => flow.start(po, { label: poLabel(po), resend: true })}
+                />
 
                 {pending ? (
                   <SendConfirm
