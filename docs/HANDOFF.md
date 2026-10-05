@@ -960,3 +960,27 @@ an address on a domain you have onboarded.
     Deny on waiting requests and Revoke on unclaimed approvals only.
   - An approved person who is already signed in joins when they next open
     "/" or sign in, not on other pages.
+
+## STATE UPDATE, 2026-10-05 PLATFORM PHASE LIVE (supersedes earlier deploy notes)
+
+- Live at https://orderingdesk.com from build/m1-core 9fb6a64 (version
+  97f0f417), main fast-forwarded to match. Remote D1 at migration 0006.
+- Before the migration: export at
+  Impact Rentals/backups/orderingdesk-before-0004-0006-2026-10-04.sql and
+  D1 time-travel bookmark
+  00000193-00000000-000050fb-a916d1f6ed00e301b9c852c040f3d720 (restore with
+  `npx wrangler d1 time-travel restore orderingdesk --bookmark=<that>`;
+  history is kept 30 days).
+- Verified on production after deploy: ryan's membership converted owner ->
+  manager (source manual; he is platform admin via PLATFORM_ADMIN_EMAILS);
+  shipped -> fulfilled and delivered -> delivered links; signed-out redirects
+  for /, /w/<slug>/settings and /admin; /api/health; unsigned webhook 401;
+  better-auth account endpoints 404; unknown Host refused; a stranger's
+  magic-link request gets {status:true} and no email.
+- Security review (/security-review, Oct 4) found one HIGH: storefront
+  newsletter forms can set customer tags, so tags alone granted access. Fixed
+  with the approval step Ryan chose ("Tag, then approve once"), migration 0006.
+- Next for Ryan: connect the IMPACT store in Settings (Client ID and secret),
+  approve tagged staff in Settings > Team, attach orders.impactrentals.store
+  (see "Attaching a client host"), onboard it for Email Sending, Verify the
+  sender. Then Phase 6 (push and notification emails) and Phase 7 (POs).
