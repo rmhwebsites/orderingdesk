@@ -16,7 +16,9 @@ type RouteContext = { params: Promise<{ poId: string }> };
 // - 200 {po}: sent. 200 {po, unchanged: "already-sent" | "replayed"}:
 //   nothing sent by this request (po says how the PO stands).
 // - 400 {error} bad input; 400 {error, recipients, contentVersion, po} no
-//   confirmation; 409 {error, recipients, contentVersion, po} the
+//   confirmation (a confirmation without contentVersion, from a page loaded
+//   before it existed, is told to reload the page); 409 {error,
+//   recipients, contentVersion, po} the
 //   recipients or the content changed since the review (po is what would
 //   go out now: show it and confirm again); 409 {error, po} another send
 //   holds it; 502 {error, po} the send failed (the PO is marked failed with

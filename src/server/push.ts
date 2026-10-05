@@ -116,16 +116,27 @@ export async function sendPush(
   if (!pushConfigured(env)) {
     return "failed";
   }
+  // Checked again here, not only when the subscription was saved: a row
+  // stored before the allowlist tightened (or written any other way) never
+  // reaches the network. The endpoint is a capability URL, so it is never
+  // logged.
+  const endpoint = pushServiceEndpoint(target.endpoint);
+  if (endpoint === null) {
+    logWarn({ refused: "endpoint not a supported push service" });
+    return "failed";
+  }
   try {
     const payload = await buildPushPayload(
       {
         data: encodePushNotice(notice),
         options: { ttl: opts?.ttl ?? 86400, ...(opts?.urgency ? { urgency: opts.urgency } : {}) },
       },
-      { endpoint: target.endpoint, expirationTime: null, keys: target.keys },
+      { endpoint, expirationTime: null, keys: target.keys },
       { subject: env.VAPID_SUBJECT, publicKey: env.VAPID_PUBLIC_KEY?.trim(), privateKey: env.VAPID_PRIVATE_KEY?.trim() },
     );
-    const response = await (opts?.fetchImpl ?? fetch)(target.endpoint, payload);
+    // Never follow a redirect: it would carry the signed message to
+    // whatever host it names. A 3xx answer counts as a failure below.
+    const response = await (opts?.fetchImpl ?? fetch)(endpoint, { ...payload, redirect: "manual" });
     if (response.status === 404 || response.status === 410) {
       await db
         .delete(pushSubscriptions)

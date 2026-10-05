@@ -118,6 +118,37 @@ describe("sendPush", () => {
     warn.mockRestore();
   });
 
+  // A row stored before the endpoint allowlist tightened, or written some
+  // other way, never reaches the network, and a push service's redirect is
+  // never followed (it would carry the VAPID-signed message elsewhere).
+  it("re-checks the endpoint before posting and never follows a redirect", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    for (const endpoint of [
+      "https://storage.googleapis.com/fcm/send/s_bad",
+      "http://fcm.googleapis.com/fcm/send/s_bad",
+      "https://fcm.googleapis.com:443/fcm/send/s_bad",
+      "https://evil.example/fcm/send/s_bad",
+    ]) {
+      const target = await seedSubscription(`s_${endpoint.length}_${endpoint.charCodeAt(9)}`, "u1", endpoint);
+      const fetchImpl = vi.fn(async () => new Response(null, { status: 201 }));
+      expect(await sendPush(db, env, target, notice, { fetchImpl }), endpoint).toBe("failed");
+      expect(fetchImpl).not.toHaveBeenCalled();
+    }
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("evil.example");
+
+    const target = await seedSubscription("s_ok", "u1");
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 201 }));
+    await sendPush(db, env, target, notice, { fetchImpl });
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.redirect).toBe("manual");
+    // A redirect answer is a failure, and the subscription is kept.
+    const redirecting = vi.fn(async () => new Response(null, { status: 302, headers: { location: "https://evil.example/" } }));
+    expect(await sendPush(db, env, target, notice, { fetchImpl: redirecting })).toBe("failed");
+    expect(redirecting).toHaveBeenCalledTimes(1);
+    expect((await db.select().from(schema.pushSubscriptions).where(eq(schema.pushSubscriptions.id, "s_ok"))).length).toBe(1);
+    warn.mockRestore();
+  });
+
   it("sends nothing while VAPID keys are not configured", async () => {
     const target = await seedSubscription("s1", "u1");
     const fetchImpl = vi.fn(async () => new Response(null, { status: 201 }));

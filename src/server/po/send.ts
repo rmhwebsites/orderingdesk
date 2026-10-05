@@ -55,6 +55,10 @@ const CONTENT_VERSION_MAX = 128;
 
 const VENDOR_REMOVED = "This purchase order's vendor was removed. Edit it and pick another vendor.";
 const CONFIRM_REQUIRED = "Confirm what this purchase order says and who it goes to before it is sent.";
+// A confirmation with recipients but no contentVersion comes from a page
+// loaded before contentVersion existed: asking it again would loop forever.
+const RELOAD_REQUIRED =
+  "This page was loaded before an update to Ordering Desk. Reload the page, then review and send this purchase order again.";
 const RECIPIENTS_CHANGED =
   "Who this purchase order goes to changed since you reviewed it. Check the recipients and confirm again.";
 const CONTENT_CHANGED =
@@ -202,7 +206,8 @@ export async function sendPurchaseOrder(
   }
 
   if (!request.confirm || !request.recipients || !request.contentVersion) {
-    return { kind: "confirm-required", error: CONFIRM_REQUIRED, recipients: current.recipients, po: current };
+    const error = request.confirm && request.recipients && !request.contentVersion ? RELOAD_REQUIRED : CONFIRM_REQUIRED;
+    return { kind: "confirm-required", error, recipients: current.recipients, po: current };
   }
   if (!sameRecipients(request.recipients, current.recipients)) {
     return { kind: "recipients-changed", error: RECIPIENTS_CHANGED, recipients: current.recipients, po: current };

@@ -104,6 +104,22 @@ describe("the confirmation rule", () => {
     expect(await row()).toMatchObject({ status: "draft", sendStartedAt: null, poNumber: `draft:${poId}` });
   });
 
+  // A page loaded before contentVersion existed confirms recipients only:
+  // it is told to reload instead of being asked again forever.
+  it("tells a page loaded before the last update to reload, sending nothing", async () => {
+    const result = await send({ requestId: "request-stale-page-1", confirm: true, recipients: NORTH_RECIPIENTS });
+    expect(result).toMatchObject({
+      kind: "confirm-required",
+      error: "This page was loaded before an update to Ordering Desk. Reload the page, then review and send this purchase order again.",
+      recipients: NORTH_RECIPIENTS,
+    });
+    expect(sent).toHaveLength(0);
+    expect((await row()).status).toBe("draft");
+    // Without confirm, the usual question.
+    const plain = await send({ requestId: "request-stale-page-2" });
+    expect(plain).toMatchObject({ kind: "confirm-required", error: "Confirm what this purchase order says and who it goes to before it is sent." });
+  });
+
   it("sends nothing when the confirmed recipients are not exactly who it would go to now", async () => {
     // Confirmed before a manager added a copy address to the vendor.
     await db.update(schema.vendors).set({ cc: ["rep@northline.example", "boss@northline.example"] }).where(eq(schema.vendors.id, "v_north"));
