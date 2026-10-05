@@ -16,8 +16,8 @@ describe("MyNotificationsSection", () => {
   it("shows a member three switches with their saved values", () => {
     const html = render(true);
     expect(html).toContain("Your notifications");
-    expect(html).toContain("Phone push for new orders and purchase orders");
-    expect(html).toContain("Email for new orders and purchase orders");
+    expect(html).toContain("Phone push for new orders, requests and purchase orders");
+    expect(html).toContain("Email for new orders, requests and purchase orders");
     expect(html).toContain("Phone push for all other activity");
     const switches = html.match(/<input[^>]*role="switch"[^>]*>/g) ?? [];
     expect(switches).toHaveLength(3);

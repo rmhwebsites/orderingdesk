@@ -17,6 +17,8 @@ const LINKS = [
   { value: "", label: "No Shopify link" },
   { value: "fulfilled", label: "Fulfilled in Shopify" },
   { value: "delivered", label: "Delivered in Shopify" },
+  { value: "draft_completed", label: "Draft approved (order created)" },
+  { value: "draft_rejected", label: "Draft rejected" },
 ] as const;
 const LIST_MAX = 20;
 
@@ -142,6 +144,11 @@ export function StatusesSection({ workspaceId, initial }: { workspaceId: string;
           to Fulfilled creates the fulfillment without emailing the customer), and when Shopify reports the order
           fulfilled or delivered, the order moves into that status here. Each status also shows on the Shopify order
           as a tag, so names can be up to {STATUS_LABEL_MAX} characters.
+        </p>
+        <p className="text-sm text-ink-2">
+          For draft orders: Approve moves a request into the status linked to Draft approved and creates the order in
+          Shopify; completing the draft in Shopify does the same. Reject moves it into the status linked to Draft
+          rejected.
         </p>
         <p className="sr-only" aria-live="polite">
           {announcement}

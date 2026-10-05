@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { ArrowsClockwiseIcon } from "@phosphor-icons/react/ArrowsClockwise";
 import { PlugsIcon } from "@phosphor-icons/react/Plugs";
 import { StorefrontIcon } from "@phosphor-icons/react/Storefront";
 import { formatDateTime, relativeTime } from "@/lib/format";
@@ -93,6 +94,18 @@ function ConnectionStatus({ connection }: { connection: ConnectionSettingsView }
             {connection.missingScopes.length === 0 ? "Every permission Ordering Desk needs is granted." : "Some are missing (below)."}
           </Detail>
         ) : null}
+        {connection.scopes ? (
+          <Detail term="Draft orders">
+            {connection.draftsEnabled ? (
+              "Synced. New requests show up on the desk."
+            ) : (
+              <>
+                Off. The Shopify app needs <span className="font-mono">read_draft_orders</span> and{" "}
+                <span className="font-mono">write_draft_orders</span>.
+              </>
+            )}
+          </Detail>
+        ) : null}
       </dl>
       {connection.missingScopes.length > 0 ? (
         <InlineMessage tone="warn">
@@ -123,7 +136,8 @@ function Instructions() {
         <li>
           Give it these Admin API access scopes, then release the version: read_orders and write_orders,
           read_customers, read_merchant_managed_fulfillment_orders and write_merchant_managed_fulfillment_orders.
-          Add read_all_orders too if you will import orders older than 60 days (Order history, below).
+          Add read_all_orders too if you will import orders older than 60 days (Order history, below), and
+          read_draft_orders, write_draft_orders and read_companies to bring draft orders (requests) onto the desk.
         </li>
         <li>Install the app on the store and approve those permissions there.</li>
         <li>In the app&apos;s settings, copy its Client ID and Client secret.</li>
@@ -131,7 +145,10 @@ function Instructions() {
           Enter the store&apos;s .myshopify.com address and both values here. Ordering Desk checks them with Shopify
           right away; if a permission is missing it says which one, and nothing is saved.
         </li>
-        <li>If you change the scopes later, release a new version, approve it on the store, and connect again.</li>
+        <li>
+          If you change the scopes later, release a new version, approve it on the store, then use Refresh connection
+          below.
+        </li>
       </ol>
       <p className="mt-3 text-ink-2">
         Enter the Client secret only here: never paste it into chat, email or a ticket. An older app with an Admin API
@@ -292,7 +309,7 @@ export function StoreConnectionSection({
   canEdit: boolean;
 }) {
   const [connection, setConnection] = useState(initial);
-  const [result, setResult] = useState<{ tone: "good" | "warn"; text: string } | null>(null);
+  const [result, setResult] = useState<{ tone: "good" | "warn" | "bad"; text: string } | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [disconnectError, setDisconnectError] = useState<string | null>(null);
@@ -300,6 +317,42 @@ export function StoreConnectionSection({
   // grant, or the store itself, may have changed).
   const [historySignal, setHistorySignal] = useState(0);
   const disconnectRef = useRef<HTMLButtonElement>(null);
+  const refreshRef = useRef<HTMLButtonElement>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshResult, setRefreshResult] = useState<{ tone: "good" | "warn" | "bad"; text: string } | null>(null);
+
+  // Re-reads the app's granted permissions with a fresh token and registers
+  // the webhooks for them (the draft order ones once granted). For after a
+  // new version of the Shopify app was approved on the store.
+  async function refresh() {
+    if (refreshing) {
+      return;
+    }
+    setRefreshing(true);
+    setRefreshResult(null);
+    const response = await requestJson<{ connection: ConnectionSettingsView; warning?: string }>(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/connection/refresh`,
+      { method: "POST" },
+    );
+    setRefreshing(false);
+    focusSoon(() => refreshRef.current);
+    if (!response.ok) {
+      setRefreshResult({ tone: "bad", text: response.error });
+      return;
+    }
+    setConnection(response.data.connection);
+    setRefreshResult(
+      response.data.warning
+        ? { tone: "warn", text: response.data.warning }
+        : {
+            tone: "good",
+            text: response.data.connection.draftsEnabled
+              ? "Connection refreshed. Draft orders are synced, and new requests arrive within seconds."
+              : "Connection refreshed.",
+          },
+    );
+    setHistorySignal((signal) => signal + 1);
+  }
 
   function saved(next: SavedConnection, warning: string | null) {
     setConnection({
@@ -387,6 +440,28 @@ export function StoreConnectionSection({
           <>
             <div className="border-t border-line" />
             <ConnectForm workspaceId={workspaceId} existing={connection} onSaved={saved} />
+            {connection && connection.status !== "disabled" ? (
+              <div className="flex flex-col gap-2 border-t border-line pt-5">
+                <div>
+                  <button
+                    ref={refreshRef}
+                    type="button"
+                    onClick={() => void refresh()}
+                    disabled={refreshing}
+                    aria-describedby="store-refresh-help"
+                    className={ui.buttonSecondary}
+                  >
+                    <ArrowsClockwiseIcon size={16} aria-hidden />
+                    {refreshing ? "Refreshing" : "Refresh connection"}
+                  </button>
+                </div>
+                <p id="store-refresh-help" className="text-sm text-ink-2">
+                  Reads the Shopify app&apos;s permissions again and registers live updates for them. Use it after
+                  approving a new version of the app on the store. The stored credentials stay as they are.
+                </p>
+                {refreshResult ? <InlineMessage tone={refreshResult.tone}>{refreshResult.text}</InlineMessage> : null}
+              </div>
+            ) : null}
             {connection && connection.status !== "disabled" ? (
               <div className="flex flex-col gap-3 border-t border-line pt-5">
                 {confirming ? (

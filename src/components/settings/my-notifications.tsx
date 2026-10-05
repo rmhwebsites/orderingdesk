@@ -160,7 +160,7 @@ function DevicePanel() {
       {state.kind === "off" ? (
         <>
           <p className="max-w-[65ch] text-sm text-ink-2">
-            Get new orders and sent purchase orders as notifications on this device, even when Ordering Desk is closed.
+            Get new orders, requests and sent purchase orders as notifications on this device, even when Ordering Desk is closed.
           </p>
           <div>
             <button id={DEVICE_TOGGLE_ID} type="button" onClick={enable} disabled={busy} className={ui.buttonPrimary}>
@@ -194,13 +194,13 @@ const CHOICES: Array<{ field: keyof NotificationPrefsView; id: string; label: st
   {
     field: "pushNewOrders",
     id: "alerts-push-orders",
-    label: "Phone push for new orders and purchase orders",
+    label: "Phone push for new orders, requests and purchase orders",
     help: "Sent to every device where push is on.",
   },
   {
     field: "emailNewOrders",
     id: "alerts-email-orders",
-    label: "Email for new orders and purchase orders",
+    label: "Email for new orders, requests and purchase orders",
     help: "Sent to the address you sign in with.",
   },
   {
@@ -286,7 +286,7 @@ export function MyNotificationsSection({
     <SettingsSection
       id="alerts"
       title="Your notifications"
-      description={`How you hear about new orders and purchase orders in ${workspaceName}. Everything else shows in the bell and as live updates while you have it open.`}
+      description={`How you hear about new orders, requests and purchase orders in ${workspaceName}. Everything else shows in the bell and as live updates while you have it open.`}
     >
       <Panel>
         <DevicePanel />
