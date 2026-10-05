@@ -516,6 +516,51 @@ describe("pushOrderStatus", () => {
     expect(gone.text).toBe("Shopify was not updated: Shopify no longer has this order. The status here is kept.");
   });
 
+  // Draft orders (spec section 10.2): a draft card's status is written to
+  // the DraftOrder, the same card's after it becomes an order to the Order;
+  // a draft Shopify no longer has is left alone, and a draft is never
+  // fulfilled.
+  it("tags the DraftOrder of a draft card, the Order once attached, and never fulfills a draft", async () => {
+    const { db } = await setup();
+    await db.insert(schema.orders).values({
+      id: "d1",
+      workspaceId: WS,
+      shopifyOrderId: null,
+      shopifyDraftId: "1201",
+      draftName: "#D12",
+      name: "#D12",
+      shopify: { kind: "draft", name: "#D12", tags: "" },
+      statusKey: "shipped",
+      createdAt: 1,
+      syncedAt: 1,
+    });
+    const draftGid = "gid://shopify/DraftOrder/1201";
+    const shop = store({ tags: ["Ordering Desk: New"] });
+    const [event] = await pushOrderStatus(db, env, WS, "d1", { fulfill: true, fetchImpl: shop.impl, now: () => NOW });
+    expect(shop.calls.map((call) => [kindOf(call), call.variables])).toEqual([
+      ["tags", { id: draftGid }],
+      ["tagsRemove", { id: draftGid, tags: ["Ordering Desk: New"] }],
+      ["tagsAdd", { id: draftGid, tags: ["Ordering Desk: Shipped"] }],
+    ]);
+    expect(event.text).toBe("Shopify updated: tagged Ordering Desk: Shipped");
+
+    const gone = await pushOrderStatus(db, env, WS, "d1", { fulfill: false, fetchImpl: store({ tags: null }).impl, now: () => NOW });
+    expect(gone.map((entry) => entry.text)).toEqual([
+      "Shopify was not updated: Shopify no longer has this draft. The status here is kept.",
+    ]);
+
+    await db.update(schema.orders).set({ draftDeletedAt: NOW }).where(eq(schema.orders.id, "d1"));
+    const deletedShop = store();
+    expect(await pushOrderStatus(db, env, WS, "d1", { fulfill: true, fetchImpl: deletedShop.impl, now: () => NOW })).toEqual([]);
+    expect(deletedShop.calls).toEqual([]);
+
+    await db.update(schema.orders).set({ shopifyOrderId: "8101", draftDeletedAt: null }).where(eq(schema.orders.id, "d1"));
+    const attached = store({ tags: [] });
+    await pushOrderStatus(db, env, WS, "d1", { fulfill: true, fetchImpl: attached.impl, now: () => NOW });
+    expect(attached.calls.map((call) => call.variables.id ?? null).filter(Boolean)[0]).toBe("gid://shopify/Order/8101");
+    expect(attached.calls.map(kindOf)).toContain("fulfillmentOrders");
+  });
+
   it("records unusable store credentials without contacting Shopify", async () => {
     const { db, raw } = await setup();
     raw.prepare("UPDATE store_connections SET encrypted_token = 'v1.bad.bad'").run();

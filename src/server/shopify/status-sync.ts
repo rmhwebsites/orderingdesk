@@ -3,15 +3,18 @@
 // and they are bundled into the custom worker entrypoint.
 //
 // App -> Shopify (pushOrderStatus), after a status change has committed:
-// - the order carries exactly one tag "Ordering Desk: <Status label>": any
-//   other tag starting with "Ordering Desk: " is removed (tagsRemove), then
-//   the current one is added (tagsAdd). The tags are read first and nothing
-//   is written when Shopify already shows the status. Labels are capped so
-//   the tag fits Shopify's 40 characters (src/lib/status-label.ts).
+// - the order (for a draft card, its DraftOrder; a draft Shopify reported
+//   deleted is skipped) carries exactly one tag "Ordering Desk: <Status
+//   label>": any other tag starting with "Ordering Desk: " is removed
+//   (tagsRemove), then the current one is added (tagsAdd). The tags are
+//   read first and nothing is written when Shopify already shows the
+//   status. Labels are capped so the tag fits Shopify's 40 characters
+//   (src/lib/status-label.ts).
 // - a status linked to fulfilled also fulfills the order's open
-//   fulfillment orders, with notifyCustomer false. Only for a change made in
-//   the app: a move that came from Shopify never fulfills. A refused tag
-//   write does not stop the fulfillment (the tag only shows the status).
+//   fulfillment orders, with notifyCustomer false (never a draft's). Only
+//   for a change made in the app: a move that came from Shopify never
+//   fulfills. A refused tag write does not stop the fulfillment (the tag
+//   only shows the status).
 // - the outcome is a shopify_write event (source system) on the order's
 //   timeline, with Shopify's own words when it refused. The app's status is
 //   never rolled back because Shopify failed.
@@ -389,16 +392,20 @@ function tokenFailureText(token: Exclude<AccessTokenResult, { kind: "ok" | "unav
 // One round of writing the status to Shopify: read the tags, fix them, and
 // fulfill when asked. The tag and the fulfillment are separate steps: a
 // refused tag write still lets the fulfillment run, and the outcome names
-// what landed and every refusal. Only an order Shopify no longer has stops
-// everything.
+// what landed and every refusal. Only an object Shopify no longer has stops
+// everything. target: the Order, or for a draft card the DraftOrder (draft
+// orders spec section 10.2; tagsAdd and tagsRemove take either), which is
+// never fulfilled.
 async function writeStatus(
   shopDomain: string,
   token: string,
-  orderGid: string,
+  target: { gid: string; kind: "order" | "draft" },
   status: { label: string; shopifyLink: StatusRow["shopifyLink"] },
   fulfill: boolean,
   fetchImpl: typeof fetch,
 ): Promise<PushOutcome> {
+  const orderGid = target.gid;
+  const missing = target.kind === "draft" ? "Shopify no longer has this draft" : "Shopify no longer has this order";
   const done: string[] = [];
   const failures: string[] = [];
   let fulfillments = 0;
@@ -412,7 +419,7 @@ async function writeStatus(
 
   const current = await fetchStatusTags(shopDomain, token, orderGid, fetchImpl);
   if (current.kind === "ok" && current.tags === null) {
-    failures.push("Shopify no longer has this order");
+    failures.push(missing);
     return outcome();
   }
   if (current.kind !== "ok") {
@@ -440,7 +447,7 @@ async function writeStatus(
     }
   }
 
-  if (fulfill && status.shopifyLink === "fulfilled") {
+  if (fulfill && status.shopifyLink === "fulfilled" && target.kind === "order") {
     const open = await fetchFulfillableOrderIds(shopDomain, token, orderGid, fetchImpl);
     if (open.kind !== "ok") {
       failures.push(text(open));
@@ -543,12 +550,30 @@ export async function pushOrderStatus(
 
     for (let round = 0; round < MAX_PUSH_ROUNDS; round++) {
       const orderRows = await db
-        .select({ shopifyId: orders.shopifyOrderId, statusKey: orders.statusKey, statusSetAt: orders.statusSetAt })
+        .select({
+          shopifyId: orders.shopifyOrderId,
+          shopifyDraftId: orders.shopifyDraftId,
+          draftDeletedAt: orders.draftDeletedAt,
+          statusKey: orders.statusKey,
+          statusSetAt: orders.statusSetAt,
+        })
         .from(orders)
         .where(and(eq(orders.id, orderId), eq(orders.workspaceId, workspaceId)))
         .limit(1);
       const order = orderRows[0];
       if (!order) {
+        break;
+      }
+      // The Order once the card is attached, else its DraftOrder. A draft
+      // Shopify reported deleted has nothing to write to: stop, recording
+      // nothing.
+      const target =
+        order.shopifyId !== null
+          ? { gid: `gid://shopify/Order/${order.shopifyId}`, kind: "order" as const }
+          : order.shopifyDraftId !== null && order.draftDeletedAt === null
+            ? { gid: `gid://shopify/DraftOrder/${order.shopifyDraftId}`, kind: "draft" as const }
+            : null;
+      if (!target) {
         break;
       }
       const statusRows = await db
@@ -579,14 +604,7 @@ export async function pushOrderStatus(
         break;
       }
 
-      const outcome = await writeStatus(
-        token.shopDomain,
-        token.token,
-        `gid://shopify/Order/${order.shopifyId}`,
-        status,
-        fulfill,
-        fetchImpl,
-      );
+      const outcome = await writeStatus(token.shopDomain, token.token, target, status, fulfill, fetchImpl);
       if (outcome.done.length > 0 || outcome.failure !== null) {
         recorded.push(await recordOutcome(db, workspaceId, orderId, outcome, status, clock()));
       }
