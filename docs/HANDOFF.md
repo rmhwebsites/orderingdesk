@@ -1181,3 +1181,103 @@ an address on a domain you have onboarded.
     this stage (a stale tsconfig.tsbuildinfo); run the second form before
     committing.
 
+
+## STATE UPDATE, 2026-10-05 Phase 7 purchase orders (supersedes above)
+
+- Branch build/m1-core, on top of 5a2e1cf: dca47a8 (numbering, migration
+  0009), 955698a (PDF renderer, pdf-lib), 2ea6297 (drafts, confirmed send,
+  PDF route), 964e13a (dates in the sender's time zone), 592ba00 (review
+  modal and drawer history), 0fd198c (full item list prefill, From name),
+  plus this docs commit. Not pushed, not deployed.
+- NEW MIGRATION 0009 (drizzle/0009_purchase_order_sends.sql), additive:
+  purchase_orders gains currency (NOT NULL DEFAULT 'USD'), last_error,
+  send_started_at, send_attempt, sent_to, sent_by, send_count (NOT NULL
+  DEFAULT 0) and updated_at. Applied locally. DEPLOY ORDER:
+  `npm run db:migrate:remote` FIRST (applies 0007, 0008 and 0009), then
+  deploy. The PO routes name every column, so code deployed before 0009
+  fails every PO request (the drawer's Purchase orders section says it did
+  not load); nothing else reads the table.
+- New dependency: pdf-lib 1.17.1 (pure JS). Lockfile regenerated from
+  scratch (15 rolldown bindings kept). No new secrets, bindings or wrangler
+  changes: PDFs go to the existing PO_BUCKET (R2 bucket orderingdesk) and
+  mail through the existing EMAIL binding.
+- Numbering (src/server/po/number.ts): <prefix>-<YYYY>-<NNNN> per
+  workspace, prefix and UTC year, minted at a PO's FIRST SEND ATTEMPT (so
+  abandoned drafts leave no gaps; a failed send keeps its number for the
+  retry). A draft's po_number holds the placeholder "draft:<id>" (the
+  column is NOT NULL and unique; prefixes are uppercase letters and digits,
+  so it can never look minted). Race safety: read highest + 1, write only
+  while the placeholder is there, the (workspace_id, po_number) unique
+  index refuses a lost race, retry up to 5 times. A prefix change starts
+  that prefix at 0001.
+- PDF (src/server/po/pdf.ts): US Letter, primary color band and rules,
+  logo from the light logo's PNG copy (or a PNG/JPEG upload; never SVG;
+  the workspace name without one), workspace name and reply-to, PO number,
+  date, order, vendor, ship-to, a line table that never splits a row and
+  repeats its header on continued pages, subtotal, total, notes (line
+  breaks kept), footer with page count. Helvetica: text is reduced to
+  Windows-1252, so no input can make it throw. Headings use the primary
+  pulled toward ink until 4.5:1 on white.
+- Send (src/server/po/send.ts, POST /api/pos/[poId]/send): NOTHING is sent
+  unless the body has confirm: true and recipients equal to who it would
+  go to now (vendor email; copies to the vendor's cc and the workspace
+  notification list, deduped); otherwise 400 or 409 with the current
+  recipients. A send claims the PO (send_started_at, 2 minute lease), mints
+  the number, renders the PDF, stores it at
+  pos/<workspaceId>/<poId>-<32 hex>.pdf, emails the vendor (from senderFor,
+  display name = the From name setting when set, else the workspace name;
+  reply-to the workspace reply-to; branded body via renderEmail; PDF
+  attached, capped at 5 MB), marks it sent with a po_sent event, then the
+  route broadcasts and calls notifyPoSent (push and email to the
+  new-order audience, skipping addresses already on the vendor email;
+  the sender gets no push). Every request carries a requestId: repeating
+  it answers what that attempt did ("replayed"); a sent PO answers
+  "already-sent" unless resend: true (same PDF, first-send date kept, no
+  team notification). A failure marks the PO failed with last_error and
+  a po_failed event (new TypeScript-only event type; a failed resend stays
+  sent) and answers 502; Retry goes through the same confirmation. An
+  attempt that never finished (Worker stopped) frees the PO after the
+  lease and the PO reads as "interrupted" with a warning to check with the
+  vendor.
+- Other routes: GET/POST /api/orders/[orderId]/pos (list for staff and up;
+  create draft for managers and platform admins), PATCH /api/pos/[poId]
+  (save a draft or failed PO), GET /api/pos/[poId]/pdf (members of the
+  workspace, staff included; streams only the PO's own pos/ key, private,
+  no-store), GET /api/orders/[orderId]/po-lines (managers: the prefill).
+  All 404 for outsiders and for another workspace on a client host;
+  manager routes 404 for staff. The public branding route only ever reads
+  branding/<id>/<pattern name>; a test pins that it cannot reach pos/.
+- Prefill (src/server/po/order-lines.ts): the earlier rule "never prefill a
+  PO from a list whose itemsTruncated is set" is implemented: a partial
+  snapshot is replaced by every line item read from Shopify on demand
+  (fetchAllLineItems in src/server/shopify/admin.ts, 100 a page, about 304
+  points, at most 10 pages). If that cannot be read (no store, Shopify
+  down, over 200 lines), the modal starts with one empty line, says why,
+  offers Load the full list again, and keeps Send to vendor blocked; a
+  draft can still be saved. The unit cost is always the reviewer's (the
+  order price is what the customer paid). Sending needs a cost on every
+  line; drafts do not.
+- UI: the drawer's Purchase orders section (src/components/desk/
+  po-history.tsx) and the review modal (po-modal.tsx; confirmation step
+  and send flow in po-send-confirm.tsx). Managers and platform admins see
+  Create purchase order, Review and send, Edit, Retry and Send again;
+  staff see the list and Open PDF only. A status change that answers
+  triggersPo opens the modal for managers; staff get a toast that a
+  manager creates the PO. The PDF and email date use the sender's browser
+  time zone (UTC without one). Checked in local dev at desktop and phone
+  width, light and dark, including a full send (email logged by the dev
+  fallback, PDF read back from local R2).
+- Known limits and things not verified live:
+  - No real vendor email has gone out: Email Service with an attachment is
+    covered by the stubbed binding only. First live test: send a PO to an
+    address you read, from a workspace with and without a verified sender.
+  - The PDF renders under Node (tests, next dev) and the Worker bundle
+    builds with OpenNext; it was not exercised under workerd (`npm run
+    preview`) or in production.
+  - Drafts cannot be deleted yet (they stay in the history as Draft).
+  - Numbers use the UTC year while the printed date uses the sender's time
+    zone, so a PO sent late on Dec 31 in the Americas can carry next
+    year's number.
+  - notifyPoSent runs on the first successful send only, not on a resend.
+  - A send whose lease expired while it was still running (over 2
+    minutes) can overlap a retry; the event log keeps both sends.
