@@ -44,6 +44,9 @@ describe("getConnectionSettings", () => {
       scopes: ["write_orders", "read_customers"],
       // write_orders covers read_orders.
       missingScopes: ["read_merchant_managed_fulfillment_orders", "write_merchant_managed_fulfillment_orders"],
+      // Draft orders need the draft scopes (draft orders spec section 14).
+      draftsEnabled: false,
+      missingDraftScopes: ["read_draft_orders", "write_draft_orders"],
       webhooksRegisteredAt: 1234,
       lastSyncAt: 900,
       lastError: "Shopify answered 401",

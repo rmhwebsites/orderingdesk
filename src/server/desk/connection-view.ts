@@ -5,6 +5,7 @@
 import { eq } from "drizzle-orm";
 import type { Db } from "@/db";
 import { storeConnections } from "@/db/schema";
+import { draftsEnabled, missingDraftScopes } from "@/server/shopify/admin";
 import { backfillViewOf, type BackfillView } from "@/server/sync/backfill";
 import { missingScopes } from "./connection";
 
@@ -20,6 +21,11 @@ export type ConnectionSettingsView = {
   // Required scopes the recorded grant lacks, by name (empty when the
   // grant is unknown).
   missingScopes: string[];
+  // Draft orders sync (draft orders spec section 14): only when the
+  // recorded grant holds the draft scopes. missingDraftScopes names the
+  // ones it lacks (empty when the grant is unknown).
+  draftsEnabled: boolean;
+  missingDraftScopes: string[];
   webhooksRegisteredAt: number | null;
   lastSyncAt: number;
   lastError: string | null;
@@ -63,6 +69,8 @@ export async function getConnectionSettings(db: Db, workspaceId: string): Promis
     status: row.status,
     scopes,
     missingScopes: scopes ? missingScopes(scopes) : [],
+    draftsEnabled: draftsEnabled(scopes),
+    missingDraftScopes: scopes ? missingDraftScopes(scopes) : [],
     webhooksRegisteredAt: row.webhooksRegisteredAt ?? null,
     lastSyncAt: row.lastSyncAt,
     lastError: row.lastError ?? null,

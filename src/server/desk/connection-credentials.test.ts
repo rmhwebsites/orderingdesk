@@ -194,6 +194,50 @@ describe("saveConnection with client credentials", () => {
     }
   });
 
+  // Draft orders (spec section 7.2): the draft topics only with the draft
+  // scopes, after every other topic.
+  it("registers the draft order topics last, only when the app holds the draft scopes", async () => {
+    const db = await setup();
+    const store = shop({ scopes: [...FULL_SCOPES, "write_draft_orders"] });
+    await saveConnection(db, ctx(store.impl), credentials);
+    const creates = graphqlCalls(store.calls).filter((call) => call.query.includes("webhookSubscriptionCreate"));
+    expect(creates.map((call) => call.variables.topic)).toEqual([
+      ...TOPICS,
+      "DRAFT_ORDERS_CREATE",
+      "DRAFT_ORDERS_UPDATE",
+      "DRAFT_ORDERS_DELETE",
+    ]);
+  });
+
+  it("starts the draft sync over for another store and keeps it for the same one", async () => {
+    const db = await setup();
+    await db.insert(schema.storeConnections).values({
+      workspaceId: WS,
+      shopDomain: "impactrentals.myshopify.com",
+      encryptedToken: "v1.x",
+      draftLastSyncAt: 500,
+      draftCheckedAt: 600,
+      draftSyncCursor: "400|c:8",
+      draftSyncCursorSince: 300,
+    });
+    await saveConnection(db, ctx(shop().impl), credentials);
+    expect(await connectionRow(db)).toMatchObject({
+      draftLastSyncAt: 500,
+      draftCheckedAt: 600,
+      draftSyncCursor: "400|c:8",
+      draftSyncCursorSince: 300,
+    });
+    // No orders yet, so another store may replace it, and starts over.
+    await saveConnection(db, ctx(shop().impl), { ...credentials, shopDomain: "another-store" });
+    expect(await connectionRow(db)).toMatchObject({
+      shopDomain: "another-store.myshopify.com",
+      draftLastSyncAt: 0,
+      draftCheckedAt: 0,
+      draftSyncCursor: null,
+      draftSyncCursorSince: null,
+    });
+  });
+
   // On reconnect the old subscriptions for this callback are replaced; a
   // subscription for any other address is not this workspace's to touch.
   it("replaces this workspace's existing subscriptions on reconnect", async () => {

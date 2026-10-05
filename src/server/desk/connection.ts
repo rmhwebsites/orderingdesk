@@ -15,7 +15,7 @@ import { and, eq, sql } from "drizzle-orm";
 import type { Db } from "@/db";
 import { orders, storeConnections } from "@/db/schema";
 import { encryptSecret } from "@/server/crypto";
-import { failureText, replaceWebhookSubscriptions, webhookCallbackUrl } from "@/server/shopify/admin";
+import { failureText, replaceWebhookSubscriptions, webhookCallbackUrl, webhookTopicsFor } from "@/server/shopify/admin";
 import { clearShopifyAccess } from "@/server/shopify/roster-sync";
 import { isValidShopDomain, mintAccessToken, testShopConnection } from "@/server/shopify/client";
 import { isRecord } from "./shapes";
@@ -242,7 +242,8 @@ function parseCredentials(fields: Record<string, unknown>): Credentials | { erro
 //
 // On save the connection is marked ok with no last error. A new row, or a
 // row whose shop domain changed, also starts over: lastSyncAt 0, no sync
-// cursor and no order history import, so the next sync opens a fresh
+// cursor, no order history import and no draft sync state, so the next sync
+// opens a fresh
 // first-sync window for that store. A credentials-only change keeps
 // lastSyncAt, any cursor and any import (which carries on next tick). Either way the
 // sync lease is released (runningUntil 0). What that buys: a run still
@@ -261,8 +262,8 @@ function parseCredentials(fields: Record<string, unknown>): Credentials | { erro
 // credentials to Shopify for a change that would be refused anyway.
 //
 // After a client-credentials save the webhooks are registered (replacing
-// this workspace's earlier subscriptions) and webhooks_registered_at is
-// set. If Shopify refuses them the connection stays saved (the cron sync
+// this workspace's earlier subscriptions; the draft order topics too when
+// the app holds the draft scopes) and webhooks_registered_at is set. If Shopify refuses them the connection stays saved (the cron sync
 // still runs) with webhooks_registered_at null, and the result carries a
 // warning saying so.
 export async function saveConnection(
@@ -404,6 +405,11 @@ export async function saveConnection(
           backfillStartedAt: sql`case when ${sameShop} then ${storeConnections.backfillStartedAt} else null end`,
           backfillFinishedAt: sql`case when ${sameShop} then ${storeConnections.backfillFinishedAt} else null end`,
           backfillError: sql`case when ${sameShop} then ${storeConnections.backfillError} else null end`,
+          // So does the draft sync (draft orders spec section 7.2).
+          draftLastSyncAt: sql`case when ${sameShop} then ${storeConnections.draftLastSyncAt} else 0 end`,
+          draftCheckedAt: sql`case when ${sameShop} then ${storeConnections.draftCheckedAt} else 0 end`,
+          draftSyncCursor: sql`case when ${sameShop} then ${storeConnections.draftSyncCursor} else null end`,
+          draftSyncCursorSince: sql`case when ${sameShop} then ${storeConnections.draftSyncCursorSince} else null end`,
         },
         // An existing row is only updated for the same shop, or for another
         // shop while the workspace has no orders. Otherwise the update is
@@ -427,6 +433,7 @@ export async function saveConnection(
           shopDomain,
           accessToken,
           webhookCallbackUrl(ctx.appUrl, ctx.workspaceId),
+          webhookTopicsFor(check.accessScopes),
           fetchImpl,
         );
         if (registered.kind === "ok") {

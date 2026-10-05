@@ -132,6 +132,33 @@ describe("getAccessToken", () => {
     }
   });
 
+  // Refresh connection (draft orders spec section 7.3): a token minted
+  // before newly approved scopes does not carry them, so a forced renewal
+  // ignores the cache and mints, through the same compare-and-set.
+  it("mints and caches a new token on a forced renewal even while the cached one is good", async () => {
+    const { db } = await setup();
+    await seedClientCredentials(db, { expiresAt: NOW + 20 * 3600000 });
+    const shop = mintFetch([MINTED]);
+    expect(await getAccessToken(db, env, WS, { fetchImpl: shop.impl, now: at(NOW), forceRenew: true })).toEqual({
+      kind: "ok",
+      token: MINTED,
+      shopDomain: "impact-rentals.myshopify.com",
+    });
+    expect(shop.calls).toHaveLength(1);
+    const stored = await row(db);
+    expect(await decryptSecret(stored.encryptedAccessToken!, KEY, WS)).toBe(MINTED);
+    expect(stored.accessTokenExpiresAt).toBe(NOW + DAY_S * 1000);
+    // A legacy token has nothing to renew.
+    const legacy = await setup();
+    await seedLegacy(legacy.db);
+    const none = mintFetch([MINTED]);
+    expect(await getAccessToken(legacy.db, env, WS, { fetchImpl: none.impl, now: at(NOW), forceRenew: true })).toMatchObject({
+      kind: "ok",
+      token: LEGACY_TOKEN,
+    });
+    expect(none.calls).toHaveLength(0);
+  });
+
   it("mints a first token when none is cached, and when the cached one is unreadable", async () => {
     for (const setupRow of [
       (db: Db) => seedClientCredentials(db, { cached: null, expiresAt: null }),

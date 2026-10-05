@@ -23,6 +23,15 @@
 //   is announced (src/server/notify.ts, once per order).
 // - Customer topics: the customer is re-fetched (customers/delete needs no
 //   fetch) and the roster updated (roster-sync.ts).
+// - Draft order topics (draft orders spec section 7.1), only while the
+//   stored grant holds the draft scopes: the draft is re-fetched and written
+//   through upsertFetchedDraft (src/server/sync/drafts.ts); a draft Shopify
+//   no longer has, and draft_orders/delete (its payload is only the id),
+//   mark the card deleted. A completion attaches the card and its order is
+//   fetched and written onto it, never announced as new. With drafts on, an
+//   order with no card is first looked up against the open draft cards
+//   (upsertFetchedOrder's link); if that lookup fails nothing is written and
+//   the cron sync lands the order.
 // - Anything else: 200 and ignored.
 //
 // Payloads carry customer data: they are never logged, and failures are
@@ -33,13 +42,14 @@ import { eq } from "drizzle-orm";
 import type { Db } from "../../db";
 import { rowsAffected } from "../../db/batch";
 import { storeConnections, webhookDeliveries } from "../../db/schema";
-import { broadcastSync, kickUsers } from "../broadcast";
+import { broadcast, broadcastMerges, broadcastSync, kickUsers } from "../broadcast";
 import { decryptSecret } from "../crypto";
-import { notifyNewOrders } from "../notify";
+import { notifyActivity, notifyNewOrders } from "../notify";
+import { ensureOrderSnapshots, markDraftDeleted, upsertFetchedDraft } from "../sync/drafts";
 import { upsertFetchedOrder } from "../sync/run";
-import { failureText, fetchCustomer, fetchOrderNode, legacyIdOf } from "./admin";
+import { draftsEnabled, failureText, fetchCustomer, fetchDraftNode, fetchOrderNode, legacyIdOf } from "./admin";
 import { shareShopifyMoves } from "./fanout";
-import { normalizeOrders } from "./normalize";
+import { normalizeDrafts, normalizeOrders } from "./normalize";
 import { applyRosterCustomer } from "./roster-sync";
 import { safeErrorReason } from "./status-sync";
 import { getAccessToken } from "./token";
@@ -59,6 +69,7 @@ const ORDER_TOPICS = new Set([
 ]);
 const FULFILLMENT_TOPICS = new Set(["fulfillments/create", "fulfillments/update"]);
 const CUSTOMER_TOPICS = new Set(["customers/create", "customers/update", "customers/delete"]);
+const DRAFT_TOPICS = new Set(["draft_orders/create", "draft_orders/update", "draft_orders/delete"]);
 
 export type WebhookReceipt = { status: number; work?: () => Promise<void> };
 
@@ -67,7 +78,9 @@ export type WebhookOptions = { fetchImpl?: typeof fetch; now?: () => number };
 type Job =
   | { kind: "order"; orderGid: string }
   | { kind: "customer"; customerGid: string; customerId: string }
-  | { kind: "customer-deleted"; customerId: string };
+  | { kind: "customer-deleted"; customerId: string }
+  | { kind: "draft"; draftGid: string }
+  | { kind: "draft-deleted"; draftId: string };
 
 const encoder = new TextEncoder();
 
@@ -121,8 +134,13 @@ export async function verifyShopifyHmac(
 }
 
 // A gid of the given type from a payload: admin_graphql_api_id when it is
-// one, else the numeric field (order_id for fulfillments).
-function gidOf(payload: Record<string, unknown>, field: "id" | "order_id", type: "Order" | "Customer"): string | null {
+// one, else the numeric field (order_id for fulfillments; the id alone for
+// draft_orders/delete).
+function gidOf(
+  payload: Record<string, unknown>,
+  field: "id" | "order_id",
+  type: "Order" | "Customer" | "DraftOrder",
+): string | null {
   const prefix = `gid://shopify/${type}/`;
   const apiId = payload.admin_graphql_api_id;
   if (field === "id" && typeof apiId === "string" && apiId.startsWith(prefix) && NUMERIC_ID.test(apiId.slice(prefix.length))) {
@@ -140,6 +158,13 @@ function jobFor(topic: string, payload: unknown): Job | null {
   if (ORDER_TOPICS.has(topic) || FULFILLMENT_TOPICS.has(topic)) {
     const orderGid = gidOf(payload, ORDER_TOPICS.has(topic) ? "id" : "order_id", "Order");
     return orderGid ? { kind: "order", orderGid } : null;
+  }
+  if (DRAFT_TOPICS.has(topic)) {
+    const draftGid = gidOf(payload, "id", "DraftOrder");
+    if (!draftGid) {
+      return null;
+    }
+    return topic === "draft_orders/delete" ? { kind: "draft-deleted", draftId: legacyIdOf(draftGid) } : { kind: "draft", draftGid };
   }
   const customerGid = gidOf(payload, "id", "Customer");
   if (!customerGid) {
@@ -203,7 +228,7 @@ export async function receiveShopifyWebhook(
   }
 
   const topic = (input.headers.get("x-shopify-topic") ?? "").trim();
-  if (!ORDER_TOPICS.has(topic) && !FULFILLMENT_TOPICS.has(topic) && !CUSTOMER_TOPICS.has(topic)) {
+  if (!ORDER_TOPICS.has(topic) && !FULFILLMENT_TOPICS.has(topic) && !CUSTOMER_TOPICS.has(topic) && !DRAFT_TOPICS.has(topic)) {
     return { status: 200 };
   }
   const webhookId = (input.headers.get("x-shopify-webhook-id") ?? "").trim();
@@ -242,6 +267,36 @@ export async function receiveShopifyWebhook(
   };
 }
 
+// Whether draft orders sync for the store (the stored grant holds the
+// draft scopes), and whether the first draft sync is still pending.
+async function draftState(db: Db, workspaceId: string): Promise<{ enabled: boolean; firstPending: boolean }> {
+  const rows = await db
+    .select({ scopes: storeConnections.scopes, draftLastSyncAt: storeConnections.draftLastSyncAt })
+    .from(storeConnections)
+    .where(eq(storeConnections.workspaceId, workspaceId))
+    .limit(1);
+  return { enabled: draftsEnabled(rows[0]?.scopes), firstPending: (rows[0]?.draftLastSyncAt ?? 0) === 0 };
+}
+
+// A draft card marked deleted: open desks refresh it and hear the timeline
+// entry; members who follow all activity are told.
+async function shareDeletion(
+  db: Db,
+  env: CloudflareEnv,
+  workspaceId: string,
+  draftId: string,
+  now: number,
+  opts?: WebhookOptions,
+): Promise<void> {
+  const marked = await markDraftDeleted(db, workspaceId, draftId, now);
+  if (marked.kind !== "deleted") {
+    return;
+  }
+  await broadcastSync(env, workspaceId, { addedOrderIds: [], updatedOrderIds: [marked.orderId] });
+  await broadcast(env, workspaceId, { kind: "order.activity", event: marked.event });
+  await notifyActivity(db, env, workspaceId, marked.event, opts);
+}
+
 // The connection the work was authorized under is still the workspace's
 // store (not disconnected, same shop): the webhook's stand-in for a sync
 // run's lease check before it writes.
@@ -270,6 +325,16 @@ async function runJob(
     await kickUsers(env, workspaceId, await applyRosterCustomer(db, workspaceId, job.customerId, null, now));
     return;
   }
+  const drafts = await draftState(db, workspaceId);
+  if (job.kind === "draft-deleted") {
+    if (drafts.enabled) {
+      await shareDeletion(db, env, workspaceId, job.draftId, now, opts);
+    }
+    return;
+  }
+  if (job.kind === "draft" && !drafts.enabled) {
+    return;
+  }
 
   const token = await getAccessToken(db, env, workspaceId, { fetchImpl: opts?.fetchImpl, now: clock });
   if (token.kind !== "ok") {
@@ -292,7 +357,61 @@ async function runJob(
     return;
   }
 
-  const fetched = await fetchOrderNode(token.shopDomain, token.token, job.orderGid, opts?.fetchImpl);
+  const fetchImpl = opts?.fetchImpl ?? fetch;
+  const access = { shopDomain: token.shopDomain, token: token.token, fetchImpl };
+
+  if (job.kind === "draft") {
+    const fetched = await fetchDraftNode(token.shopDomain, token.token, job.draftGid, fetchImpl);
+    if (fetched.kind !== "ok") {
+      logFailure(workspaceId, topic, failureText(fetched));
+      return;
+    }
+    if (!(await stillConnected(db, workspaceId, token.shopDomain))) {
+      return;
+    }
+    if (fetched.node === null) {
+      // Deleted (or purged) since the delivery was sent.
+      await shareDeletion(db, env, workspaceId, legacyIdOf(job.draftGid), now, opts);
+      return;
+    }
+    const [draft] = normalizeDrafts([fetched.node]);
+    if (!draft) {
+      return;
+    }
+    // Before the first draft sync, a draft that was already waiting (any
+    // topic but create) is inserted without an announcement, like the
+    // first draft sync would (decision D12).
+    const outcome = await upsertFetchedDraft(db, workspaceId, draft, now, {
+      silent: drafts.firstPending && topic !== "draft_orders/create",
+    });
+    switch (outcome.kind) {
+      case "unchanged":
+        return;
+      case "added":
+        await broadcastSync(env, workspaceId, { addedOrderIds: [outcome.orderId], updatedOrderIds: [] });
+        await notifyNewOrders(db, env, workspaceId, [outcome.orderId], opts);
+        return;
+      case "updated":
+        await broadcastSync(env, workspaceId, { addedOrderIds: [], updatedOrderIds: [outcome.orderId] });
+        await shareShopifyMoves(db, env, workspaceId, outcome.statusChanges, opts);
+        return;
+      case "attached": {
+        await broadcastSync(env, workspaceId, { addedOrderIds: [], updatedOrderIds: [outcome.orderId] });
+        await broadcastMerges(env, workspaceId, outcome.merged ? [outcome.merged] : []);
+        await shareShopifyMoves(db, env, workspaceId, outcome.statusChanges, opts);
+        // The order the card became, written onto it (an update, never a
+        // notification).
+        const ensured = await ensureOrderSnapshots(db, workspaceId, [outcome.orderId], access, now);
+        if (ensured.updatedOrderIds.length > 0) {
+          await broadcastSync(env, workspaceId, { addedOrderIds: [], updatedOrderIds: ensured.updatedOrderIds });
+        }
+        await shareShopifyMoves(db, env, workspaceId, ensured.statusChanges, opts);
+        return;
+      }
+    }
+  }
+
+  const fetched = await fetchOrderNode(token.shopDomain, token.token, job.orderGid, fetchImpl);
   if (fetched.kind !== "ok") {
     logFailure(workspaceId, topic, failureText(fetched));
     return;
@@ -301,16 +420,24 @@ async function runJob(
   if (!order || !(await stillConnected(db, workspaceId, token.shopDomain))) {
     return;
   }
-  const outcome = await upsertFetchedOrder(db, workspaceId, order, now);
-  if (outcome.kind === "unchanged" || outcome.kind === "deferred") {
+  const outcome = await upsertFetchedOrder(db, workspaceId, order, now, drafts.enabled ? access : undefined);
+  if (outcome.kind === "unchanged") {
+    return;
+  }
+  if (outcome.kind === "deferred") {
+    logFailure(workspaceId, topic, "draft link lookup failed");
     return;
   }
   await broadcastSync(env, workspaceId, {
     addedOrderIds: outcome.kind === "added" ? [outcome.orderId] : [],
     updatedOrderIds: outcome.kind === "added" ? [] : [outcome.orderId],
   });
+  if (outcome.kind === "attached") {
+    await broadcastMerges(env, workspaceId, outcome.mergedOrders);
+  }
   // A new order is announced (push and email); notifyNewOrders claims it,
-  // so a cron run that lands it too announces nothing twice.
+  // so a cron run that lands it too announces nothing twice. An order that
+  // came from a draft card is an update of that card: never announced.
   if (outcome.kind === "added") {
     await notifyNewOrders(db, env, workspaceId, [outcome.orderId], opts);
   }

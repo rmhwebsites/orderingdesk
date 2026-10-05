@@ -75,7 +75,7 @@ export function draftsEnabled(granted: readonly string[] | null | undefined): bo
 // Webhook subscriptions
 
 // The topics registered on connect (platform amendment section 4).
-export const WEBHOOK_TOPICS = [
+export const BASE_WEBHOOK_TOPICS = [
   "ORDERS_CREATE",
   "ORDERS_UPDATED",
   "ORDERS_CANCELLED",
@@ -87,6 +87,19 @@ export const WEBHOOK_TOPICS = [
   "CUSTOMERS_UPDATE",
   "CUSTOMERS_DELETE",
 ] as const;
+
+// Draft orders (draft orders spec section 7.2), only for an app that holds
+// the draft scopes.
+export const DRAFT_WEBHOOK_TOPICS = ["DRAFT_ORDERS_CREATE", "DRAFT_ORDERS_UPDATE", "DRAFT_ORDERS_DELETE"] as const;
+
+export type WebhookTopic = (typeof BASE_WEBHOOK_TOPICS)[number] | (typeof DRAFT_WEBHOOK_TOPICS)[number];
+
+// The topics to register for a grant. Shopify refuses a draft subscription
+// without the scope, and replaceWebhookSubscriptions stops at the first
+// refusal, so the draft topics are requested only with the scope, and last.
+export function webhookTopicsFor(granted: readonly string[] | null | undefined): WebhookTopic[] {
+  return draftsEnabled(granted) ? [...BASE_WEBHOOK_TOPICS, ...DRAFT_WEBHOOK_TOPICS] : [...BASE_WEBHOOK_TOPICS];
+}
 
 // Where Shopify delivers a workspace's webhooks: always the platform host
 // (APP_URL), never a client's custom domain.
@@ -112,14 +125,16 @@ const WEBHOOK_CREATE = `mutation WebhookSubscriptionCreate($topic: WebhookSubscr
 // An app has a handful of subscriptions per shop; 4 pages of 50 is ample.
 const MAX_WEBHOOK_PAGES = 4;
 
-// Creates one subscription per topic pointing at callbackUrl, first deleting
-// the app's existing subscriptions for that exact address (a reconnect
-// replaces them; Shopify refuses a second subscription for the same topic
-// and address). Subscriptions for any other address are left alone.
+// Creates one subscription per topic (in the order given) pointing at
+// callbackUrl, first deleting the app's existing subscriptions for that
+// exact address (a reconnect replaces them; Shopify refuses a second
+// subscription for the same topic and address). Subscriptions for any other
+// address are left alone. Stops at the first refusal.
 export async function replaceWebhookSubscriptions(
   shopDomain: string,
   token: string,
   callbackUrl: string,
+  topics: readonly WebhookTopic[],
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ kind: "ok" } | AdminFailure> {
   const stale: string[] = [];
@@ -154,7 +169,7 @@ export async function replaceWebhookSubscriptions(
     }
   }
 
-  for (const topic of WEBHOOK_TOPICS) {
+  for (const topic of topics) {
     const created = await shopifyGraphql(
       shopDomain,
       token,

@@ -309,6 +309,9 @@ export function StoreConnectionSection({
       status: next.status,
       scopes: null,
       missingScopes: [],
+      // The grant is not known from a save (scopes null), like missingScopes.
+      draftsEnabled: false,
+      missingDraftScopes: [],
       webhooksRegisteredAt: next.webhooksRegisteredAt,
       lastSyncAt: next.lastSyncAt,
       lastError: next.lastError,

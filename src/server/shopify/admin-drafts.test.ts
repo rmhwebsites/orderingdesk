@@ -1,8 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
+  BASE_WEBHOOK_TOPICS,
   completeDraft,
   DRAFT_LINK_CHUNK,
   DRAFT_SCOPES,
+  DRAFT_WEBHOOK_TOPICS,
+  replaceWebhookSubscriptions,
+  webhookTopicsFor,
   draftsEnabled,
   missingDraftScopes,
   draftGid,
@@ -245,5 +249,36 @@ describe("draft scopes", () => {
     expect(draftsEnabled(["read_draft_orders", "write_orders"])).toBe(false);
     expect(draftsEnabled(null)).toBe(false);
     expect(draftsEnabled(undefined)).toBe(false);
+  });
+});
+
+// Registration (spec section 7.2): Shopify refuses a draft subscription
+// without the scope and replaceWebhookSubscriptions stops at the first
+// refusal, so draft topics are only ever requested with the scope, and last.
+describe("webhook topics", () => {
+  it("adds the draft topics at the end only when drafts are enabled", () => {
+    expect(BASE_WEBHOOK_TOPICS).toHaveLength(10);
+    expect(DRAFT_WEBHOOK_TOPICS).toEqual(["DRAFT_ORDERS_CREATE", "DRAFT_ORDERS_UPDATE", "DRAFT_ORDERS_DELETE"]);
+    expect(webhookTopicsFor(["read_orders", "write_orders"])).toEqual([...BASE_WEBHOOK_TOPICS]);
+    expect(webhookTopicsFor(null)).toEqual([...BASE_WEBHOOK_TOPICS]);
+    expect(webhookTopicsFor(["write_orders", "write_draft_orders"])).toEqual([
+      ...BASE_WEBHOOK_TOPICS,
+      ...DRAFT_WEBHOOK_TOPICS,
+    ]);
+  });
+
+  it("creates exactly the topics it is given", async () => {
+    const { impl, calls } = stub((call) => {
+      if (call.query.includes("webhookSubscriptions(")) {
+        return { data: { webhookSubscriptions: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } };
+      }
+      return { data: { webhookSubscriptionCreate: { webhookSubscription: { id: "gid://shopify/WebhookSubscription/1" }, userErrors: [] } } };
+    });
+    const result = await replaceWebhookSubscriptions(DOMAIN, TOKEN, "https://orderingdesk.com/api/webhooks/shopify/ws", ["ORDERS_CREATE", "DRAFT_ORDERS_DELETE"], impl);
+    expect(result).toEqual({ kind: "ok" });
+    expect(calls.filter((call) => call.query.includes("webhookSubscriptionCreate")).map((call) => call.variables.topic)).toEqual([
+      "ORDERS_CREATE",
+      "DRAFT_ORDERS_DELETE",
+    ]);
   });
 });

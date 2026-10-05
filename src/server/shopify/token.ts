@@ -43,6 +43,11 @@ export type AccessTokenResult =
 export type AccessTokenOptions = {
   fetchImpl?: typeof fetch;
   now?: () => number;
+  // client_credentials: ignore the cached token and mint a new one (cached
+  // through the same compare-and-set), so it carries scopes approved since
+  // the cached one was minted (Refresh connection). No effect on a legacy
+  // token.
+  forceRenew?: boolean;
 };
 
 // The columns this module reads. Callers that already hold the whole
@@ -127,7 +132,7 @@ export async function accessTokenFor(
     return token ? { kind: "ok", token, shopDomain: row.shopDomain } : { kind: "unreadable" };
   }
   const now = opts?.now?.() ?? Date.now();
-  const cached = await usableCached(row, key, now);
+  const cached = opts?.forceRenew === true ? null : await usableCached(row, key, now);
   if (cached) {
     return { kind: "ok", token: cached, shopDomain: row.shopDomain };
   }

@@ -495,3 +495,222 @@ describe("receiveShopifyWebhook: customers", () => {
     expect(await db.select().from(schema.workspaceMembers).where(eq(schema.workspaceMembers.userId, "u_jo"))).toEqual([]);
   });
 });
+
+// Draft orders (spec section 7.1): the three draft topics, verified and
+// deduplicated like every other, applied only for an app that holds the
+// draft scopes.
+describe("receiveShopifyWebhook: draft orders", () => {
+  const DRAFT_SCOPES_GRANTED = ["read_orders", "write_orders", "read_customers", "write_draft_orders"];
+
+  const draftNode = (overrides: Record<string, unknown> = {}) => ({
+    id: "gid://shopify/DraftOrder/1201",
+    legacyResourceId: "1201",
+    name: "#D12",
+    status: "OPEN",
+    createdAt: "2026-10-02T11:50:00Z",
+    updatedAt: "2026-10-02T11:50:00Z",
+    email: "jordan@example.com",
+    customer: { displayName: "Jordan Vale" },
+    tags: [],
+    customAttributes: [],
+    totalPriceSet: { shopMoney: { amount: "0.0", currencyCode: "USD" } },
+    lineItems: { nodes: [], pageInfo: { hasNextPage: false } },
+    ...overrides,
+  });
+
+  // Answers the single draft, the single order, the draft link lookup, and
+  // tag reads and writes.
+  function draftStore(opts: { draft?: unknown; order?: unknown; links?: unknown[]; failLinks?: boolean } = {}) {
+    const calls: Query[] = [];
+    const impl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Query;
+      calls.push(body);
+      let data: unknown;
+      if (body.query.includes("query DraftOrderById")) {
+        data = { draftOrder: opts.draft ?? null };
+      } else if (body.query.includes("query OrderById")) {
+        data = { order: opts.order ?? null };
+      } else if (body.query.includes("query DraftLinks")) {
+        if (opts.failLinks) {
+          return new Response("{}", { status: 503 });
+        }
+        data = { nodes: opts.links ?? (body.variables.ids as string[]).map(() => null) };
+      } else if (body.query.includes("StatusTags(")) {
+        data = { node: { id: "x", tags: [] } };
+      } else if (body.query.includes("tagsAdd(")) {
+        data = { tagsAdd: { userErrors: [] } };
+      } else if (body.query.includes("tagsRemove(")) {
+        data = { tagsRemove: { userErrors: [] } };
+      } else {
+        throw new Error("unexpected request: " + body.query);
+      }
+      return new Response(JSON.stringify({ data }), { status: 200 });
+    }) as typeof fetch;
+    return { impl, calls, ops: () => calls.map((call) => call.query.match(/query (\w+)|mutation (\w+)/)?.slice(1).find(Boolean)) };
+  }
+
+  async function draftCard(db: Db, overrides: Partial<typeof schema.orders.$inferInsert> = {}) {
+    await db.insert(schema.orders).values({
+      id: "card",
+      workspaceId: WS,
+      shopifyOrderId: null,
+      shopifyDraftId: "1201",
+      draftName: "#D12",
+      name: "#D12",
+      shopify: { kind: "draft", shopifyDraftId: "1201", name: "#D12", status: "open", tags: "" },
+      statusKey: "new",
+      createdAt: Date.parse("2026-10-02T11:50:00Z"),
+      syncedAt: NOW - 60000,
+      ...overrides,
+    });
+  }
+
+  it("verifies and deduplicates the draft topics like every other", async () => {
+    const db = await setup({ scopes: DRAFT_SCOPES_GRANTED });
+    const { env } = fakeEnv();
+    const payload = { id: 1201, admin_graphql_api_id: "gid://shopify/DraftOrder/1201" };
+    for (const topic of ["draft_orders/create", "draft_orders/update", "draft_orders/delete"]) {
+      const first = await deliver(db, env, { topic, payload, webhookId: `wh-${topic}` });
+      expect(first.status).toBe(200);
+      expect(typeof first.work).toBe("function");
+      expect(await deliver(db, env, { topic, payload, webhookId: `wh-${topic}` })).toEqual({ status: 200 });
+    }
+    const forged = await deliver(db, env, { topic: "draft_orders/create", payload, webhookId: "wh-forged", hmac: "garbage" });
+    expect(forged).toEqual({ status: 401 });
+    expect(await deliveries(db)).toHaveLength(3);
+  });
+
+  // A clock that moves on with every read, so the moment the job inserted
+  // a card (its now) tells apart a quiet insert (claimed right then) from
+  // one the new-order notifications claimed later.
+  async function deliverTicking(db: Db, env: CloudflareEnv, topic: string, fetchImpl: typeof fetch) {
+    let tick = NOW;
+    const body = encoder.encode(JSON.stringify({ id: 1201 }));
+    const headers = new Headers({
+      "X-Shopify-Topic": topic,
+      "X-Shopify-Shop-Domain": SHOP,
+      "X-Shopify-Webhook-Id": `wh-tick-${topic}`,
+      "X-Shopify-Hmac-Sha256": await sign(body),
+    });
+    const receipt = await receiveShopifyWebhook(db, env, { workspaceId: WS, rawBody: body, headers }, { fetchImpl, now: () => tick++ });
+    await receipt.work?.();
+  }
+
+  it("adds a new request as a card and hands it to the new-order notifications", async () => {
+    const db = await setup({ scopes: DRAFT_SCOPES_GRANTED, draftLastSyncAt: NOW - 600000 });
+    const { env, sent } = fakeEnv();
+    const shop = draftStore({ draft: draftNode() });
+    await deliverTicking(db, env, "draft_orders/create", shop.impl);
+    expect(shop.calls[0].variables).toEqual({ id: "gid://shopify/DraftOrder/1201" });
+    const rows = await orderRows(db);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ shopifyOrderId: null, shopifyDraftId: "1201", name: "#D12" });
+    // Inserted at the job's now (NOW + 1), claimed afterwards by notify.
+    expect(rows[0].syncedAt).toBe(NOW + 1);
+    expect(rows[0].notifiedAt).toBeGreaterThan(NOW + 1);
+    expect(sent).toEqual([{ kind: "orders.synced", addedOrderIds: [rows[0].id], updatedOrderIds: [] }]);
+  });
+
+  it("inserts an old request quietly when an update arrives before the first draft sync", async () => {
+    const db = await setup({ scopes: DRAFT_SCOPES_GRANTED });
+    const { env } = fakeEnv();
+    const shop = draftStore({ draft: draftNode({ createdAt: "2026-10-02T11:59:00Z" }) });
+    await deliverTicking(db, env, "draft_orders/update", shop.impl);
+    const [row] = await orderRows(db);
+    // Claimed by the insert itself: never announced.
+    expect(row.notifiedAt).toBe(row.syncedAt);
+    const events = await db.select().from(schema.events).where(eq(schema.events.orderId, row.id));
+    expect(events.map((event) => event.type)).toEqual(["order_new"]);
+  });
+
+  it("attaches a completed draft, then fetches and writes its order, announcing nothing", async () => {
+    const db = await setup({ scopes: DRAFT_SCOPES_GRANTED, draftLastSyncAt: NOW - 600000 });
+    await draftCard(db);
+    const { env, sent } = fakeEnv();
+    const shop = draftStore({
+      draft: draftNode({ status: "COMPLETED", order: { id: "gid://shopify/Order/8101", legacyResourceId: "8101", name: "#8101" } }),
+      order: orderNode(),
+    });
+    await (await deliver(db, env, { topic: "draft_orders/update", payload: { id: 1201 } }, shop.impl)).work?.();
+    expect(shop.ops()).toEqual(["DraftOrderById", "OrderById"]);
+    const rows = await orderRows(db);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ id: "card", shopifyOrderId: "8101", name: "#8101", notifiedAt: null });
+    expect((rows[0].shopify as { kind: string }).kind).toBe("order");
+    expect(sent.filter((event) => event.kind === "orders.synced")).toEqual([
+      { kind: "orders.synced", addedOrderIds: [], updatedOrderIds: ["card"] },
+      { kind: "orders.synced", addedOrderIds: [], updatedOrderIds: ["card"] },
+    ]);
+  });
+
+  it("marks the card deleted on a delete, ignoring attached cards", async () => {
+    const db = await setup({ scopes: DRAFT_SCOPES_GRANTED });
+    await draftCard(db);
+    const { env, sent } = fakeEnv();
+    const receipt = await deliver(db, env, { topic: "draft_orders/delete", payload: { id: 1201 } });
+    await receipt.work?.();
+    const [row] = await orderRows(db);
+    expect(row.draftDeletedAt).toBe(NOW);
+    expect(sent.map((event) => event.kind)).toEqual(["orders.synced", "order.activity"]);
+    const activity = sent[1] as Extract<LiveEvent, { kind: "order.activity" }>;
+    expect(activity.event).toMatchObject({ type: "draft_deleted", orderId: "card", source: "shopify" });
+
+    const attachedDb = await setup({ scopes: DRAFT_SCOPES_GRANTED });
+    await draftCard(attachedDb, { shopifyOrderId: "8101", name: "#8101" });
+    await (await deliver(attachedDb, env, { topic: "draft_orders/delete", payload: { id: 1201 }, webhookId: "wh-del-2" })).work?.();
+    expect((await orderRows(attachedDb))[0].draftDeletedAt).toBeNull();
+  });
+
+  it("marks the card deleted when the re-fetch finds no draft", async () => {
+    const db = await setup({ scopes: DRAFT_SCOPES_GRANTED });
+    await draftCard(db);
+    const { env } = fakeEnv();
+    const shop = draftStore({ draft: null });
+    await (await deliver(db, env, { topic: "draft_orders/update", payload: { id: 1201 } }, shop.impl)).work?.();
+    expect((await orderRows(db))[0].draftDeletedAt).toBe(NOW);
+  });
+
+  it("links an order webhook for a draft-born order to its card with no new card and no notification", async () => {
+    const db = await setup({ scopes: DRAFT_SCOPES_GRANTED });
+    await draftCard(db, { createdAt: Date.parse("2026-10-01T09:00:00Z") });
+    const { env, sent } = fakeEnv();
+    const shop = draftStore({
+      order: orderNode(),
+      links: [
+        draftNode({ status: "COMPLETED", order: { id: "gid://shopify/Order/8101", legacyResourceId: "8101", name: "#8101" } }),
+      ],
+    });
+    await (await deliver(db, env, { topic: "orders/create", payload: { id: 8101 } }, shop.impl)).work?.();
+    expect(shop.ops()).toEqual(["OrderById", "DraftLinks"]);
+    const rows = await orderRows(db);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ id: "card", shopifyOrderId: "8101", notifiedAt: null });
+    expect(sent).toEqual([{ kind: "orders.synced", addedOrderIds: [], updatedOrderIds: ["card"] }]);
+  });
+
+  it("writes nothing when the draft lookup fails, and says so in the log", async () => {
+    const db = await setup({ scopes: DRAFT_SCOPES_GRANTED });
+    await draftCard(db, { createdAt: Date.parse("2026-10-01T09:00:00Z") });
+    const { env, sent } = fakeEnv();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const shop = draftStore({ order: orderNode(), failLinks: true });
+    await (await deliver(db, env, { topic: "orders/create", payload: { id: 8101 } }, shop.impl)).work?.();
+    expect(await orderRows(db)).toHaveLength(1);
+    expect((await orderRows(db))[0].shopifyOrderId).toBeNull();
+    expect(sent).toEqual([]);
+    expect(warn.mock.calls.map((call) => String(call[0])).join("\n")).toContain("draft link lookup failed");
+  });
+
+  it("ignores draft webhooks and looks up no draft for an app without the draft scopes", async () => {
+    const db = await setup({ scopes: ["read_orders", "write_orders", "read_customers"] });
+    await draftCard(db, { createdAt: Date.parse("2026-10-01T09:00:00Z") });
+    const { env } = fakeEnv();
+    const drafts = draftStore({ draft: draftNode({ name: "#D99" }) });
+    await (await deliver(db, env, { topic: "draft_orders/create", payload: { id: 1201 } }, drafts.impl)).work?.();
+    expect(drafts.calls).toEqual([]);
+    const orders = draftStore({ order: orderNode() });
+    await (await deliver(db, env, { topic: "orders/create", payload: { id: 8101 }, webhookId: "wh-o" }, orders.impl)).work?.();
+    expect(orders.ops()).toEqual(["OrderById"]);
+    expect(await orderRows(db)).toHaveLength(2);
+  });
+});
