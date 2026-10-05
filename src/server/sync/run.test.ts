@@ -2009,15 +2009,16 @@ describe("runSync", () => {
     expect((await connectionOf(db, WS)).lastSyncAt).toBe(T + 1200000);
   });
 
-  it("runs a whole cursor chain on the schema as of migration 0004", async () => {
+  it("runs a whole cursor chain on the schema as of migration 0007", async () => {
     // The sync engine reads and writes whole store_connections rows (and
     // writes events.source), so a column it needs from a migration that has
     // not been applied yet fails every run. This pins that the engine needs
-    // nothing newer than 0004. Raised from 0003 by the platform phase: DEPLOY
-    // NOTE, run `npm run db:migrate:remote` (applies 0004) BEFORE the code
-    // that needs it reaches production. Raise the number again only together
-    // with a deploy note like this one.
-    const { db, env } = openDb({ through: "0004" });
+    // nothing newer than 0007. Raised from 0003 by the platform phase (0004),
+    // then by Phase 6 (0007: drizzle names orders.notified_at in every order
+    // insert). DEPLOY NOTE, run `npm run db:migrate:remote` (applies 0007)
+    // BEFORE the code that needs it reaches production. Raise the number
+    // again only together with a deploy note like this one.
+    const { db, env } = openDb({ through: "0007" });
     await seedWorkspace(db, WS);
     const T = Date.parse("2026-09-25T12:00:00.000Z");
     const previousSync = T - 3600000;

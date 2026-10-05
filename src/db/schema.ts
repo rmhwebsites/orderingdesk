@@ -115,6 +115,12 @@ export const orders = sqliteTable("orders", {
   statusSetAt: integer("status_set_at"),
   createdAt: integer("created_at").notNull(),
   syncedAt: integer("synced_at").notNull(),
+  // When the new-order notification was claimed (src/server/notify.ts).
+  // notifyNewOrders sets it with one conditional UPDATE before anything is
+  // sent, so an order is announced at most once, whichever of the cron
+  // sync, the Sync button or a webhook landed it. Null for orders that were
+  // never claimed, including every order stored before migration 0007.
+  notifiedAt: integer("notified_at"),
 }, (t) => [
   uniqueIndex("order_unique").on(t.workspaceId, t.shopifyOrderId),
   index("order_ws_created").on(t.workspaceId, t.createdAt),
@@ -195,6 +201,11 @@ export const pushSubscriptions = sqliteTable("push_subscriptions", {
   keys: text("keys", { mode: "json" }).$type<{ p256dh: string; auth: string }>().notNull(),
   userAgent: text("user_agent"),
   createdAt: integer("created_at").notNull(),
+  // The host the browser subscribed on (normalized, no port): the hub or a
+  // client host. A service worker belongs to one origin, so a notification's
+  // link opens the order on this host when it can (src/server/notify.ts).
+  // Null reads as the hub.
+  host: text("host"),
 }, (t) => [index("push_user").on(t.userId)]);
 
 // Invites for people who have no account yet; claimed at sign-in. Exactly

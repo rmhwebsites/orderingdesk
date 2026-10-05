@@ -278,6 +278,7 @@ describe("getOrderDetail", () => {
         statusSetAt: null,
         createdAt: 10,
         syncedAt: 20,
+        notifiedAt: null,
       },
       itemsTruncated: false,
     });

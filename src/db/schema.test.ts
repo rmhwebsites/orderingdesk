@@ -151,6 +151,26 @@ describe("schema migrations", () => {
     ).toEqual({ approved_role: null, approved_at: null, approved_by: null, denied_at: null });
   });
 
+  // Migration 0007: orders start unclaimed for the new-order notification,
+  // and a push subscription records the host it was made on (null = hub).
+  it("stores orders unnotified and push subscriptions with an optional host", () => {
+    db.prepare(
+      "INSERT INTO orders (id, workspace_id, shopify_order_id, name, shopify, status_key, created_at, synced_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run("o_notify", "ws1", "7001", "#7001", "{}", "new", 1, 1);
+    expect(db.prepare("SELECT notified_at FROM orders WHERE id = ?").get("o_notify")).toEqual({ notified_at: null });
+
+    const insert = db.prepare(
+      "INSERT INTO push_subscriptions (id, user_id, endpoint, keys, created_at, host) VALUES (?, ?, ?, ?, ?, ?)",
+    );
+    insert.run("ps1", "user1", "https://push.example/1", "{}", 1, null);
+    insert.run("ps2", "user1", "https://push.example/2", "{}", 1, "orders.example.com");
+    expect(db.prepare("SELECT host FROM push_subscriptions ORDER BY id").all()).toEqual([
+      { host: null },
+      { host: "orders.example.com" },
+    ]);
+    expect(() => insert.run("ps3", "user2", "https://push.example/1", "{}", 1, null)).toThrow(/UNIQUE/);
+  });
+
   it("keeps custom domains unique and allows any number of workspaces without one", () => {
     const insert = db.prepare(
       "INSERT INTO workspaces (id, name, slug, created_by, created_at, custom_domain) VALUES (?, ?, ?, ?, ?, ?)",

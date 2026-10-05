@@ -15,6 +15,7 @@
     "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts"
   },
   "dependencies": {
+    "@block65/webcrypto-web-push": "^2.0.0",
     "@phosphor-icons/react": "^2.1.10",
     "better-auth": "^1.7.7",
     "drizzle-orm": "^0.45.3",
