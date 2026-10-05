@@ -1,6 +1,17 @@
 import { describe, it, expect } from "vitest";
 import fixture from "./__fixtures__/orders-graphql.json";
-import { normalizeOrders, type NormalizedOrder } from "./normalize";
+import draftFixture from "./__fixtures__/draft-orders-graphql.json";
+import {
+  ATTRIBUTE_KEY_MAX,
+  ATTRIBUTE_VALUE_MAX,
+  ATTRIBUTES_MAX,
+  ITEM_PROPS_MAX,
+  normalizeDrafts,
+  normalizeOrders,
+  snapshotKind,
+  type NormalizedDraft,
+  type NormalizedOrder,
+} from "./normalize";
 
 const fixtureNodes = (fixture as { data: { orders: { nodes: unknown[]; pageInfo: unknown } } })
   .data.orders.nodes;
@@ -36,8 +47,8 @@ describe("normalizeOrders", () => {
       country: "CA",
     });
     expect(o.items).toEqual([
-      { title: "Scaffold Frame 5 ft", qty: 4, price: "89.00", sku: "SF-60", variant: "Galvanized" },
-      { title: 'Caster Wheel 8" with "brake"', qty: 1, price: null, sku: "", variant: "" },
+      { title: "Scaffold Frame 5 ft", qty: 4, price: "89.00", sku: "SF-60", variant: "Galvanized", props: [] },
+      { title: 'Caster Wheel 8" with "brake"', qty: 1, price: null, sku: "", variant: "", props: [] },
     ]);
     expect(o.itemsTruncated).toBe(false);
   });
@@ -165,7 +176,7 @@ describe("normalizeOrders", () => {
       },
     ]);
     expect(result[0].items).toEqual([
-      { title: "Pallet Jack", qty: 2, price: "349.00", sku: "PJ-11", variant: "Standard" },
+      { title: "Pallet Jack", qty: 2, price: "349.00", sku: "PJ-11", variant: "Standard", props: [] },
     ]);
   });
 
@@ -184,7 +195,7 @@ describe("normalizeOrders", () => {
     ]);
     expect(result[0].itemsTruncated).toBe(true);
     expect(result[0].items).toEqual([
-      { title: "Hard Hat", qty: 3, price: null, sku: "HH-1", variant: "White" },
+      { title: "Hard Hat", qty: 3, price: null, sku: "HH-1", variant: "White", props: [] },
     ]);
   });
 
@@ -283,6 +294,72 @@ describe("normalizeOrders", () => {
     });
   });
 
+  // Draft orders spec section 4: orders carry their kind, where they came
+  // from, their cart attributes and each line item's properties (copied from
+  // the draft on completion).
+  it("adds the kind, the source, cart attributes and line item properties", () => {
+    const [order] = normalizeOrders([
+      {
+        id: "gid://shopify/Order/7801",
+        legacyResourceId: "7801",
+        name: "#1031",
+        sourceName: "shopify_draft_order",
+        customAttributes: [
+          { key: "Ship to Branch", value: "Buford HQ" },
+          { key: "", value: "dropped" },
+          { key: "Note", value: null },
+        ],
+        lineItems: {
+          nodes: [
+            {
+              title: "IMPACT Business Cards",
+              quantity: 1,
+              customAttributes: [
+                { key: "Full Name", value: "Casey Lin" },
+                { key: "_pdf", value: "https://cdn.shopify.com/proof.pdf" },
+                { key: 7, value: "not a key" },
+              ],
+            },
+          ],
+          pageInfo: { hasNextPage: false },
+        },
+      },
+    ]);
+    expect(order.kind).toBe("order");
+    expect(order.sourceName).toBe("shopify_draft_order");
+    expect(order.attributes).toEqual([
+      { key: "Ship to Branch", value: "Buford HQ" },
+      { key: "Note", value: "" },
+    ]);
+    expect(order.items[0].props).toEqual([
+      { key: "Full Name", value: "Casey Lin" },
+      { key: "_pdf", value: "https://cdn.shopify.com/proof.pdf" },
+    ]);
+    expect(Object.keys(order)).toEqual([
+      "kind",
+      "shopifyOrderId",
+      "name",
+      "createdAt",
+      "customerName",
+      "email",
+      "total",
+      "currency",
+      "financialStatus",
+      "fulfillmentStatus",
+      "delivered",
+      "items",
+      "itemsTruncated",
+      "shipping",
+      "tags",
+      "note",
+      "sourceName",
+      "attributes",
+    ]);
+    const [bare] = normalizeOrders([{ id: "gid://shopify/Order/7802" }]);
+    expect(bare.sourceName).toBe("");
+    expect(bare.attributes).toEqual([]);
+  });
+
   it("returns [] for malformed payloads", () => {
     expect(normalizeOrders(null)).toEqual([]);
     expect(normalizeOrders(undefined)).toEqual([]);
@@ -308,5 +385,190 @@ describe("normalizeOrders", () => {
     ]);
     expect(result).toHaveLength(1);
     expect(result[0].shopifyOrderId).toBe("7003");
+  });
+});
+
+const draftNodes = (draftFixture as { data: { draftOrders: { nodes: unknown[] } } }).data.draftOrders.nodes;
+
+function draftNamed(result: NormalizedDraft[], name: string): NormalizedDraft {
+  const found = result.find((d) => d.name === name);
+  expect(found, `expected a draft named ${name}`).toBeDefined();
+  return found as NormalizedDraft;
+}
+
+describe("normalizeDrafts", () => {
+  it("normalizes a B2B request with its company, cart attributes and personalization", () => {
+    const d = draftNamed(normalizeDrafts(draftFixture), "#D12");
+    expect(d).toEqual({
+      kind: "draft",
+      shopifyDraftId: "1038600000012",
+      name: "#D12",
+      status: "open",
+      createdAt: Date.parse("2026-10-03T15:20:00Z"),
+      completedAt: null,
+      orderId: null,
+      orderName: null,
+      customerName: "Jordan Vale",
+      email: "jordan.vale@example.com",
+      company: "Impact Rentals",
+      location: "Buford, GA",
+      attributes: [
+        { key: "Ship to Branch", value: "Buford HQ" },
+        { key: "For Employee Name", value: "Casey Lin" },
+        { key: "Reason for Request", value: "New hire" },
+        { key: "Internal Notes", value: "" },
+      ],
+      discountCodes: ["STAFF100"],
+      discount: { title: "Staff", value: "25", valueType: "FIXED_AMOUNT" },
+      subtotal: "25.0",
+      discounts: "25.0",
+      total: "0.0",
+      currency: "USD",
+      items: [
+        {
+          title: "IMPACT Business Cards",
+          qty: 1,
+          price: "25.0",
+          sku: "IR-PR-BIZCARD-200",
+          variant: "200",
+          props: [
+            { key: "Full Name", value: "Casey Lin" },
+            { key: "Job Title", value: "Branch Manager" },
+            { key: "Office Address", value: "100 Example Way\r\nBuford, GA 30518" },
+            { key: "Preview", value: "https://cdn.shopify.com/s/files/1/0000/0001/files/preview-casey.png" },
+            { key: "_pdf", value: "https://cdn.shopify.com/s/files/1/0000/0001/files/proof-casey.pdf" },
+            { key: "_pplr_preview", value: "Preview" },
+          ],
+          custom: false,
+        },
+        { title: "Custom banner", qty: 2, price: null, sku: "", variant: "", props: [], custom: true },
+      ],
+      itemsTruncated: false,
+      shipping: {
+        name: "Jordan Vale",
+        a1: "100 Example Way",
+        a2: "",
+        city: "Buford",
+        prov: "GA",
+        zip: "30518",
+        country: "US",
+        company: "IMPACT Rentals, Buford HQ",
+        phone: "+15555550100",
+      },
+      tags: "Ordering Desk: New, staff",
+      note: "Needed before the Monday crew meeting",
+      poNumber: "PO-77",
+    });
+  });
+
+  it("reads a completed draft's order and falls back for the name and email", () => {
+    const d = draftNamed(normalizeDrafts(draftFixture), "#D13");
+    expect(d.status).toBe("completed");
+    expect(d.completedAt).toBe(Date.parse("2026-10-02T09:00:00Z"));
+    expect(d.orderId).toBe("7801300000031");
+    expect(d.orderName).toBe("#1031");
+    expect(d.customerName).toBe("Riley Oakes");
+    expect(d.email).toBe("riley@example.com");
+    expect(d.location).toBe("Water Tower HQ");
+    expect(d.shipping).toBeNull();
+    expect(d.discount).toBeNull();
+  });
+
+  it("degrades missing and malformed fields to defaults", () => {
+    const d = draftNamed(normalizeDrafts(draftNodes), "#D14");
+    expect(d.shopifyDraftId).toBe("1038600000014");
+    expect(d.status).toBe("invoice_sent");
+    expect(d.createdAt).toBe(0);
+    expect(d.company).toBe("");
+    expect(d.location).toBe("");
+    expect(d.customerName).toBe("Sam Ruiz");
+    expect(d.email).toBe("");
+    expect(d.total).toBe("0");
+    expect(d.currency).toBe("USD");
+    expect(d.items).toEqual([]);
+    expect(d.itemsTruncated).toBe(true);
+    expect(d.shipping).toEqual({ name: "Sam Ruiz", a1: "", a2: "", city: "", prov: "", zip: "", country: "CA", company: "", phone: "" });
+    expect(d.attributes).toEqual([]);
+    expect(d.discountCodes).toEqual([]);
+    expect(d.tags).toBe("");
+    expect(d.note).toBe("");
+    expect(d.poNumber).toBe("");
+  });
+
+  it("maps Shopify's statuses, reading anything unknown as open", () => {
+    const statusOf = (status: unknown) => normalizeDrafts([{ id: "gid://shopify/DraftOrder/1", status }])[0].status;
+    expect(statusOf("OPEN")).toBe("open");
+    expect(statusOf("INVOICE_SENT")).toBe("invoice_sent");
+    expect(statusOf("COMPLETED")).toBe("completed");
+    expect(statusOf("SOMETHING_NEW")).toBe("open");
+    expect(statusOf(undefined)).toBe("open");
+    expect(statusOf("constructor")).toBe("open");
+  });
+
+  it("reads the order id from the gid when the legacy id is missing", () => {
+    const [d] = normalizeDrafts([
+      { id: "gid://shopify/DraftOrder/5", status: "COMPLETED", order: { id: "gid://shopify/Order/88", name: "#1088" } },
+    ]);
+    expect(d.orderId).toBe("88");
+    expect(d.orderName).toBe("#1088");
+  });
+
+  it("passes hostile text through untouched", () => {
+    const hostile = '<img src=x onerror="alert(1)"> \u0000 "quoted" \n Łucja';
+    const [d] = normalizeDrafts([
+      {
+        id: "gid://shopify/DraftOrder/6",
+        note2: hostile,
+        customAttributes: [{ key: hostile, value: hostile }],
+        lineItems: { nodes: [{ title: hostile, customAttributes: [{ key: "Full Name", value: hostile }] }] },
+      },
+    ]);
+    expect(d.note).toBe(hostile);
+    expect(d.attributes).toEqual([{ key: hostile, value: hostile }]);
+    expect(d.items[0].title).toBe(hostile);
+    expect(d.items[0].props).toEqual([{ key: "Full Name", value: hostile }]);
+  });
+
+  it("caps attribute and property sizes and counts", () => {
+    const many = (n: number) => Array.from({ length: n }, (_, i) => ({ key: `k${i}`, value: `v${i}` }));
+    const [d] = normalizeDrafts([
+      {
+        id: "gid://shopify/DraftOrder/7",
+        customAttributes: [{ key: "k".repeat(500), value: "v".repeat(5000) }, ...many(80)],
+        lineItems: { nodes: [{ title: "Cards", customAttributes: many(60) }] },
+      },
+    ]);
+    expect(d.attributes).toHaveLength(ATTRIBUTES_MAX);
+    expect(d.attributes[0].key).toHaveLength(ATTRIBUTE_KEY_MAX);
+    expect(d.attributes[0].value).toHaveLength(ATTRIBUTE_VALUE_MAX);
+    expect(d.items[0].props).toHaveLength(ITEM_PROPS_MAX);
+    expect([ATTRIBUTES_MAX, ITEM_PROPS_MAX, ATTRIBUTE_KEY_MAX, ATTRIBUTE_VALUE_MAX]).toEqual([50, 30, 200, 2000]);
+  });
+
+  it("builds every snapshot with keys in one fixed order", () => {
+    const first = JSON.stringify(normalizeDrafts(draftFixture));
+    const second = JSON.stringify(normalizeDrafts(JSON.parse(JSON.stringify(draftFixture))));
+    expect(second).toBe(first);
+    const [sparse] = normalizeDrafts([{ id: "gid://shopify/DraftOrder/8" }]);
+    expect(Object.keys(sparse)).toEqual(Object.keys(draftNamed(normalizeDrafts(draftFixture), "#D12")));
+  });
+
+  it("accepts edges, skips drafts without an id and malformed payloads", () => {
+    const edges = { data: { draftOrders: { edges: draftNodes.map((node) => ({ node })) } } };
+    expect(normalizeDrafts(edges)).toEqual(normalizeDrafts(draftFixture));
+    expect(normalizeDrafts([null, "x", { name: "#D99" }])).toEqual([]);
+    expect(normalizeDrafts(null)).toEqual([]);
+    expect(normalizeDrafts({ data: { orders: { nodes: draftNodes } } })).toEqual([]);
+  });
+});
+
+describe("snapshotKind", () => {
+  it("reads a draft snapshot as a draft and everything else as an order", () => {
+    expect(snapshotKind(normalizeDrafts(draftFixture)[0])).toBe("draft");
+    expect(snapshotKind(normalizeOrders(fixture)[0])).toBe("order");
+    // Stored before the kind existed.
+    expect(snapshotKind({ shopifyOrderId: "1", name: "#1001" })).toBe("order");
+    expect(snapshotKind(null)).toBe("order");
+    expect(snapshotKind("draft")).toBe("order");
   });
 });

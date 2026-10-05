@@ -1,11 +1,41 @@
-// Normalizes Shopify Admin GraphQL order payloads into the flat shape the app
-// stores in orders.shopify. Pure data mapping: text passes through untouched
-// (storage is JSON, not HTML; escaping is the renderer's job), unknown shapes
-// degrade to defaults, and orders without any usable id are skipped.
+// Normalizes Shopify Admin GraphQL order and draft order payloads into the
+// flat shapes the app stores in orders.shopify (and orders.draft_snapshot).
+// Pure data mapping: text passes through untouched (storage is JSON, not
+// HTML; escaping is the renderer's job), unknown shapes degrade to
+// defaults, and nodes without any usable id are skipped. Both shapes are
+// built with keys in one fixed order: stored snapshots are compared by
+// JSON.stringify equality.
 
 import { FULFILLMENTS_PER_ORDER } from "./client";
 
+// A cart attribute or a line item property, in Shopify's order. Keys that
+// start with an underscore (_pdf, _pplr_preview) are kept: hiding them is a
+// display decision.
+export type Attribute = { key: string; value: string };
+
+export type Item = {
+  title: string;
+  qty: number;
+  price: string | null;
+  sku: string;
+  variant: string;
+  // The line item's properties (customAttributes): personalization such as
+  // a business card's name, preview image and PDF proof.
+  props: Attribute[];
+};
+
+export type Shipping = {
+  name: string;
+  a1: string;
+  a2: string;
+  city: string;
+  prov: string;
+  zip: string;
+  country: string;
+};
+
 export type NormalizedOrder = {
+  kind: "order";
   shopifyOrderId: string;
   name: string;
   createdAt: number;
@@ -18,23 +48,68 @@ export type NormalizedOrder = {
   // True only when Shopify confirmed delivery of the whole order (see
   // deliveredOf). The Shopify state mapping in status-sync.ts reads it.
   delivered: boolean;
-  items: { title: string; qty: number; price: string | null; sku: string; variant: string }[];
+  items: Item[];
   // True unless Shopify confirmed that items holds every line item on the
   // order. Anything built from items, such as a purchase order, must treat a
   // true value as a partial list.
   itemsTruncated: boolean;
-  shipping: {
-    name: string;
-    a1: string;
-    a2: string;
-    city: string;
-    prov: string;
-    zip: string;
-    country: string;
-  } | null;
+  shipping: Shipping | null;
   tags: string;
   note: string;
+  // "shopify_draft_order" for an order made from a draft.
+  sourceName: string;
+  // The order's cart attributes (customAttributes).
+  attributes: Attribute[];
 };
+
+export type DraftStatus = "open" | "invoice_sent" | "completed";
+
+export type NormalizedDraft = {
+  kind: "draft";
+  // legacyResourceId, else the gid tail.
+  shopifyDraftId: string;
+  // "#D12"
+  name: string;
+  status: DraftStatus;
+  createdAt: number;
+  completedAt: number | null;
+  // The legacy id and name of the order the draft became.
+  orderId: string | null;
+  orderName: string | null;
+  // displayName, else first and last name, else the shipping name.
+  customerName: string;
+  // The draft's email, else the customer's, lowercased.
+  email: string;
+  // The B2B purchasing company and location, else "".
+  company: string;
+  location: string;
+  attributes: Attribute[];
+  discountCodes: string[];
+  discount: { title: string; value: string; valueType: string } | null;
+  subtotal: string;
+  discounts: string;
+  total: string;
+  currency: string;
+  items: (Item & { custom: boolean })[];
+  itemsTruncated: boolean;
+  shipping: (Shipping & { company: string; phone: string }) | null;
+  // Joined with ", " like orders.
+  tags: string;
+  // note2
+  note: string;
+  poNumber: string;
+};
+
+// Caps on what a snapshot keeps from Shopify's free-form attributes.
+export const ATTRIBUTES_MAX = 50;
+export const ITEM_PROPS_MAX = 30;
+export const ATTRIBUTE_KEY_MAX = 200;
+export const ATTRIBUTE_VALUE_MAX = 2000;
+
+// A snapshot stored before snapshots carried a kind reads as an order.
+export function snapshotKind(snapshot: unknown): "draft" | "order" {
+  return isDict(snapshot) && snapshot.kind === "draft" ? "draft" : "order";
+}
 
 type Dict = Record<string, unknown>;
 
@@ -46,20 +121,20 @@ function str(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-// Accepts {data:{orders:{nodes|edges}}} (a raw GraphQL response) or a bare
+// Accepts {data:{<root>:{nodes|edges}}} (a raw GraphQL response) or a bare
 // nodes array (what the client hands over after pagination).
-function extractNodes(payload: unknown): unknown[] {
+function extractNodes(payload: unknown, root: "orders" | "draftOrders"): unknown[] {
   if (Array.isArray(payload)) {
     return payload;
   }
   if (!isDict(payload) || !isDict(payload.data)) {
     return [];
   }
-  const orders = payload.data.orders;
-  if (!isDict(orders)) {
+  const container = payload.data[root];
+  if (!isDict(container)) {
     return [];
   }
-  return nodesOrEdges(orders);
+  return nodesOrEdges(container);
 }
 
 function nodesOrEdges(container: Dict): unknown[] {
@@ -90,7 +165,8 @@ function amountOf(money: Dict | undefined): string | null {
   return null;
 }
 
-function orderIdOf(order: Dict): string {
+// legacyResourceId, else the numeric tail of the gid, else "".
+function legacyIdOf(order: Dict): string {
   const legacy = order.legacyResourceId;
   if (typeof legacy === "string" && legacy.length > 0) {
     return legacy;
@@ -111,22 +187,46 @@ function statusText(value: unknown, fallback: string): string {
   return raw.length > 0 ? raw.toLowerCase().split("_").join(" ") : fallback;
 }
 
-function itemsOf(order: Dict): NormalizedOrder["items"] {
-  return normalizeLineItems(order.lineItems);
+// customAttributes as stored attributes: Shopify's order, entries without a
+// key dropped, a missing value read as "", key and value capped, at most
+// `max` entries.
+function attributesOf(raw: unknown, max: number): Attribute[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const out: Attribute[] = [];
+  for (const entry of raw) {
+    if (out.length >= max) {
+      break;
+    }
+    if (!isDict(entry) || typeof entry.key !== "string" || entry.key.length === 0) {
+      continue;
+    }
+    out.push({
+      key: entry.key.slice(0, ATTRIBUTE_KEY_MAX),
+      value: str(entry.value).slice(0, ATTRIBUTE_VALUE_MAX),
+    });
+  }
+  return out;
 }
 
-// A line item connection (nodes or edges) as stored items. Also used for
-// the full line item list a purchase order prefill fetches
-// (src/server/shopify/admin.ts fetchAllLineItems).
-export function normalizeLineItems(connection: unknown): NormalizedOrder["items"] {
-  const lineItems = isDict(connection) ? nodesOrEdges(connection) : [];
-  return lineItems.filter(isDict).map((item) => ({
+function itemOf(item: Dict): Item {
+  return {
     title: str(item.title),
     qty: typeof item.quantity === "number" && Number.isFinite(item.quantity) ? item.quantity : 1,
     price: amountOf(shopMoneyOf(item.originalUnitPriceSet)),
     sku: str(item.sku),
     variant: str(item.variantTitle),
-  }));
+    props: attributesOf(item.customAttributes, ITEM_PROPS_MAX),
+  };
+}
+
+// A line item connection (nodes or edges) as stored items. Also used for
+// the full line item list a purchase order prefill fetches
+// (src/server/shopify/admin.ts fetchAllLineItems).
+export function normalizeLineItems(connection: unknown): Item[] {
+  const lineItems = isDict(connection) ? nodesOrEdges(connection) : [];
+  return lineItems.filter(isDict).map(itemOf);
 }
 
 // The sync fetches one page of line items per order. Only an explicit "no
@@ -160,14 +260,16 @@ function deliveredOf(order: Dict): boolean {
   );
 }
 
-function shippingOf(order: Dict): NormalizedOrder["shipping"] {
+function fullName(first: unknown, last: unknown): string {
+  return [str(first), str(last)].filter((part) => part.length > 0).join(" ");
+}
+
+function shippingOf(order: Dict): Shipping | null {
   const address = order.shippingAddress;
   if (!isDict(address)) {
     return null;
   }
-  const fallbackName = [str(address.firstName), str(address.lastName)]
-    .filter((part) => part.length > 0)
-    .join(" ");
+  const fallbackName = fullName(address.firstName, address.lastName);
   return {
     name: str(address.name) || fallbackName,
     a1: str(address.address1),
@@ -184,25 +286,21 @@ function normalizeOne(raw: unknown): NormalizedOrder | null {
   if (!isDict(raw)) {
     return null;
   }
-  const shopifyOrderId = orderIdOf(raw);
+  const shopifyOrderId = legacyIdOf(raw);
   if (shopifyOrderId.length === 0) {
     return null;
   }
 
   const customer = isDict(raw.customer) ? raw.customer : undefined;
-  const customerName =
-    str(customer?.displayName) ||
-    [str(customer?.firstName), str(customer?.lastName)]
-      .filter((part) => part.length > 0)
-      .join(" ");
+  const customerName = str(customer?.displayName) || fullName(customer?.firstName, customer?.lastName);
 
   const money = shopMoneyOf(raw.currentTotalPriceSet) ?? shopMoneyOf(raw.totalPriceSet);
-  const parsedCreatedAt = Date.parse(str(raw.createdAt));
 
   return {
+    kind: "order",
     shopifyOrderId,
     name: str(raw.name),
-    createdAt: Number.isNaN(parsedCreatedAt) ? 0 : parsedCreatedAt,
+    createdAt: timeOf(raw.createdAt) ?? 0,
     customerName,
     email: (str(raw.email) || str(customer?.email)).toLowerCase(),
     total: amountOf(money) ?? "0",
@@ -210,20 +308,113 @@ function normalizeOne(raw: unknown): NormalizedOrder | null {
     financialStatus: statusText(raw.displayFinancialStatus, ""),
     fulfillmentStatus: statusText(raw.displayFulfillmentStatus, "unfulfilled"),
     delivered: deliveredOf(raw),
-    items: itemsOf(raw),
+    items: normalizeLineItems(raw.lineItems),
     itemsTruncated: itemsTruncatedOf(raw),
     shipping: shippingOf(raw),
-    tags: Array.isArray(raw.tags)
-      ? raw.tags.filter((tag): tag is string => typeof tag === "string").join(", ")
-      : str(raw.tags),
+    tags: tagsOf(raw.tags),
     note: str(raw.note),
+    sourceName: str(raw.sourceName),
+    attributes: attributesOf(raw.customAttributes, ATTRIBUTES_MAX),
   };
+}
+
+// An ISO timestamp as ms, or null when it does not parse.
+function timeOf(value: unknown): number | null {
+  const parsed = Date.parse(str(value));
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function tagsOf(tags: unknown): string {
+  return Array.isArray(tags) ? tags.filter((tag): tag is string => typeof tag === "string").join(", ") : str(tags);
 }
 
 export function normalizeOrders(payload: unknown): NormalizedOrder[] {
   const result: NormalizedOrder[] = [];
-  for (const node of extractNodes(payload)) {
+  for (const node of extractNodes(payload, "orders")) {
     const normalized = normalizeOne(node);
+    if (normalized) {
+      result.push(normalized);
+    }
+  }
+  return result;
+}
+
+function draftStatusOf(value: unknown): DraftStatus {
+  switch (value) {
+    case "INVOICE_SENT":
+      return "invoice_sent";
+    case "COMPLETED":
+      return "completed";
+    default:
+      return "open";
+  }
+}
+
+function normalizeDraftOne(raw: unknown): NormalizedDraft | null {
+  if (!isDict(raw)) {
+    return null;
+  }
+  const shopifyDraftId = legacyIdOf(raw);
+  if (shopifyDraftId.length === 0) {
+    return null;
+  }
+  const order = isDict(raw.order) ? raw.order : undefined;
+  const orderId = order ? legacyIdOf(order) : "";
+  const customer = isDict(raw.customer) ? raw.customer : undefined;
+  const shipping = shippingOf(raw);
+  const address = isDict(raw.shippingAddress) ? raw.shippingAddress : undefined;
+  const entity = isDict(raw.purchasingEntity) ? raw.purchasingEntity : undefined;
+  const company = entity && isDict(entity.company) ? entity.company : undefined;
+  const location = entity && isDict(entity.location) ? entity.location : undefined;
+  const applied = isDict(raw.appliedDiscount) ? raw.appliedDiscount : undefined;
+  const total = shopMoneyOf(raw.totalPriceSet);
+  const lineItems = isDict(raw.lineItems) ? nodesOrEdges(raw.lineItems) : [];
+
+  return {
+    kind: "draft",
+    shopifyDraftId,
+    name: str(raw.name),
+    status: draftStatusOf(raw.status),
+    createdAt: timeOf(raw.createdAt) ?? 0,
+    completedAt: timeOf(raw.completedAt),
+    orderId: orderId.length > 0 ? orderId : null,
+    orderName: order && str(order.name).length > 0 ? str(order.name) : null,
+    customerName:
+      str(customer?.displayName) || fullName(customer?.firstName, customer?.lastName) || (shipping?.name ?? ""),
+    email: (str(raw.email) || str(customer?.email)).toLowerCase(),
+    company: str(company?.name),
+    location: str(location?.name),
+    attributes: attributesOf(raw.customAttributes, ATTRIBUTES_MAX),
+    discountCodes: Array.isArray(raw.discountCodes)
+      ? raw.discountCodes.filter((code): code is string => typeof code === "string")
+      : [],
+    discount: applied
+      ? {
+          title: str(applied.title),
+          value:
+            typeof applied.value === "number" && Number.isFinite(applied.value) ? String(applied.value) : str(applied.value),
+          valueType: str(applied.valueType),
+        }
+      : null,
+    subtotal: amountOf(shopMoneyOf(raw.subtotalPriceSet)) ?? "0",
+    discounts: amountOf(shopMoneyOf(raw.totalDiscountsSet)) ?? "0",
+    total: amountOf(total) ?? "0",
+    currency: str(total?.currencyCode) || "USD",
+    items: lineItems.filter(isDict).map((item) => ({ ...itemOf(item), custom: item.custom === true })),
+    itemsTruncated: itemsTruncatedOf(raw),
+    shipping: shipping ? { ...shipping, company: str(address?.company), phone: str(address?.phone) } : null,
+    tags: tagsOf(raw.tags),
+    note: str(raw.note2),
+    poNumber: str(raw.poNumber),
+  };
+}
+
+// Accepts a nodes array or a raw {data:{draftOrders}} response, like
+// normalizeOrders.
+export function normalizeDrafts(payload: unknown): NormalizedDraft[] {
+  const result: NormalizedDraft[] = [];
+  for (const node of extractNodes(payload, "draftOrders")) {
+    const normalized = normalizeDraftOne(node);
     if (normalized) {
       result.push(normalized);
     }

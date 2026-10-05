@@ -53,7 +53,7 @@ describe("fetchAllLineItems", () => {
     if (result.kind === "ok") {
       expect(result.complete).toBe(true);
       expect(result.items).toHaveLength(LINE_ITEM_PAGE + 20);
-      expect(result.items?.[0]).toEqual({ title: "Item 1", qty: 1, price: "2.50", sku: "SKU-1", variant: "" });
+      expect(result.items?.[0]).toEqual({ title: "Item 1", qty: 1, price: "2.50", sku: "SKU-1", variant: "", props: [] });
     }
     expect(calls.map((call) => call.variables)).toEqual([
       { id: GID, cursor: null },

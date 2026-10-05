@@ -1,0 +1,125 @@
+{
+  "data": {
+    "draftOrders": {
+      "nodes": [
+        {
+          "id": "gid://shopify/DraftOrder/1038600000012",
+          "legacyResourceId": "1038600000012",
+          "name": "#D12",
+          "status": "OPEN",
+          "createdAt": "2026-10-03T15:20:00Z",
+          "updatedAt": "2026-10-03T15:21:00Z",
+          "completedAt": null,
+          "email": "Jordan.Vale@Example.com",
+          "tags": ["Ordering Desk: New", "staff"],
+          "note2": "Needed before the Monday crew meeting",
+          "poNumber": "PO-77",
+          "discountCodes": ["STAFF100"],
+          "customAttributes": [
+            { "key": "Ship to Branch", "value": "Buford HQ" },
+            { "key": "For Employee Name", "value": "Casey Lin" },
+            { "key": "Reason for Request", "value": "New hire" },
+            { "key": "Internal Notes", "value": null },
+            { "key": "", "value": "dropped" }
+          ],
+          "order": null,
+          "customer": { "firstName": "Jordan", "lastName": "Vale", "displayName": "Jordan Vale", "email": "jordan@example.com" },
+          "purchasingEntity": {
+            "__typename": "PurchasingCompany",
+            "company": { "id": "gid://shopify/Company/1", "name": "Impact Rentals" },
+            "location": { "id": "gid://shopify/CompanyLocation/2", "name": "Buford, GA" }
+          },
+          "shippingAddress": {
+            "name": "Jordan Vale",
+            "firstName": "Jordan",
+            "lastName": "Vale",
+            "company": "IMPACT Rentals, Buford HQ",
+            "address1": "100 Example Way",
+            "address2": "",
+            "city": "Buford",
+            "provinceCode": "GA",
+            "zip": "30518",
+            "countryCodeV2": "US",
+            "phone": "+15555550100"
+          },
+          "appliedDiscount": { "title": "Staff", "value": 25, "valueType": "FIXED_AMOUNT" },
+          "totalPriceSet": { "shopMoney": { "amount": "0.0", "currencyCode": "USD" } },
+          "subtotalPriceSet": { "shopMoney": { "amount": "25.0", "currencyCode": "USD" } },
+          "totalDiscountsSet": { "shopMoney": { "amount": "25.0", "currencyCode": "USD" } },
+          "lineItems": {
+            "nodes": [
+              {
+                "title": "IMPACT Business Cards",
+                "quantity": 1,
+                "sku": "IR-PR-BIZCARD-200",
+                "variantTitle": "200",
+                "custom": false,
+                "customAttributes": [
+                  { "key": "Full Name", "value": "Casey Lin" },
+                  { "key": "Job Title", "value": "Branch Manager" },
+                  { "key": "Office Address", "value": "100 Example Way\r\nBuford, GA 30518" },
+                  { "key": "Preview", "value": "https://cdn.shopify.com/s/files/1/0000/0001/files/preview-casey.png" },
+                  { "key": "_pdf", "value": "https://cdn.shopify.com/s/files/1/0000/0001/files/proof-casey.pdf" },
+                  { "key": "_pplr_preview", "value": "Preview" }
+                ],
+                "originalUnitPriceSet": { "shopMoney": { "amount": "25.0" } }
+              },
+              {
+                "title": "Custom banner",
+                "quantity": 2,
+                "sku": null,
+                "variantTitle": null,
+                "custom": true,
+                "customAttributes": []
+              }
+            ],
+            "pageInfo": { "hasNextPage": false }
+          }
+        },
+        {
+          "id": "gid://shopify/DraftOrder/1038600000013",
+          "legacyResourceId": "1038600000013",
+          "name": "#D13",
+          "status": "COMPLETED",
+          "createdAt": "2026-10-01T10:00:00Z",
+          "updatedAt": "2026-10-02T09:00:00Z",
+          "completedAt": "2026-10-02T09:00:00Z",
+          "email": null,
+          "tags": [],
+          "note2": null,
+          "poNumber": null,
+          "discountCodes": [],
+          "customAttributes": [],
+          "order": { "id": "gid://shopify/Order/7801300000031", "legacyResourceId": "7801300000031", "name": "#1031" },
+          "customer": { "firstName": "Riley", "lastName": "Oakes", "displayName": "", "email": "Riley@Example.com" },
+          "purchasingEntity": {
+            "__typename": "PurchasingCompany",
+            "company": { "id": "gid://shopify/Company/1", "name": "Impact Rentals" },
+            "location": { "id": "gid://shopify/CompanyLocation/3", "name": "Water Tower HQ" }
+          },
+          "shippingAddress": null,
+          "appliedDiscount": null,
+          "totalPriceSet": { "shopMoney": { "amount": "0.0", "currencyCode": "USD" } },
+          "subtotalPriceSet": { "shopMoney": { "amount": "0.0", "currencyCode": "USD" } },
+          "totalDiscountsSet": { "shopMoney": { "amount": "0.0", "currencyCode": "USD" } },
+          "lineItems": {
+            "nodes": [
+              { "title": "IMPACT Mousepad", "quantity": 1, "sku": "IR-PR-MOUSEPAD", "variantTitle": null, "custom": false, "customAttributes": [], "originalUnitPriceSet": { "shopMoney": { "amount": "0.0" } } }
+            ],
+            "pageInfo": { "hasNextPage": false }
+          }
+        },
+        {
+          "id": "gid://shopify/DraftOrder/1038600000014",
+          "name": "#D14",
+          "status": "INVOICE_SENT",
+          "createdAt": "not a date",
+          "purchasingEntity": { "__typename": "Customer" },
+          "shippingAddress": { "firstName": "Sam", "lastName": "Ruiz", "countryCode": "CA" },
+          "lineItems": { "nodes": [], "pageInfo": { "hasNextPage": true } }
+        }
+      ],
+      "pageInfo": { "hasNextPage": false, "endCursor": "eyJsYXN0X2lkIjoxfQ==" }
+    }
+  }
+}
