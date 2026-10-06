@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { interpretSendResponse, poDateLine, poStateChip, recipientSummary } from "./po-client";
+import { interpretSendResponse, poDateLine, poNumberLabel, poStateChip, recipientSummary } from "./po-client";
 
 const po = { id: "po1", state: "sent", number: "IMP-2026-0001" };
 const recipients = { to: ["orders@vendor.example"], cc: ["office@impact.example"] };
@@ -61,5 +61,12 @@ describe("poStateChip and poDateLine", () => {
     expect(poDateLine({ ...base, state: "failed" }, "UTC")).toBe("last tried Oct 2, 2026");
     expect(poDateLine({ ...base, state: "sending" }, "UTC")).toBe("sending now");
     expect(poDateLine({ ...base, state: "sent", sentAt: Date.UTC(2026, 9, 3, 12), sendCount: 1 }, "UTC")).toBe("sent Oct 3, 2026");
+  });
+});
+
+describe("poNumberLabel", () => {
+  it("names a purchase order by its number, or says it has none yet", () => {
+    expect(poNumberLabel({ number: "IMP-2026-0042" })).toBe("IMP-2026-0042");
+    expect(poNumberLabel({ number: null })).toBe("Not numbered yet");
   });
 });

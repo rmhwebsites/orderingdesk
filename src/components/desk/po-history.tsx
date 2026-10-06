@@ -18,7 +18,7 @@ import { PaperPlaneTiltIcon } from "@phosphor-icons/react/PaperPlaneTilt";
 import { PencilSimpleIcon } from "@phosphor-icons/react/PencilSimple";
 import { formatDate } from "@/lib/format";
 import { costToCents, formatCents } from "@/lib/po";
-import { loadPoList, poDateLine, poStateChip } from "@/lib/po-client";
+import { loadPoList, poDateLine, poNumberLabel, poStateChip } from "@/lib/po-client";
 import type { PoView } from "@/server/po/service";
 import { Chip } from "@/components/kit";
 import { focusSoon, InlineMessage } from "@/components/settings/kit";
@@ -242,8 +242,12 @@ export function PurchaseOrders({
             return (
               <li key={po.id} className="flex flex-col gap-2.5 py-3.5 first:pt-0 last:pb-0">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                  <span id={rowFocusId(po.id)} tabIndex={-1} className="font-mono text-sm font-semibold tabular-nums text-ink outline-none">
-                    {po.number ?? "Draft"}
+                  <span
+                    id={rowFocusId(po.id)}
+                    tabIndex={-1}
+                    className={`text-sm font-semibold text-ink outline-none ${po.number ? "font-mono tabular-nums" : ""}`}
+                  >
+                    {poNumberLabel(po)}
                   </span>
                   <Chip size="sm" tone={chip.tone}>{chip.label}</Chip>
                   {total ? <span className="ml-auto font-mono text-sm tabular-nums text-ink">{total}</span> : null}

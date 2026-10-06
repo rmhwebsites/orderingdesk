@@ -24,6 +24,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { ArrowRightIcon } from "@phosphor-icons/react/ArrowRight";
 import { CheckCircleIcon } from "@phosphor-icons/react/CheckCircle";
 import { XCircleIcon } from "@phosphor-icons/react/XCircle";
+import { formatDateTime } from "@/lib/format";
 import { NOTE_MAX } from "@/lib/limits";
 import { InlineMessage, Spinner } from "@/components/kit";
 import { ui } from "@/components/ui";
@@ -237,26 +238,47 @@ export type ReviewSummaryProps = {
   completeInShopify: { url: string | null } | null;
   // The heading's id (focus returns to it after a reject).
   titleId?: string;
+  // Shopify deleted the draft: the panel says so instead of waiting.
+  deleted?: boolean;
+  // The Reject decision to quote (reason, who, when), once loaded.
+  rejection?: { reason: string; by: string; at: number } | null;
 };
 
-// Where the request stands: the heading, who may decide, and the note to
-// complete a priced draft in Shopify.
-export function ReviewSummary({ canReview, rejected, completeInShopify, titleId }: ReviewSummaryProps) {
-  const title = rejected ? "This request was rejected" : "Waiting for review";
-  const lead = !canReview
-    ? rejected
-      ? "Only a manager can approve it or move it out of Rejected."
-      : "Waiting for a manager to approve or reject."
-    : rejected
-      ? "A manager can still approve it."
-      : completeInShopify
-        ? "Reject asks for a reason and saves it as a note."
-        : "Approve creates the order in Shopify. Reject asks for a reason and saves it as a note.";
+// Where the request stands: the heading, the Reject decision quoted, who
+// may decide, and the note to complete a priced draft in Shopify.
+export function ReviewSummary({
+  canReview,
+  rejected,
+  completeInShopify,
+  titleId,
+  deleted = false,
+  rejection = null,
+}: ReviewSummaryProps) {
+  const title = deleted ? "Deleted in Shopify" : rejected ? "This request was rejected" : "Waiting for review";
+  const lead = deleted
+    ? canReview
+      ? "Shopify no longer has this draft, so it cannot be approved. Reject still records a decision."
+      : "Shopify no longer has this draft."
+    : !canReview
+      ? rejected
+        ? "Only a manager can approve it or move it out of Rejected."
+        : "Waiting for a manager to approve or reject."
+      : rejected
+        ? "A manager can still approve it."
+        : completeInShopify
+          ? "Reject asks for a reason and saves it as a note."
+          : "Approve creates the order in Shopify. Reject asks for a reason and saves it as a note.";
   return (
     <>
       <h3 id={titleId} tabIndex={-1} className="font-display text-sm font-semibold text-ink outline-none">
         {title}
       </h3>
+      {rejected && rejection ? (
+        <figure className="mt-3">
+          <blockquote className="whitespace-pre-wrap break-words border-l-2 border-line-strong pl-3 text-sm text-ink">{rejection.reason}</blockquote>
+          <figcaption className="mt-1.5 text-xs text-ink-2">{`Rejected by ${rejection.by}, ${formatDateTime(rejection.at)}`}</figcaption>
+        </figure>
+      ) : null}
       <p className="mt-1 text-sm text-ink-2">{lead}</p>
       {canReview && completeInShopify ? (
         <div className="mt-3">
@@ -428,7 +450,14 @@ export function ReviewPanel(props: ReviewPanelProps) {
   const titleId = `${id}-title`;
   return (
     <section aria-labelledby={titleId} className="mb-5 rounded-panel border border-line bg-surface-2 p-4">
-      <ReviewSummary canReview={props.canReview} rejected={props.rejected} completeInShopify={props.completeInShopify} titleId={titleId} />
+      <ReviewSummary
+        canReview={props.canReview}
+        rejected={props.rejected}
+        deleted={props.deleted}
+        rejection={props.rejection}
+        completeInShopify={props.completeInShopify}
+        titleId={titleId}
+      />
       {props.canReview ? (
         <div className="mt-3">
           <ReviewActions {...props} afterReject={() => document.getElementById(titleId)} />

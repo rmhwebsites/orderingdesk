@@ -156,6 +156,12 @@ export function poStateChip(po: Pick<PoTiming, "state" | "sendCount">): { tone: 
   }
 }
 
+// A purchase order's name in the history: its number, or plainly that it
+// has none until it is sent (never "Draft" next to a Draft chip).
+export function poNumberLabel(po: { number: string | null }): string {
+  return po.number ?? "Not numbered yet";
+}
+
 export function poDateLine(po: PoTiming, timeZone?: string): string {
   switch (po.state) {
     case "draft":

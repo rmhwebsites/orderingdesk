@@ -125,10 +125,10 @@ describe("OrderDrawerContent", () => {
   it("shows only Deleted in Shopify, never the Open draft status, for a draft Shopify deleted", () => {
     const deleted = render({ order: draftCard({ draftDeletedAt: NOW - 5000 }) });
     expect(deleted).toContain(">Deleted in Shopify<");
-    expect(deleted).not.toContain(">Open<");
+    expect(deleted).not.toContain("Draft open");
 
     const open = render();
-    expect(open).toContain(">Open<");
+    expect(open).toContain("· Draft open");
     expect(open).not.toContain(">Deleted in Shopify<");
   });
 
@@ -155,5 +155,16 @@ describe("OrderDrawerContent", () => {
     const hidden = render({ order, extra: { showPrices: false } });
     expect(hidden).not.toContain(">Paid</span>");
     expect(hidden).not.toContain("Order total");
+  });
+
+  it("quotes the rejection reason with who rejected the request", () => {
+    const html = render({
+      timeline: [
+        { ...statusEvent(), actorName: "Ryan Hale" },
+        { ...statusEvent({ id: "e2", type: "note", text: "Duplicate of #D11", meta: { rejectReason: true } }), actorName: "Ryan Hale" },
+      ],
+    });
+    expect(html).toContain(">Duplicate of #D11</blockquote>");
+    expect(html).toContain("Rejected by Ryan Hale,");
   });
 });

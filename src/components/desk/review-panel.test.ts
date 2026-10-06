@@ -66,4 +66,20 @@ describe("ReviewPanel", () => {
       render({ next: { id: "d13", name: "#D13" }, onApproveAndNext: async () => null, completeInShopify: { url: null } }),
     ).not.toContain("Approve and next");
   });
+
+  it("quotes a rejection's reason, who rejected it and when", () => {
+    const html = render({
+      rejected: true,
+      rejection: { reason: "Duplicate of #D11", by: "Ryan Hale", at: Date.parse("2026-10-05T12:00:00.000Z") },
+    });
+    expect(html).toContain(">Duplicate of #D11</blockquote>");
+    expect(html).toContain("Rejected by Ryan Hale, Oct 5, 2026");
+  });
+
+  it("titles a request whose draft Shopify deleted as Deleted in Shopify", () => {
+    const html = render({ deleted: true, approveBlock: "Shopify no longer has this draft." });
+    expect(html).toContain(">Deleted in Shopify</h3>");
+    expect(html).not.toContain("Waiting for review");
+    expect(html).toContain("Reject still records a decision.");
+  });
 });

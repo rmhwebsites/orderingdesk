@@ -15,6 +15,7 @@ import {
 } from "@/lib/format";
 import { NOTE_MAX } from "@/lib/limits";
 import { financialTone, fulfillmentTone, readSnapshot } from "@/lib/order-snapshot";
+import { rejectionOf } from "@/lib/rejection";
 import { requestFieldsOf } from "@/lib/request-fields";
 import { roleAtLeast, type Role } from "@/lib/roles";
 import { statusOptionsFor } from "@/lib/status-options";
@@ -528,6 +529,13 @@ export function OrderDrawerContent({
       : null;
   const now = useNow(30000);
   const placedAt = kind === "order" && snapshot && !showsDraft ? snapshot.createdAt : null;
+  const isRejected = rejectedStatus !== undefined && statusKey === rejectedStatus.key;
+  const rejectionNote = isRejected ? rejectionOf(timeline) : null;
+  const rejectedBy = rejectionNote ? actorName(rejectionNote, members, selfUserId) : null;
+  const rejection =
+    rejectionNote && rejectedBy
+      ? { reason: rejectionNote.text, by: rejectedBy === "You" ? "you" : rejectedBy, at: rejectionNote.createdAt }
+      : null;
 
   return (
     <>
@@ -560,7 +568,7 @@ export function OrderDrawerContent({
                 {createdAt !== null ? (
                   <p className="mt-0.5 text-sm tabular-nums text-ink-2">
                     {kind === "draft"
-                      ? `Submitted ${formatDateTime(createdAt)}`
+                      ? `Submitted ${formatDateTime(createdAt)}${draftStatus ? ` · Draft ${DRAFT_STATUS_LABEL[draftStatus].toLowerCase()}` : ""}`
                       : draftName
                         ? `Requested ${formatDateTime(createdAt)}.${placedAt !== null ? ` Order placed ${formatDateTime(placedAt)}.` : ""}`
                         : `Placed ${formatDateTime(createdAt)}`}
@@ -582,11 +590,7 @@ export function OrderDrawerContent({
           </button>
         </div>
 
-        {draftStatus ? (
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <Chip tone="blue">{DRAFT_STATUS_LABEL[draftStatus]}</Chip>
-          </div>
-        ) : (financial && showPrices) || fulfillment ? (
+        {(financial && showPrices) || fulfillment ? (
           <div className="mt-3 flex flex-wrap items-center gap-2">
             {financial && showPrices ? <Chip tone={financialTone(financial)}>{sentenceCase(financial)}</Chip> : null}
             {fulfillment ? <Chip tone={fulfillmentTone(fulfillment)}>{sentenceCase(fulfillment)}</Chip> : null}
@@ -669,7 +673,9 @@ export function OrderDrawerContent({
                 name={name}
                 email={snapshot.email}
                 canReview={canReview}
-                rejected={rejectedStatus !== undefined && statusKey === rejectedStatus.key}
+                rejected={isRejected}
+                deleted={deleted}
+                rejection={rejection}
                 approveBlock={approveBlock}
                 rejectBlock={rejectBlock}
                 completeInShopify={zeroTotal || deleted ? null : { url: shopifyUrl }}
