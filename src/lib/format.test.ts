@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   formatDate,
+  formatDay,
   formatMoney,
   formatTime,
   initials,
@@ -91,5 +92,13 @@ describe("initials", () => {
     expect(initials("  sam  ortiz  vale ", "sam@example.com")).toBe("SO");
     expect(initials("", "jordan@example.com")).toBe("J");
     expect(initials(null, "")).toBe("?");
+  });
+});
+
+describe("formatDay", () => {
+  it("leaves the year out for this year", () => {
+    const now = Date.parse("2026-10-06T00:00:00.000Z");
+    expect(formatDay(Date.parse("2026-10-05T19:00:00.000Z"), now, "UTC")).toBe("Oct 5");
+    expect(formatDay(Date.parse("2025-10-05T19:00:00.000Z"), now, "UTC")).toBe("Oct 5, 2025");
   });
 });

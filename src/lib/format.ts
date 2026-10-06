@@ -109,3 +109,14 @@ export function initials(name: string | null | undefined, email: string): string
   const text = letters.join("").toUpperCase();
   return text.length > 0 ? text : "?";
 }
+
+// "Oct 5" this year, "Oct 5, 2025" otherwise: a list's date column.
+export function formatDay(ms: number, now: number, timeZone?: string): string {
+  const year = (value: number) => new Intl.DateTimeFormat("en-US", { year: "numeric", timeZone }).format(value);
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: year(ms) === year(now) ? undefined : "numeric",
+    timeZone,
+  }).format(ms);
+}

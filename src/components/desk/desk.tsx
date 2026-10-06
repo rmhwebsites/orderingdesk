@@ -18,6 +18,8 @@ import {
   type LiveEffects,
 } from "@/lib/desk-state";
 import { roleAtLeast } from "@/lib/roles";
+import { DESK_MEDIA, useMediaQuery } from "@/lib/use-media-query";
+import { useNow } from "@/lib/use-now";
 import type { LiveEvent, LiveOrderStatus } from "@/lib/live-events";
 import type { OrderSummary } from "@/server/desk/read";
 import type { EventView, StatusView } from "@/server/desk/shapes";
@@ -33,9 +35,8 @@ import {
   type DrawerOrder,
   type MemberView,
 } from "./order-drawer";
-import { OrderCards, OrderTable } from "./order-list";
+import { OrderList } from "./order-list";
 import { PoModal } from "./po-modal";
-import { StatusStrip } from "./status-strip";
 import { Toolbar } from "./toolbar";
 import { ui } from "@/components/ui";
 import { InlineMessage } from "@/components/kit";
@@ -125,6 +126,8 @@ export function Desk() {
   const toast = useToast();
   const searchParams = useSearchParams();
   const openOrderId = searchParams.get("order");
+  const isDesk = useMediaQuery(DESK_MEDIA);
+  const now = useNow(60000);
 
   const [load, setLoad] = useState<LoadState>({ status: "loading" });
   const [statuses, setStatuses] = useState<StatusView[]>([]);
@@ -631,11 +634,45 @@ export function Desk() {
   const drawerTimeline =
     drawerOrderId && desk.timeline?.orderId === drawerOrderId ? desk.timeline.events : [];
 
+  const showToolbar = load.status === "ready" && !(total === 0 && desk.orders.length === 0);
+
   return (
-    <main className="mx-auto flex w-full max-w-[1400px] flex-col gap-4 px-4 py-6 sm:px-6 sm:py-8">
-      <h1 id="desk-heading" tabIndex={-1} className="font-display text-2xl font-semibold tracking-tight focus:outline-none">
-        Orders
-      </h1>
+    <main className="mx-auto flex w-full max-w-[1400px] flex-col gap-3 px-4 py-4 sm:px-6 sm:py-5">
+      {/* Phones: one sticky bar under the 56px top bar (z-20, below the
+          top bar's z-30 and the drawer's z-40), on the page background so
+          cards scroll under it. From 880px it is an ordinary row. */}
+      <div className="flex flex-col gap-2 max-desk:sticky max-desk:top-14 max-desk:z-20 max-desk:-mx-4 max-desk:bg-bg max-desk:px-4 max-desk:py-2 desk:min-h-12 desk:flex-row desk:items-center desk:gap-4">
+        <h1
+          id="desk-heading"
+          tabIndex={-1}
+          className="sr-only font-display text-xl font-semibold tracking-tight focus:outline-none desk:not-sr-only desk:shrink-0"
+        >
+          Orders
+        </h1>
+        {showToolbar ? (
+          <Toolbar
+            layout={isDesk ? "row" : "phone"}
+            statusKey={filter.statusKey}
+            onStatus={(statusKey) => setFilter((current) => ({ ...current, statusKey }))}
+            statusChips={chips}
+            query={filter.query}
+            onQuery={(query) => setFilter((current) => ({ ...current, query }))}
+            sort={filter.sort}
+            onSort={(sort) => setFilter((current) => ({ ...current, sort }))}
+            kindFilter={
+              showKindFilter
+                ? {
+                    kind: filter.kind ?? "all",
+                    onKind: (kind: DeskKind) => setFilter((current) => ({ ...current, kind })),
+                    draftCount: drafts.draftCount,
+                    deletedCount: drafts.deletedDraftCount,
+                  }
+                : null
+            }
+            shown={visible.length}
+          />
+        ) : null}
+      </div>
 
       {showBanner ? (
         <DraftsBanner
@@ -664,30 +701,6 @@ export function Desk() {
           <EmptyDesk basePath={workspace.basePath} canConnect={roleAtLeast(role, "platform")} />
         ) : (
           <>
-            <StatusStrip
-              chips={chips}
-              total={total}
-              active={filter.statusKey}
-              onSelect={(statusKey) => setFilter((current) => ({ ...current, statusKey }))}
-            />
-            <Toolbar
-              query={filter.query}
-              onQuery={(query) => setFilter((current) => ({ ...current, query }))}
-              sort={filter.sort}
-              onSort={(sort) => setFilter((current) => ({ ...current, sort }))}
-              shown={visible.length}
-              loaded={desk.orders.length}
-              kindFilter={
-                showKindFilter
-                  ? {
-                      kind: filter.kind ?? "all",
-                      onKind: (kind: DeskKind) => setFilter((current) => ({ ...current, kind })),
-                      draftCount: drafts.draftCount,
-                      deletedCount: drafts.deletedDraftCount,
-                    }
-                  : null
-              }
-            />
             {visible.length === 0 ? (
               <NoMatches
                 query={filter.query}
@@ -700,28 +713,18 @@ export function Desk() {
                 onClear={() => setFilter((current) => ({ ...current, query: "", statusKey: null, kind: "all" }))}
               />
             ) : (
-              <>
-                <OrderTable
-                  orders={visible}
-                  statuses={statuses}
-                  role={role}
-                  flashing={flashing}
-                  rowErrors={rowErrors}
-                  savingIds={savingIds}
-                  onOpen={openOrder}
-                  onChangeStatus={changeStatus}
-                />
-                <OrderCards
-                  orders={visible}
-                  statuses={statuses}
-                  role={role}
-                  flashing={flashing}
-                  rowErrors={rowErrors}
-                  savingIds={savingIds}
-                  onOpen={openOrder}
-                  onChangeStatus={changeStatus}
-                />
-              </>
+              <OrderList
+                layout={isDesk ? "table" : "cards"}
+                orders={visible}
+                statuses={statuses}
+                role={role}
+                flashing={flashing}
+                rowErrors={rowErrors}
+                savingIds={savingIds}
+                now={now}
+                onOpen={openOrder}
+                onChangeStatus={changeStatus}
+              />
             )}
             {hasMore ? (
               <p className="text-xs text-ink-2">
