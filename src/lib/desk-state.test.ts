@@ -8,6 +8,7 @@ import {
   chipsForView,
   crossesClosed,
   deskKindCounts,
+  dropsDeletedFilter,
   nextWaitingRequest,
   optimisticStatus,
   poNotCreated,
@@ -379,6 +380,15 @@ describe("requests in the list", () => {
 
   it("counts the loaded requests, orders and deleted drafts", () => {
     expect(deskKindCounts(list)).toEqual({ drafts: 1, orders: 2, deleted: 1 });
+  });
+
+  it("drops the Deleted filter with the last deleted request, once the desk has loaded", () => {
+    expect(dropsDeletedFilter({ kind: "deleted", deletedCount: 0, loaded: true })).toBe(true);
+    // Before the first payload the count is its starting 0, so a reload or
+    // a link with ?kind=deleted keeps the filter.
+    expect(dropsDeletedFilter({ kind: "deleted", deletedCount: 0, loaded: false })).toBe(false);
+    expect(dropsDeletedFilter({ kind: "deleted", deletedCount: 2, loaded: true })).toBe(false);
+    expect(dropsDeletedFilter({ kind: "drafts", deletedCount: 0, loaded: true })).toBe(false);
   });
 
   it("announces requests as requests and a mixed batch as both", () => {

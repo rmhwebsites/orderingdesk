@@ -11,6 +11,7 @@ import {
   chipsForView,
   crossesClosed,
   deskKindCounts,
+  dropsDeletedFilter,
   nextWaitingRequest,
   optimisticStatus,
   rollbackStatus,
@@ -711,12 +712,14 @@ export function Desk() {
     setBannerHidden(bannerDismissed(workspace.id));
   }, [workspace.id]);
 
-  // The Deleted filter goes away with the last deleted request.
+  // The Deleted filter goes away with the last deleted request (counted
+  // once the desk has loaded, src/lib/desk-state.ts).
+  const loaded = load.status === "ready";
   useEffect(() => {
-    if (deskQuery.kind === "deleted" && drafts.deletedDraftCount === 0) {
+    if (dropsDeletedFilter({ kind: deskQuery.kind, deletedCount: drafts.deletedDraftCount, loaded })) {
       updateDeskQuery({ kind: "all" });
     }
-  }, [deskQuery.kind, drafts.deletedDraftCount, updateDeskQuery]);
+  }, [deskQuery.kind, drafts.deletedDraftCount, loaded, updateDeskQuery]);
 
   const showKindFilter = drafts.enabled || drafts.draftCount > 0 || drafts.deletedDraftCount > 0;
   const showBanner =

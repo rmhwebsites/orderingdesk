@@ -388,6 +388,13 @@ export function deskKindCounts(orders: OrderSummary[]): { drafts: number; orders
   };
 }
 
+// The Deleted filter goes away with the last deleted request. The count is
+// known only once a payload has loaded: before that it is the starting 0,
+// and a reload or link with ?kind=deleted keeps the filter.
+export function dropsDeletedFilter({ kind, deletedCount, loaded }: { kind: DeskKind; deletedCount: number; loaded: boolean }): boolean {
+  return loaded && kind === "deleted" && deletedCount === 0;
+}
+
 // The live toast for cards that just arrived: "New request #D12 from
 // Jordan Vale", "New order #1001 from Riley Oakes" with its total, or a
 // count ("3 new requests", "2 new orders", "5 new orders and requests").
