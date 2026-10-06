@@ -25,7 +25,7 @@ export function DeskSkeleton() {
           ))}
         </div>
         {ROWS.map((row) => (
-          <div key={row} className="grid h-11 grid-cols-[10rem_6.5rem_24%_1fr_7rem_11rem] items-center border-t border-line">
+          <div key={row} className="grid h-11 grid-cols-[10rem_6.5rem_24%_1fr_5.5rem_7rem_11rem] items-center border-t border-line">
             <div className="px-4">
               <Bar className="h-4 w-20" />
             </div>
@@ -37,6 +37,9 @@ export function DeskSkeleton() {
             </div>
             <div className="px-3">
               <Bar className="h-3.5 w-11/12" />
+            </div>
+            <div className="px-3">
+              <Bar className="h-5 w-10" />
             </div>
             <div className="flex justify-end px-3">
               <Bar className="h-3.5 w-14" />

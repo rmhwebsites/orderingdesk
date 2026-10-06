@@ -814,6 +814,8 @@ export function Desk() {
                   now={now}
                   onOpen={openOrder}
                   onChangeStatus={changeStatus}
+                  ageRule={{ amberDays: queue.ageAmberDays, redDays: queue.ageRedDays }}
+                  closedKeys={closedKeys}
                 />
               </div>
             )}

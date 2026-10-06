@@ -56,6 +56,8 @@ const base: ListProps = {
   now: NOW,
   onOpen: () => {},
   onChangeStatus: () => {},
+  ageRule: { amberDays: 2, redDays: 4 },
+  closedKeys: new Set(),
 };
 
 const render = (layout: "table" | "cards", overrides: Partial<ListProps> = {}) =>
@@ -88,5 +90,31 @@ describe("OrderList", () => {
     const html = render("table");
     expect(html).toContain(">Draft</span>");
     expect(html).toContain('Deleted<span class="sr-only"> in Shopify</span>');
+  });
+});
+
+const DAY = 86400000;
+
+describe("OrderList ages", () => {
+  it("shows each card's age in its status, amber and red past the thresholds, plain once closed", () => {
+    const statuses: StatusView[] = [
+      ...STATUSES,
+      { key: "delivered", label: "Delivered", color: "slate", sort: 1, triggersPo: false, shopifyLink: "delivered", closed: true },
+    ];
+    const orders = [
+      card("fresh", { statusSetAt: NOW - 3 * 3600000 }),
+      card("late", { statusSetAt: NOW - 2 * DAY }),
+      card("old", { statusSetAt: NOW - 5 * DAY }),
+      card("done", { statusKey: "delivered", statusSetAt: NOW - 9 * DAY }),
+    ];
+    const props = { orders, statuses, closedKeys: new Set(["delivered"]) };
+    const table = render("table", props);
+    expect(table).toContain(">Age</th>");
+    expect(table).toContain('<span aria-hidden="true">3h</span>');
+    expect(table).toMatch(/data-tone="amber"[^>]*><span aria-hidden="true">2d</);
+    expect(table).toMatch(/data-tone="red"[^>]*><span aria-hidden="true">5d</);
+    expect(table).toContain("In Delivered for 9 days");
+    expect(table).not.toMatch(/data-tone="red"[^>]*><span aria-hidden="true">9d</);
+    expect(render("cards", props)).toContain('<span aria-hidden="true">New, 3h</span>');
   });
 });

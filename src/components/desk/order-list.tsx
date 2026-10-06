@@ -1,6 +1,7 @@
 "use client";
 
 import { InfoIcon } from "@phosphor-icons/react/Info";
+import { cardAge } from "@/lib/age";
 import { formatDateTime, formatDay, formatMoney } from "@/lib/format";
 import type { Role } from "@/lib/roles";
 import { statusOptionsFor } from "@/lib/status-options";
@@ -27,6 +28,10 @@ export type ListProps = {
   now: number;
   onOpen: (orderId: string) => void;
   onChangeStatus: (orderId: string, statusKey: string) => void;
+  // When ages turn amber and red (the workspace's work queue settings).
+  ageRule: { amberDays: number; redDays: number };
+  // Status keys whose cards are finished (no warning color on their age).
+  closedKeys: ReadonlySet<string>;
 };
 
 function itemsLine(order: OrderSummary): string {
@@ -133,9 +138,62 @@ function DayText({ order, now }: { order: OrderSummary; now: number }) {
   );
 }
 
+// "2d" (the table) or "New, 2d" (a card's header), amber or red when the
+// card has waited too long. Spoken as "In New for 2 days".
+function AgeBadge({
+  order,
+  statuses,
+  ageRule,
+  closedKeys,
+  now,
+  withLabel,
+}: {
+  order: OrderSummary;
+  statuses: StatusView[];
+  ageRule: ListProps["ageRule"];
+  closedKeys: ReadonlySet<string>;
+  now: number;
+  withLabel: boolean;
+}) {
+  if (now === 0) {
+    return null;
+  }
+  const age = cardAge(order, now, { ...ageRule, closed: closedKeys.has(order.statusKey) });
+  const label = statuses.find((status) => status.key === order.statusKey)?.label ?? "Unknown status";
+  const text = withLabel ? `${label}, ${age.short}` : age.short;
+  const spoken = `In ${label} for ${age.long}${age.tone === "red" ? ", overdue" : age.tone === "amber" ? ", waiting long" : ""}`;
+  const title = `In ${label} since ${formatDateTime(age.since)}`;
+  if (age.tone === "none") {
+    return (
+      <span title={title} className="shrink-0 text-xs font-medium tabular-nums text-ink-2">
+        <span aria-hidden>{text}</span>
+        <span className="sr-only">{spoken}</span>
+      </span>
+    );
+  }
+  return (
+    <Chip tone={age.tone} size="sm" title={title}>
+      <span aria-hidden>{text}</span>
+      <span className="sr-only">{spoken}</span>
+    </Chip>
+  );
+}
+
 // From 880px: one 44px line per card, so 15 to 18 fit above the fold at
 // 1440 by 900.
-export function OrderTable({ orders, statuses, role, flashing, rowErrors, savingIds, now, onOpen, onChangeStatus }: ListProps) {
+export function OrderTable({
+  orders,
+  statuses,
+  role,
+  flashing,
+  rowErrors,
+  savingIds,
+  now,
+  onOpen,
+  onChangeStatus,
+  ageRule,
+  closedKeys,
+}: ListProps) {
   return (
     <div className="overflow-hidden rounded-panel border border-line bg-surface shadow-panel">
       <table className="w-full table-fixed border-collapse text-left">
@@ -144,6 +202,7 @@ export function OrderTable({ orders, statuses, role, flashing, rowErrors, saving
           <col className="w-[6.5rem]" />
           <col className="w-[24%]" />
           <col />
+          <col className="w-[5.5rem]" />
           <col className="w-[7rem]" />
           <col className="w-[11rem]" />
         </colgroup>
@@ -153,6 +212,7 @@ export function OrderTable({ orders, statuses, role, flashing, rowErrors, saving
             <th scope="col" className="px-3 font-semibold">Date</th>
             <th scope="col" className="px-3 font-semibold">Customer</th>
             <th scope="col" className="px-3 font-semibold">Items</th>
+            <th scope="col" className="px-3 font-semibold">Age</th>
             <th scope="col" className="px-3 text-right font-semibold">Total</th>
             <th scope="col" className="px-4 font-semibold">Status</th>
           </tr>
@@ -191,6 +251,9 @@ export function OrderTable({ orders, statuses, role, flashing, rowErrors, saving
                 <td className={`px-3 ${flash}`}>
                   <ItemsLine order={order} />
                 </td>
+                <td className={`px-3 ${flash}`}>
+                  <AgeBadge order={order} statuses={statuses} ageRule={ageRule} closedKeys={closedKeys} now={now} withLabel={false} />
+                </td>
                 <td className={`px-3 text-right ${flash}`}>
                   <Total order={order} />
                 </td>
@@ -207,12 +270,24 @@ export function OrderTable({ orders, statuses, role, flashing, rowErrors, saving
   );
 }
 
-// Below 880px: compact cards, the order and its kind with the date in the
-// header, who and what on one line each, then the status control. The
+// Below 880px: compact cards, the order and its kind with its age in its
+// status in the header, who and what on one line each, then the status control. The
 // order number is a stretched button over the card; the status control
 // sits above it so both stay usable. content-visibility lets the browser
 // skip laying out cards that are off screen.
-export function OrderCards({ orders, statuses, role, flashing, rowErrors, savingIds, now, onOpen, onChangeStatus }: ListProps) {
+export function OrderCards({
+  orders,
+  statuses,
+  role,
+  flashing,
+  rowErrors,
+  savingIds,
+  now,
+  onOpen,
+  onChangeStatus,
+  ageRule,
+  closedKeys,
+}: ListProps) {
   return (
     <ul className="flex flex-col gap-2">
       {orders.map((order) => (
@@ -232,7 +307,9 @@ export function OrderCards({ orders, statuses, role, flashing, rowErrors, saving
               {order.name}
             </button>
             <KindMark order={order} />
-            <span className="ml-auto shrink-0 text-xs tabular-nums text-ink-2">{now > 0 ? formatDay(order.createdAt, now) : ""}</span>
+            <span className="ml-auto shrink-0">
+              <AgeBadge order={order} statuses={statuses} ageRule={ageRule} closedKeys={closedKeys} now={now} withLabel />
+            </span>
           </div>
           <div className="mt-1">
             <CustomerLine order={order} />
