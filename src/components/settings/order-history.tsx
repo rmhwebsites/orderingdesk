@@ -14,7 +14,8 @@ import {
 import { useNow } from "@/lib/use-now";
 import type { BackfillView } from "@/server/sync/backfill";
 import { ui } from "@/components/ui";
-import { ConfirmStep, describedBy, Field, focusSoon, InlineMessage, Panel, requestJson, ToneChip } from "./kit";
+import { Chip, RadioCard } from "@/components/kit";
+import { ConfirmStep, describedBy, Field, focusSoon, InlineMessage, Panel, requestJson } from "./kit";
 
 // Settings > Store connection > Order history (platform admins): start an
 // import of the store's older orders, follow it, cancel it. The cron does
@@ -163,28 +164,18 @@ function StartForm({
             ["since", "Orders since a date", "Orders placed on or after the day you pick."],
           ] as const
         ).map(([value, label, help]) => (
-          <label
+          <RadioCard
             key={value}
-            className={`flex cursor-pointer items-start gap-3 rounded-panel border px-3.5 py-3 transition-colors ${
-              mode === value ? "border-primary-strong bg-surface" : "border-line hover:bg-surface-2"
-            }`}
-          >
-            <input
-              type="radio"
-              name="history-range"
-              value={value}
-              checked={mode === value}
-              onChange={() => {
-                setMode(value);
-                onEdit();
-              }}
-              className="mt-0.5 size-4 accent-[var(--primary-strong)]"
-            />
-            <span>
-              <span className="block text-sm font-semibold text-ink">{label}</span>
-              <span className="block text-sm text-ink-2">{help}</span>
-            </span>
-          </label>
+            name="history-range"
+            value={value}
+            checked={mode === value}
+            onChange={() => {
+              setMode(value);
+              onEdit();
+            }}
+            label={label}
+            help={help}
+          />
         ))}
       </fieldset>
       {mode === "since" ? (
@@ -326,7 +317,7 @@ export function OrderHistoryPanel({
           <h3 id={HEADING_ID} tabIndex={-1} className="min-w-0 flex-1 font-medium text-ink">
             Order history
           </h3>
-          {view.status === "running" ? <ToneChip tone="blue">Importing</ToneChip> : null}
+          {view.status === "running" ? <Chip size="sm" tone="blue">Importing</Chip> : null}
         </div>
         <p className="max-w-[65ch] text-sm text-ink-2">
           The sync brings in orders from the last 60 days. Import older ones here. They arrive with the status their

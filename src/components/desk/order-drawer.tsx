@@ -37,7 +37,8 @@ import { StatusSelect } from "./status-select";
 import { APP_NAME } from "@/lib/brand";
 import type { PoView } from "@/server/po/service";
 import { PurchaseOrders } from "./po-history";
-import { CopyButton, Section, ToneChip } from "./drawer-kit";
+import { Chip } from "@/components/kit";
+import { CopyButton, Section } from "./drawer-kit";
 import { ItemsSection, RequestSection, ShipToSection } from "./request-parts";
 import { ReviewPanel } from "./review-panel";
 
@@ -577,14 +578,14 @@ export function OrderDrawerContent({
                     {name}
                   </h2>
                   {kind === "draft" ? (
-                    <ToneChip tone="slate" size="sm">
+                    <Chip tone="slate" size="sm">
                       Draft
-                    </ToneChip>
+                    </Chip>
                   ) : null}
                   {deleted ? (
-                    <ToneChip tone="amber" size="sm">
+                    <Chip tone="amber" size="sm">
                       Deleted in Shopify
-                    </ToneChip>
+                    </Chip>
                   ) : null}
                 </div>
                 {kind === "order" && draftName ? (
@@ -619,12 +620,12 @@ export function OrderDrawerContent({
 
         {draftStatus ? (
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <ToneChip tone="blue">{DRAFT_STATUS_LABEL[draftStatus]}</ToneChip>
+            <Chip tone="blue">{DRAFT_STATUS_LABEL[draftStatus]}</Chip>
           </div>
         ) : financial || fulfillment ? (
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            {financial ? <ToneChip tone={financialTone(financial)}>{sentenceCase(financial)}</ToneChip> : null}
-            {fulfillment ? <ToneChip tone={fulfillmentTone(fulfillment)}>{sentenceCase(fulfillment)}</ToneChip> : null}
+            {financial ? <Chip tone={financialTone(financial)}>{sentenceCase(financial)}</Chip> : null}
+            {fulfillment ? <Chip tone={fulfillmentTone(fulfillment)}>{sentenceCase(fulfillment)}</Chip> : null}
           </div>
         ) : null}
 
@@ -753,7 +754,7 @@ export function OrderDrawerContent({
                 <ul className="flex flex-wrap gap-1.5" aria-label="Tags">
                   {snapshot.tags.map((tag) => (
                     <li key={tag}>
-                      <ToneChip tone="slate">{tag}</ToneChip>
+                      <Chip tone="slate">{tag}</Chip>
                     </li>
                   ))}
                 </ul>

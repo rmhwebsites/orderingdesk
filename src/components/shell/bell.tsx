@@ -214,7 +214,7 @@ export function Bell() {
         {badge ? (
           <span
             aria-hidden
-            className="absolute right-0.5 top-0.5 h-[1.125rem] min-w-[1.125rem] rounded-control bg-primary px-1 text-center text-[11px] font-semibold leading-[1.125rem] text-primary-ink tabular-nums ring-2 ring-surface"
+            className="absolute right-0 top-0 grid h-5 min-w-5 place-items-center rounded-control bg-primary px-1 text-xs font-semibold tabular-nums text-primary-ink ring-2 ring-surface"
           >
             {badge}
           </span>

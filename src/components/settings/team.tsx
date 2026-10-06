@@ -10,6 +10,7 @@ import type { RosterTags } from "@/db/schema";
 import type { MemberView, PendingInviteView } from "@/server/members";
 import type { RosterRequests, RosterRequestView } from "@/server/roster";
 import { ui } from "@/components/ui";
+import { Chip } from "@/components/kit";
 import {
   ConfirmStep,
   describedBy,
@@ -23,7 +24,6 @@ import {
   sectionHeading,
   Select,
   SettingsSection,
-  ToneChip,
 } from "./kit";
 
 type TeamData = { members: MemberView[]; invites: PendingInviteView[]; requests: RosterRequests; rosterTags: RosterTags };
@@ -72,12 +72,12 @@ function MemberRow({
         <div className="min-w-0 flex-1">
           <p className="flex flex-wrap items-center gap-2 text-sm font-medium text-ink">
             <span className="min-w-0 break-all">{member.name || who}</span>
-            {isYou ? <ToneChip tone="slate">You</ToneChip> : null}
+            {isYou ? <Chip size="sm" tone="slate">You</Chip> : null}
             {fromShopify ? (
-              <ToneChip tone="teal">
+              <Chip size="sm" tone="teal">
                 <ShoppingBagIcon size={12} aria-hidden className="mr-1" />
                 From Shopify
-              </ToneChip>
+              </Chip>
             ) : null}
           </p>
           {member.name ? <p className="break-all text-sm text-ink-2">{who}</p> : null}
@@ -526,7 +526,7 @@ export function TeamSection({
               className="flex items-center gap-2 font-display text-base font-semibold text-ink"
             >
               Waiting for approval
-              {team.requests.waiting.length > 0 ? <ToneChip tone="amber">{team.requests.waiting.length}</ToneChip> : null}
+              {team.requests.waiting.length > 0 ? <Chip size="sm" tone="amber">{team.requests.waiting.length}</Chip> : null}
             </h3>
             <p className="mt-1 text-sm text-ink-2">
               From Shopify customer tags. Approve and the tag gives that role here from the person&apos;s next sign-in;

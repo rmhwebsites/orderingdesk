@@ -15,6 +15,7 @@ import { Desk } from "@/components/desk/desk";
 import { ThemedImage } from "@/components/shell/workspace-brand-slot";
 import { WorkspaceShell } from "@/components/shell/workspace-shell";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { Monogram } from "@/components/kit";
 import { ui } from "@/components/ui";
 import { NewWorkspaceForm } from "./new-workspace-form";
 import { SignOutButton } from "./sign-out-button";
@@ -157,12 +158,7 @@ export default async function Home() {
                       <ThemedImage paths={workspace.symbol} className="size-9 object-contain" />
                     </span>
                   ) : (
-                    <span
-                      aria-hidden
-                      className="grid size-9 shrink-0 place-items-center rounded-control bg-primary font-display text-sm font-semibold text-primary-ink"
-                    >
-                      {workspace.name.trim().charAt(0).toUpperCase()}
-                    </span>
+                    <Monogram text={workspace.name.trim().charAt(0).toUpperCase() || "W"} size="md" />
                   )}
                   <span className="min-w-0 flex-1 truncate font-medium">{workspace.name}</span>
                   {workspace.role === "platform" ? null : (

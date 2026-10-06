@@ -5,6 +5,7 @@ import { UserPlusIcon } from "@phosphor-icons/react/UserPlus";
 import { formatDate } from "@/lib/format";
 import { useNow } from "@/lib/use-now";
 import type { PlatformAdminView, PlatformInviteView } from "@/server/platform-admins";
+import { Chip } from "@/components/kit";
 import {
   ConfirmStep,
   describedBy,
@@ -14,7 +15,6 @@ import {
   Panel,
   requestJson,
   SaveStatus,
-  ToneChip,
 } from "@/components/settings/kit";
 import { ui } from "@/components/ui";
 
@@ -90,11 +90,11 @@ export function PlatformAdmins({ initial, viewerUserId }: { initial: AdminsData;
                     <span className="block break-all text-sm font-medium text-ink">{admin.name || admin.email}</span>
                     {admin.name ? <span className="block break-all text-sm text-ink-2">{admin.email}</span> : null}
                   </span>
-                  {isYou ? <ToneChip tone="slate">You</ToneChip> : null}
+                  {isYou ? <Chip size="sm" tone="slate">You</Chip> : null}
                   {admin.source === "bootstrap" ? (
-                    <ToneChip tone="blue">From the Worker secret</ToneChip>
+                    <Chip size="sm" tone="blue">From the Worker secret</Chip>
                   ) : (
-                    <ToneChip tone="green">Promoted</ToneChip>
+                    <Chip size="sm" tone="green">Promoted</Chip>
                   )}
                   {admin.source === "granted" && admin.userId && !isYou ? (
                     <button

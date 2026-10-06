@@ -8,6 +8,7 @@ import { formatDateTime, relativeTime } from "@/lib/format";
 import { useNow } from "@/lib/use-now";
 import type { ConnectionSettingsView } from "@/server/desk/connection-view";
 import { ui } from "@/components/ui";
+import { Chip, RadioCard } from "@/components/kit";
 import {
   ConfirmStep,
   describedBy,
@@ -18,7 +19,6 @@ import {
   requestJson,
   sectionHeading,
   SettingsSection,
-  ToneChip,
 } from "./kit";
 import { OrderHistoryPanel } from "./order-history";
 
@@ -81,7 +81,7 @@ function ConnectionStatus({ connection }: { connection: ConnectionSettingsView }
           <p className="truncate font-medium text-ink">{connection.shopName ?? connection.shopDomain}</p>
           <p className="truncate font-mono text-xs text-ink-2">{connection.shopDomain}</p>
         </div>
-        <ToneChip tone={status.tone}>{status.label}</ToneChip>
+        <Chip size="sm" tone={status.tone}>{status.label}</Chip>
       </div>
       <dl className="flex flex-col gap-2.5">
         <Detail term="Connected with">
@@ -209,25 +209,15 @@ function ConnectForm({
             ["legacy_token", "Admin API token", "For older custom apps with a shpat_ token. No live updates."],
           ] as const
         ).map(([value, label, help]) => (
-          <label
+          <RadioCard
             key={value}
-            className={`flex cursor-pointer items-start gap-3 rounded-panel border px-3.5 py-3 transition-colors ${
-              mode === value ? "border-primary-strong bg-surface" : "border-line hover:bg-surface-2"
-            }`}
-          >
-            <input
-              type="radio"
-              name="auth-mode"
-              value={value}
-              checked={mode === value}
-              onChange={() => setMode(value)}
-              className="mt-0.5 size-4 accent-[var(--primary-strong)]"
-            />
-            <span>
-              <span className="block text-sm font-semibold text-ink">{label}</span>
-              <span className="block text-sm text-ink-2">{help}</span>
-            </span>
-          </label>
+            name="auth-mode"
+            value={value}
+            checked={mode === value}
+            onChange={() => setMode(value)}
+            label={label}
+            help={help}
+          />
         ))}
       </fieldset>
       <Field id="shop-domain" label="Store address" help="The store's .myshopify.com address, for example your-store.myshopify.com.">

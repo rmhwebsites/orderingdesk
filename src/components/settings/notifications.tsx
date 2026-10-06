@@ -7,7 +7,8 @@ import { useNow } from "@/lib/use-now";
 import type { SettingsView } from "@/server/desk/shapes";
 import type { SenderView } from "@/server/sender";
 import { ui } from "@/components/ui";
-import { describedBy, Field, InlineMessage, Panel, requestJson, SaveStatus, SettingsSection, ToneChip } from "./kit";
+import { Chip } from "@/components/kit";
+import { describedBy, Field, InlineMessage, Panel, requestJson, SaveStatus, SettingsSection } from "./kit";
 
 function splitEmails(text: string): string[] {
   return text
@@ -179,9 +180,9 @@ function SenderSettings({
             {sender.address ? <span className="break-all font-mono">{sender.address}</span> : <span>None yet</span>}
             {sender.address ? (
               sender.verified ? (
-                <ToneChip tone="green">Verified</ToneChip>
+                <Chip size="sm" tone="green">Verified</Chip>
               ) : (
-                <ToneChip tone="amber">Not verified</ToneChip>
+                <Chip size="sm" tone="amber">Not verified</Chip>
               )
             ) : null}
             {sender.verified && sender.verifiedAt && now > 0 ? (

@@ -20,6 +20,7 @@ import { CheckCircleIcon } from "@phosphor-icons/react/CheckCircle";
 import { XCircleIcon } from "@phosphor-icons/react/XCircle";
 import { NOTE_MAX } from "@/lib/limits";
 import { ui } from "@/components/ui";
+import { InlineMessage } from "@/components/kit";
 import { focusSoon } from "@/components/settings/kit";
 import { confirmArmed } from "./po-send-confirm";
 import { ShopifyLink } from "./request-parts";
@@ -274,10 +275,12 @@ export function ReviewPanel({
       <p className="mt-1 text-sm text-ink-2">{lead}</p>
 
       {canReview && completeInShopify ? (
-        <p data-tone="amber" className="mt-3 rounded-panel bg-tone-fill px-3 py-2.5 text-sm text-tone-text">
-          Complete this draft in Shopify. The card follows when you do.{" "}
-          {completeInShopify.url ? <ShopifyLink href={completeInShopify.url}>Open the draft in Shopify</ShopifyLink> : null}
-        </p>
+        <div className="mt-3">
+          <InlineMessage tone="warn">
+            Complete this draft in Shopify. The card follows when you do.{" "}
+            {completeInShopify.url ? <ShopifyLink href={completeInShopify.url}>Open the draft in Shopify</ShopifyLink> : null}
+          </InlineMessage>
+        </div>
       ) : null}
 
       {canReview && mode === "idle" ? (

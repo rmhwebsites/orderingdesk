@@ -12,7 +12,8 @@ import {
 import type { NotificationPrefsView } from "@/server/notification-prefs";
 import { IphoneInstallSteps } from "@/components/shell/app-install";
 import { ui } from "@/components/ui";
-import { focusSoon, InlineMessage, Panel, requestJson, SaveStatus, SettingsSection, Switch, ToneChip } from "./kit";
+import { Chip } from "@/components/kit";
+import { focusSoon, InlineMessage, Panel, requestJson, SaveStatus, SettingsSection, Switch } from "./kit";
 
 // Settings > Your notifications, for every member: push on this device
 // (the browser's own subscription, kept per person on the server), and the
@@ -126,9 +127,9 @@ function DevicePanel() {
       <div className="flex flex-wrap items-center gap-2">
         <DeviceMobileIcon size={18} aria-hidden className="text-ink-2" />
         <h3 className="font-display text-base font-semibold text-ink">This device</h3>
-        {state.kind === "on" ? <ToneChip tone="green">Push on</ToneChip> : null}
-        {state.kind === "off" ? <ToneChip tone="slate">Push off</ToneChip> : null}
-        {state.kind === "blocked" ? <ToneChip tone="amber">Blocked</ToneChip> : null}
+        {state.kind === "on" ? <Chip size="sm" tone="green">Push on</Chip> : null}
+        {state.kind === "off" ? <Chip size="sm" tone="slate">Push off</Chip> : null}
+        {state.kind === "blocked" ? <Chip size="sm" tone="amber">Blocked</Chip> : null}
       </div>
 
       {state.kind === "checking" ? (

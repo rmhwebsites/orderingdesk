@@ -4,6 +4,7 @@ import { APP_NAME } from "@/lib/brand";
 import { workspaceIcons } from "@/lib/brand-assets";
 import { signInView } from "@/server/client-host";
 import { requestHost } from "@/server/request-host";
+import { Monogram } from "@/components/kit";
 import { BrandScope } from "@/components/shell/brand-scope";
 import { ThemedImage } from "@/components/shell/workspace-brand-slot";
 import { SignInForm } from "./sign-in-form";
@@ -55,12 +56,7 @@ export default async function SignInPage() {
               <ThemedImage paths={view.symbol} className="size-10 object-contain" />
             </span>
           ) : (
-            <span
-              aria-hidden
-              className="grid size-10 place-items-center rounded-control bg-primary font-display text-base font-semibold text-primary-ink"
-            >
-              {view.name.trim().charAt(0).toUpperCase() || "W"}
-            </span>
+            <Monogram text={view.name.trim().charAt(0).toUpperCase() || "W"} size="lg" />
           )}
           <div>
             <p className="text-sm font-medium text-ink-2">{view.name}</p>

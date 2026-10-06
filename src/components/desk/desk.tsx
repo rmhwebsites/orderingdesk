@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { InfoIcon } from "@phosphor-icons/react/Info";
 import { XIcon } from "@phosphor-icons/react/X";
 import {
   applyLiveEvent,
@@ -39,6 +38,7 @@ import { PoModal } from "./po-modal";
 import { StatusStrip } from "./status-strip";
 import { Toolbar } from "./toolbar";
 import { ui } from "@/components/ui";
+import { InlineMessage } from "@/components/kit";
 
 type DeskPayload = {
   statuses: StatusView[];
@@ -77,25 +77,22 @@ function dismissBanner(workspaceId: string): void {
 // lacks the draft scopes, so requests are not synced.
 function DraftsBanner({ settingsHref, onDismiss }: { settingsHref: string; onDismiss: () => void }) {
   return (
-    <div
-      role="status"
-      data-tone="blue"
-      className="flex items-start gap-2.5 rounded-panel bg-tone-fill px-3.5 py-3 text-sm text-tone-text"
+    <InlineMessage
+      tone="info"
+      action={
+        <button type="button" onClick={onDismiss} className={`${ui.iconButton} size-9 text-tone-text`}>
+          <XIcon size={16} aria-hidden />
+          <span className="sr-only">Dismiss this message</span>
+        </button>
+      }
     >
-      <InfoIcon size={18} aria-hidden className="mt-px shrink-0" />
-      <p className="min-w-0 flex-1">
-        Draft orders are not synced for this store. Grant read_draft_orders and write_draft_orders to the Shopify app,
-        then use Refresh connection in{" "}
-        <a href={settingsHref} className="font-semibold underline underline-offset-2">
-          Settings
-        </a>
-        .
-      </p>
-      <button type="button" onClick={onDismiss} className={`${ui.iconButton} -my-2 -mr-2 size-9 text-tone-text`}>
-        <XIcon size={16} aria-hidden />
-        <span className="sr-only">Dismiss this message</span>
-      </button>
-    </div>
+      Draft orders are not synced for this store. Grant read_draft_orders and write_draft_orders to the Shopify app, then
+      use Refresh connection in{" "}
+      <a href={settingsHref} className="font-semibold underline underline-offset-2">
+        Settings
+      </a>
+      .
+    </InlineMessage>
   );
 }
 

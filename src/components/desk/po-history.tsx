@@ -20,7 +20,8 @@ import { formatDate } from "@/lib/format";
 import { costToCents, formatCents } from "@/lib/po";
 import { loadPoList, poDateLine, poStateChip } from "@/lib/po-client";
 import type { PoView } from "@/server/po/service";
-import { focusSoon, InlineMessage, ToneChip } from "@/components/settings/kit";
+import { Chip } from "@/components/kit";
+import { focusSoon, InlineMessage } from "@/components/settings/kit";
 import { useToast } from "@/components/toasts";
 import { ui } from "@/components/ui";
 import { SendConfirm, useSendFlow } from "./po-send-confirm";
@@ -224,7 +225,7 @@ export function PurchaseOrders({
                   <span id={rowFocusId(po.id)} tabIndex={-1} className="font-mono text-sm font-semibold tabular-nums text-ink outline-none">
                     {po.number ?? "Draft"}
                   </span>
-                  <ToneChip tone={chip.tone}>{chip.label}</ToneChip>
+                  <Chip size="sm" tone={chip.tone}>{chip.label}</Chip>
                   {total ? <span className="ml-auto font-mono text-sm tabular-nums text-ink">{total}</span> : null}
                 </div>
                 <p className="text-sm text-ink-2">

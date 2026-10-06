@@ -4,7 +4,8 @@ import { useRef, useState } from "react";
 import { GlobeIcon } from "@phosphor-icons/react/Globe";
 import type { DomainView } from "@/server/domains";
 import { ui } from "@/components/ui";
-import { ConfirmStep, describedBy, Field, focusSoon, InlineMessage, Panel, requestJson, SettingsSection, ToneChip } from "./kit";
+import { Chip } from "@/components/kit";
+import { ConfirmStep, describedBy, Field, focusSoon, InlineMessage, Panel, requestJson, SettingsSection } from "./kit";
 
 const STATUS: Record<NonNullable<DomainView["status"]>, { tone: string; label: string }> = {
   pending: { tone: "amber", label: "Pending check" },
@@ -111,7 +112,7 @@ export function CustomDomainSection({ workspaceId, initial }: { workspaceId: str
               <GlobeIcon size={20} aria-hidden />
             </span>
             <p className="min-w-0 flex-1 break-all font-mono text-sm text-ink">{view.domain}</p>
-            {status ? <ToneChip tone={status.tone}>{status.label}</ToneChip> : null}
+            {status ? <Chip size="sm" tone={status.tone}>{status.label}</Chip> : null}
           </div>
         ) : null}
         {reason && view.status === "error" ? <InlineMessage tone="bad">{reason}</InlineMessage> : null}

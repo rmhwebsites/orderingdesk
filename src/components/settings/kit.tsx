@@ -1,16 +1,13 @@
 "use client";
 
 // Small building blocks shared by the Settings sections: the section frame,
-// labeled fields with help and inline errors, inline messages, tone chips,
-// an in-page confirmation step, focus hand-off and a JSON request helper.
+// labeled fields with help and inline errors, an in-page confirmation step,
+// focus hand-off and a JSON request helper.
 // Tokens and the shared control shapes (src/components/ui.ts) only.
 
 import { useEffect, useId, useRef } from "react";
 import { CaretDownIcon } from "@phosphor-icons/react/CaretDown";
 import { CheckCircleIcon } from "@phosphor-icons/react/CheckCircle";
-import { InfoIcon } from "@phosphor-icons/react/Info";
-import { WarningIcon } from "@phosphor-icons/react/Warning";
-import { WarningCircleIcon } from "@phosphor-icons/react/WarningCircle";
 import { ui } from "@/components/ui";
 
 export type RequestResult<T> =
@@ -183,50 +180,9 @@ export function Select({
   );
 }
 
-type MessageTone = "good" | "bad" | "warn" | "info";
-
-const MESSAGE: Record<MessageTone, { tone: string; Icon: typeof InfoIcon }> = {
-  good: { tone: "green", Icon: CheckCircleIcon },
-  bad: { tone: "red", Icon: WarningCircleIcon },
-  warn: { tone: "amber", Icon: WarningIcon },
-  info: { tone: "blue", Icon: InfoIcon },
-};
-
-// A persistent inline message (a result, a problem, a heads-up), on its
-// semantic tone. Errors are announced at once, the rest politely.
-export function InlineMessage({
-  tone,
-  children,
-  id,
-}: {
-  tone: MessageTone;
-  children: React.ReactNode;
-  id?: string;
-}) {
-  const { tone: color, Icon } = MESSAGE[tone];
-  return (
-    <div
-      id={id}
-      role={tone === "bad" ? "alert" : "status"}
-      data-tone={color}
-      className="flex items-start gap-2.5 rounded-panel bg-tone-fill px-3.5 py-3 text-sm text-tone-text"
-    >
-      <Icon size={18} aria-hidden className="mt-px shrink-0" />
-      <div className="min-w-0 flex-1 break-words">{children}</div>
-    </div>
-  );
-}
-
-export function ToneChip({ tone, children }: { tone: string; children: React.ReactNode }) {
-  return (
-    <span
-      data-tone={tone}
-      className="inline-flex h-6 shrink-0 items-center rounded-control bg-tone-fill px-2.5 text-xs font-semibold text-tone-text"
-    >
-      {children}
-    </span>
-  );
-}
+// The inline message lives in the shared kit (src/components/kit.tsx); it
+// is re-exported so Settings sections keep importing it from here.
+export { InlineMessage } from "@/components/kit";
 
 // The in-page confirmation step for a destructive action: says what will
 // happen and takes focus on its confirm button, which the question

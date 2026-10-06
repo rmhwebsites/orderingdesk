@@ -9,13 +9,13 @@
 import { useId, useState } from "react";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/ArrowSquareOut";
 import { FilePdfIcon } from "@phosphor-icons/react/FilePdf";
-import { InfoIcon } from "@phosphor-icons/react/Info";
 import { LinkSimpleIcon } from "@phosphor-icons/react/LinkSimple";
 import { formatMoney } from "@/lib/format";
 import { classifyProperty, clipText, type PropertyView } from "@/lib/item-properties";
 import { itemsSubtotal, shippingLines, type OrderSnapshot, type SnapshotItem } from "@/lib/order-snapshot";
 import type { RequestFields } from "@/lib/request-fields";
-import { CopyButton, Section, ToneChip } from "./drawer-kit";
+import { Chip, DetailRow, InlineMessage } from "@/components/kit";
+import { CopyButton, Section } from "./drawer-kit";
 
 const NEW_TAB = " (opens in a new tab)";
 
@@ -139,9 +139,9 @@ function ItemRow({ item, currency }: { item: SnapshotItem; currency: string }) {
           <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium text-ink">
             <span className="break-words">{item.title || "Untitled item"}</span>
             {item.custom ? (
-              <ToneChip tone="slate" size="sm">
+              <Chip tone="slate" size="sm">
                 Custom item
-              </ToneChip>
+              </Chip>
             ) : null}
           </p>
           <p className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-ink-2">
@@ -176,9 +176,8 @@ export function ItemsSection({
   return (
     <Section title="Items">
       {itemsTruncated ? (
-        <p data-tone="amber" className="mb-3 flex gap-2 rounded-panel bg-tone-fill px-3 py-2.5 text-sm text-tone-text">
-          <InfoIcon size={18} aria-hidden className="mt-px shrink-0" />
-          <span>
+        <div className="mb-3">
+          <InlineMessage tone="warn">
             Showing the first {snapshot.items.length} items.{" "}
             {shopifyUrl ? (
               <a href={shopifyUrl} target="_blank" rel="noopener noreferrer" className="font-semibold underline underline-offset-2">
@@ -188,8 +187,8 @@ export function ItemsSection({
             ) : (
               "Open it in Shopify for the rest."
             )}
-          </span>
-        </p>
+          </InlineMessage>
+        </div>
       ) : null}
       {snapshot.items.length === 0 ? (
         <p className="text-sm text-ink-2">No line items.</p>
@@ -250,15 +249,6 @@ export function ItemsSection({
   );
 }
 
-function Field({ term, children }: { term: string; children: React.ReactNode }) {
-  return (
-    <div className="flex flex-col gap-0.5 sm:flex-row sm:gap-4">
-      <dt className="shrink-0 text-sm text-ink-2 sm:w-40">{term}</dt>
-      <dd className="min-w-0 break-words text-sm text-ink">{children}</dd>
-    </div>
-  );
-}
-
 // Who asked and what for: the requester, the B2B company and location,
 // every public cart attribute (request keys first), the draft's note and PO
 // number. Fields that are empty are left out.
@@ -288,18 +278,18 @@ export function RequestSection({
       )}
       {fields.company || fields.location || fields.attributes.length > 0 || note || poNumber ? (
         <dl className="mt-4 flex flex-col gap-2.5">
-          {fields.company ? <Field term="Company">{fields.company}</Field> : null}
-          {fields.location ? <Field term="Location">{fields.location}</Field> : null}
+          {fields.company ? <DetailRow term="Company">{fields.company}</DetailRow> : null}
+          {fields.location ? <DetailRow term="Location">{fields.location}</DetailRow> : null}
           {fields.attributes.map((attribute, index) => (
-            <Field key={index} term={attribute.key}>
+            <DetailRow key={index} term={attribute.key}>
               <span className="whitespace-pre-line">{attribute.value}</span>
-            </Field>
+            </DetailRow>
           ))}
-          {poNumber ? <Field term="PO number">{poNumber}</Field> : null}
+          {poNumber ? <DetailRow term="PO number">{poNumber}</DetailRow> : null}
           {note ? (
-            <Field term="Note">
+            <DetailRow term="Note">
               <span className="whitespace-pre-line">{note}</span>
-            </Field>
+            </DetailRow>
           ) : null}
         </dl>
       ) : null}

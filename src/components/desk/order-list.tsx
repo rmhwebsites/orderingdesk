@@ -6,7 +6,7 @@ import type { Role } from "@/lib/roles";
 import { statusOptionsFor } from "@/lib/status-options";
 import type { OrderSummary } from "@/server/desk/read";
 import type { StatusView } from "@/server/desk/shapes";
-import { ToneChip } from "./drawer-kit";
+import { Chip } from "@/components/kit";
 import { StatusSelect } from "./status-select";
 
 type ListProps = {
@@ -50,13 +50,13 @@ function KindMarks({ order }: { order: OrderSummary }) {
   if (order.kind === "draft") {
     return (
       <span className="mt-1 flex flex-wrap gap-1">
-        <ToneChip tone="slate" size="sm">
+        <Chip tone="slate" size="sm">
           Draft
-        </ToneChip>
+        </Chip>
         {order.draftDeleted ? (
-          <ToneChip tone="amber" size="sm">
+          <Chip tone="amber" size="sm">
             Deleted in Shopify
-          </ToneChip>
+          </Chip>
         ) : null}
       </span>
     );
