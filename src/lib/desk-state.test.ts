@@ -4,10 +4,13 @@ import type { EventView, StatusView } from "@/server/desk/shapes";
 import {
   applyLiveEvent,
   arrivalNotice,
+  chipsForView,
+  crossesClosed,
   deskKindCounts,
   optimisticStatus,
   rollbackStatus,
   selectOrders,
+  shiftViewCounts,
   statusChips,
   totalOrders,
   touchesPurchaseOrders,
@@ -323,10 +326,9 @@ describe("selectOrders", () => {
     }),
   ];
 
-  it("sorts newest, oldest and by total", () => {
+  it("sorts newest and oldest", () => {
     expect(selectOrders(orders, { query: "", statusKey: null, sort: "newest" }).map((o) => o.id)).toEqual(["a", "c", "b"]);
     expect(selectOrders(orders, { query: "", statusKey: null, sort: "oldest" }).map((o) => o.id)).toEqual(["b", "c", "a"]);
-    expect(selectOrders(orders, { query: "", statusKey: null, sort: "total" }).map((o) => o.id)).toEqual(["b", "a", "c"]);
   });
 
   it("searches order name, customer, email and every item title, ignoring case", () => {
@@ -424,5 +426,72 @@ describe("statusChips", () => {
 
   it("totals every count", () => {
     expect(totalOrders({ new: 4, shipped: 0, gone: 2 })).toBe(6);
+  });
+});
+
+// Comprehensive desk design section 1: Open by default and the views.
+describe("views", () => {
+  const closed = new Set(["delivered", "rejected"]);
+  const list = [
+    order("o1", { statusKey: "new", createdAt: 5 }),
+    order("o2", { statusKey: "delivered", createdAt: 4 }),
+    order("d1", { kind: "draft", statusKey: "new", createdAt: 3 }),
+    order("d2", { kind: "draft", statusKey: "rejected", createdAt: 2 }),
+    order("d3", { kind: "draft", statusKey: "new", draftDeleted: true, createdAt: 1 }),
+  ];
+  const ids = (view: "open" | "closed" | "approval" | "all", kind: "all" | "deleted" = "all") =>
+    selectOrders(list, { query: "", statusKey: null, sort: "newest", kind, view }, closed).map((row) => row.id);
+
+  it("keeps closed cards out of Open, and puts waiting requests in the approval queue", () => {
+    expect(ids("open")).toEqual(["o1", "d1"]);
+    expect(ids("closed")).toEqual(["o2", "d2"]);
+    expect(ids("approval")).toEqual(["d1"]);
+    expect(ids("all")).toEqual(["o1", "o2", "d1", "d2"]);
+    expect(ids("open", "deleted")).toEqual(["d3"]);
+  });
+
+  it("sorts by waiting longest: the oldest status change first, the arrival when none was set", () => {
+    const waiting = [
+      order("a", { statusSetAt: 300, createdAt: 1 }),
+      order("b", { statusSetAt: null, createdAt: 100 }),
+      order("c", { statusSetAt: 200, createdAt: 2 }),
+    ];
+    expect(selectOrders(waiting, { query: "", statusKey: null, sort: "waiting" }).map((row) => row.id)).toEqual(["b", "c", "a"]);
+  });
+
+  it("moves the view counts with a card that crosses between open and closed", () => {
+    const counts = { open: 3, approval: 1, all: 5, closed: 2 };
+    expect(shiftViewCounts(counts, { kind: "draft", draftDeleted: false }, "new", "rejected", closed)).toEqual({
+      open: 2,
+      approval: 0,
+      all: 5,
+      closed: 3,
+    });
+    expect(shiftViewCounts(counts, { kind: "order", draftDeleted: false }, "delivered", "new", closed)).toEqual({
+      open: 4,
+      approval: 1,
+      all: 5,
+      closed: 1,
+    });
+    expect(shiftViewCounts(counts, { kind: "order", draftDeleted: false }, "new", "processing", closed)).toBe(counts);
+    expect(shiftViewCounts(counts, { kind: "draft", draftDeleted: true }, "new", "rejected", closed)).toBe(counts);
+  });
+
+  it("tells when a card it has not loaded crossed, from the status entry's own record", () => {
+    expect(crossesClosed({ from: "new", to: "delivered" }, closed)).toBe(true);
+    expect(crossesClosed({ from: "new", to: "processing" }, closed)).toBe(false);
+    expect(crossesClosed(null, closed)).toBe(false);
+  });
+
+  it("offers the statuses that belong to the view in the status filter", () => {
+    const chips = [
+      { key: "new", label: "New", color: "lime", count: 2, known: true },
+      { key: "delivered", label: "Delivered", color: "slate", count: 1, known: true },
+      { key: "gone", label: "Unknown status", color: "slate", count: 1, known: false },
+    ];
+    expect(chipsForView(chips, "open", closed).map((chip) => chip.key)).toEqual(["new", "gone"]);
+    expect(chipsForView(chips, "approval", closed).map((chip) => chip.key)).toEqual(["new", "gone"]);
+    expect(chipsForView(chips, "closed", closed).map((chip) => chip.key)).toEqual(["delivered"]);
+    expect(chipsForView(chips, "all", closed)).toHaveLength(3);
   });
 });

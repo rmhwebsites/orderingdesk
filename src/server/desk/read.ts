@@ -2,9 +2,11 @@
 // full, and the activity feed. Callers authorize first (route guards); every
 // query here is still scoped to the workspace it is given.
 
-import { and, asc, count, desc, eq, isNotNull, isNull } from "drizzle-orm";
+import { and, asc, count, desc, eq, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@/db";
 import { events, orders, statuses, storeConnections, user, workspaceSettings, workspaces } from "@/db/schema";
+import type { DeskView, ViewCounts } from "@/lib/desk-query";
+import type { QueueSettingsView } from "@/lib/queue-settings";
 import { requestFieldsOf } from "@/lib/request-fields";
 import { draftsEnabled, missingDraftScopes } from "@/server/shopify/admin";
 import {
@@ -17,6 +19,7 @@ import {
   type SettingsView,
   type StatusView,
 } from "./shapes";
+import { queueSettingsView } from "./queue-settings";
 
 // The desk list carries at most this many orders, newest first; hasMore tells
 // the client there are older ones it was not sent.
@@ -92,6 +95,11 @@ export type DeskPayload = {
   // Whether draft orders sync for the store, from the stored grant;
   // missingScopes is empty when there is no store or the grant is unknown.
   drafts: { enabled: boolean; missingScopes: string[] };
+  // The view this list is (src/lib/desk-query.ts) and every view's count.
+  view: DeskView;
+  viewCounts: ViewCounts;
+  // Age thresholds and price display (src/server/desk/queue-settings.ts).
+  queue: QueueSettingsView;
 };
 
 function text(value: unknown): string {
@@ -148,13 +156,48 @@ function summarize(row: typeof orders.$inferSelect): OrderSummary {
   };
 }
 
+// A card's status row, for the closed flag (migration 0011). A key with no
+// status row (one removed while cards still had it) counts as open.
+const statusJoin = and(eq(statuses.workspaceId, orders.workspaceId), eq(statuses.key, orders.statusKey));
+const isOpen = sql`coalesce(${statuses.closed}, 0) = 0`;
+const isClosed = sql`coalesce(${statuses.closed}, 0) = 1`;
+
+// Which cards a view loads (comprehensive desk design section 1). Deleted
+// requests come with Open, All and Closed; the desk's Deleted filter shows
+// them. The approval queue is requests still waiting: drafts that are not
+// deleted, in an open status.
+function viewCondition(view: DeskView): SQL | undefined {
+  switch (view) {
+    case "all":
+      return undefined;
+    case "open":
+      return isOpen;
+    case "closed":
+      return isClosed;
+    case "approval":
+      return and(isNull(orders.shopifyOrderId), isNull(orders.draftDeletedAt), isOpen);
+  }
+}
+
+// Requests waiting for a manager: the approval view's size (the top bar's
+// badge).
+export async function countNeedsApproval(db: Db, workspaceId: string): Promise<number> {
+  const rows = await db
+    .select({ count: count() })
+    .from(orders)
+    .leftJoin(statuses, statusJoin)
+    .where(and(eq(orders.workspaceId, workspaceId), viewCondition("approval")));
+  return Number(rows[0]?.count ?? 0);
+}
+
 export async function loadDesk(
   db: Db,
   workspaceId: string,
-  opts?: { limit?: number },
+  opts?: { limit?: number; view?: DeskView },
 ): Promise<DeskPayload | null> {
   const limit = opts?.limit ?? ORDER_LIST_CAP;
-  const [workspaceRows, statusRows, settingsRows, countRows, orderRows, draftRows, connectionRows] = await Promise.all([
+  const view = opts?.view ?? "all";
+  const [workspaceRows, statusRows, settingsRows, countRows, orderRows, draftRows, connectionRows, viewRows] = await Promise.all([
     db
       .select({
         id: workspaces.id,
@@ -183,9 +226,10 @@ export async function loadDesk(
       .groupBy(orders.statusKey),
     // One row past the cap answers hasMore without a second count query.
     db
-      .select()
+      .select({ order: orders })
       .from(orders)
-      .where(eq(orders.workspaceId, workspaceId))
+      .leftJoin(statuses, statusJoin)
+      .where(and(eq(orders.workspaceId, workspaceId), viewCondition(view)))
       .orderBy(desc(orders.createdAt), desc(orders.id))
       .limit(limit + 1),
     // Draft cards over every card, split by whether Shopify deleted them.
@@ -199,6 +243,16 @@ export async function loadDesk(
       .from(storeConnections)
       .where(eq(storeConnections.workspaceId, workspaceId))
       .limit(1),
+    // Every view's size over every card. Deleted requests count in none.
+    db
+      .select({
+        all: sql<number>`coalesce(sum(case when ${orders.shopifyOrderId} is null and ${orders.draftDeletedAt} is not null then 0 else 1 end), 0)`,
+        closed: sql<number>`coalesce(sum(case when ${orders.shopifyOrderId} is null and ${orders.draftDeletedAt} is not null then 0 when coalesce(${statuses.closed}, 0) = 1 then 1 else 0 end), 0)`,
+        approval: sql<number>`coalesce(sum(case when ${orders.shopifyOrderId} is null and ${orders.draftDeletedAt} is null and coalesce(${statuses.closed}, 0) = 0 then 1 else 0 end), 0)`,
+      })
+      .from(orders)
+      .leftJoin(statuses, statusJoin)
+      .where(eq(orders.workspaceId, workspaceId)),
   ]);
 
   const workspace = workspaceRows[0];
@@ -225,11 +279,18 @@ export async function loadDesk(
     statuses: statusRows.map(statusView),
     settings: settingsView(settingsRows[0]),
     statusCounts,
-    orders: orderRows.slice(0, limit).map(summarize),
+    orders: orderRows.slice(0, limit).map((row) => summarize(row.order)),
     hasMore: orderRows.length > limit,
     draftCount: draftsCounted(false),
     deletedDraftCount: draftsCounted(true),
     drafts: { enabled: draftsEnabled(scopes), missingScopes: scopes ? missingDraftScopes(scopes) : [] },
+    view,
+    viewCounts: (() => {
+      const all = Number(viewRows[0]?.all ?? 0);
+      const closed = Number(viewRows[0]?.closed ?? 0);
+      return { open: all - closed, approval: Number(viewRows[0]?.approval ?? 0), all, closed };
+    })(),
+    queue: queueSettingsView(settingsRows[0]),
   };
 }
 

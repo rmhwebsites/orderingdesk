@@ -6,6 +6,7 @@ import { ListMagnifyingGlassIcon } from "@phosphor-icons/react/ListMagnifyingGla
 import { StorefrontIcon } from "@phosphor-icons/react/Storefront";
 import { WarningCircleIcon } from "@phosphor-icons/react/WarningCircle";
 import { ui } from "@/components/ui";
+import type { DeskView } from "@/lib/desk-query";
 import type { DeskKind } from "@/lib/desk-state";
 
 function Frame({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
@@ -36,11 +37,33 @@ export function EmptyDesk({ basePath, canConnect }: { basePath: string; canConne
   );
 }
 
-// What an empty list says, by what emptied it: the search, the status, and
-// the All / Drafts / Orders / Deleted filter. Drafts plus New is the review
-// queue (draft orders spec section 11.2), empty whenever every request has
-// been handled, so it reads as a normal state, not a failed search.
-function noMatchesCopy(query: string, kind: DeskKind, statusLabel: string | null): { title: string; body: string } {
+// What an empty list says, by what emptied it: the view, the search, the
+// status, and the All / Drafts / Orders / Deleted filter. Drafts plus New is
+// the review queue (draft orders spec section 11.2), empty whenever every
+// request has been handled, so it reads as a normal state, not a failed
+// search. An empty view with nothing else filtering it says so in its own
+// words (comprehensive desk design section 1).
+function noMatchesCopy(
+  query: string,
+  kind: DeskKind,
+  statusLabel: string | null,
+  view: DeskView,
+): { title: string; body: string } {
+  if (query.length === 0 && kind === "all" && statusLabel === null) {
+    switch (view) {
+      case "open":
+        return { title: "Nothing open", body: "Every card is in a closed status. New requests and orders land here." };
+      case "approval":
+        return { title: "No requests need approval", body: "New requests from the store show up here." };
+      case "closed":
+        return {
+          title: "Nothing closed yet",
+          body: "Cards move here when they reach a closed status, such as Delivered or Rejected.",
+        };
+      case "all":
+        break;
+    }
+  }
   if (query.length > 0) {
     const where = statusLabel ? ` in ${statusLabel}` : "";
     const title = { all: "No orders match", drafts: "No requests match", orders: "No orders match", deleted: "No deleted requests match" }[kind];
@@ -71,29 +94,36 @@ export function NoMatches({
   query,
   kind,
   statusLabel,
+  view = "all",
   onClear,
 }: {
   query: string;
   kind: DeskKind;
   // The label of the status picked in the strip, or null for every status.
   statusLabel: string | null;
+  // The view the list shows (src/lib/desk-query.ts).
+  view?: DeskView;
   // Clears the search and the status, and goes back to All.
   onClear: () => void;
 }) {
-  const copy = noMatchesCopy(query.trim(), kind, statusLabel);
+  const copy = noMatchesCopy(query.trim(), kind, statusLabel, view);
   const hintId = useId();
+  // Clear filters only when something besides the view filters the list.
+  const canClear = query.trim().length > 0 || kind !== "all" || statusLabel !== null;
   return (
     <Frame icon={<ListMagnifyingGlassIcon size={24} aria-hidden />} title={copy.title}>
       <p className="max-w-[46ch] break-words text-sm text-ink-2">{copy.body}</p>
-      <button
-        type="button"
-        onClick={onClear}
-        aria-describedby={kind !== "all" ? hintId : undefined}
-        className={`${ui.buttonSecondary} mt-1`}
-      >
-        Clear filters
-      </button>
-      {kind !== "all" ? (
+      {canClear ? (
+        <button
+          type="button"
+          onClick={onClear}
+          aria-describedby={kind !== "all" ? hintId : undefined}
+          className={`${ui.buttonSecondary} mt-1`}
+        >
+          Clear filters
+        </button>
+      ) : null}
+      {canClear && kind !== "all" ? (
         <p id={hintId} className="max-w-[46ch] text-xs text-ink-2">
           Clear filters goes back to All, with no search or status.
         </p>

@@ -35,12 +35,18 @@ describe("EmptyDesk", () => {
 // spec section 11.2: All / Drafts / Orders compose with the status strip,
 // and Drafts plus New is the review queue, empty once requests are handled).
 describe("NoMatches", () => {
-  const render = (props: { query?: string; kind?: "all" | "drafts" | "orders" | "deleted"; statusLabel?: string | null }) =>
+  const render = (props: {
+    query?: string;
+    kind?: "all" | "drafts" | "orders" | "deleted";
+    statusLabel?: string | null;
+    view?: "open" | "approval" | "all" | "closed";
+  }) =>
     renderToStaticMarkup(
       createElement(NoMatches, {
         query: props.query ?? "",
         kind: props.kind ?? "all",
         statusLabel: props.statusLabel ?? null,
+        view: props.view,
         onClear: () => {},
       }),
     );
@@ -84,5 +90,15 @@ describe("NoMatches", () => {
     const drafts = render({ kind: "drafts", statusLabel: "New" });
     expect(drafts).toContain(">Clear filters<");
     expect(drafts).toContain("Clear filters goes back to All, with no search or status.");
+  });
+
+  it("speaks of the view when nothing else filters it, with nothing to clear", () => {
+    const open = render({ view: "open" });
+    expect(open).toContain("Nothing open");
+    expect(open).not.toContain(">Clear filters<");
+    expect(render({ view: "approval" })).toContain("No requests need approval");
+    expect(render({ view: "closed" })).toContain("Nothing closed yet");
+    // A search in a view still says what matched nothing.
+    expect(render({ view: "open", query: "vest" })).toContain("Nothing matches &quot;vest&quot;.");
   });
 });

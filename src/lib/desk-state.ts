@@ -5,6 +5,7 @@
 
 import type { OrderSummary } from "@/server/desk/read";
 import type { EventView, StatusView } from "@/server/desk/shapes";
+import type { DeskKind, DeskView, SortKey, ViewCounts } from "./desk-query";
 import { formatMoney } from "./format";
 import type { LiveEvent } from "./live-events";
 
@@ -262,13 +263,9 @@ export function totalOrders(counts: Record<string, number>): number {
   return Object.values(counts).reduce((sum, count) => sum + count, 0);
 }
 
-export type SortKey = "newest" | "oldest" | "total";
+export type { DeskKind, DeskView, SortKey, ViewCounts };
 
-// All: every card except requests whose draft Shopify deleted (section 18
-// item 7: they leave the default view and have their own filter).
-export type DeskKind = "all" | "drafts" | "orders" | "deleted";
-
-export type DeskFilter = { query: string; statusKey: string | null; sort: SortKey; kind?: DeskKind };
+export type DeskFilter = { query: string; statusKey: string | null; sort: SortKey; kind?: DeskKind; view?: DeskView };
 
 function kindMatches(row: OrderSummary, kind: DeskKind): boolean {
   switch (kind) {
@@ -281,6 +278,65 @@ function kindMatches(row: OrderSummary, kind: DeskKind): boolean {
     case "deleted":
       return row.draftDeleted;
   }
+}
+
+// Which cards a view shows (the server loads the same set, src/server/desk/
+// read.ts): Open leaves closed statuses out, Closed shows only them, the
+// approval queue shows requests still waiting. Filtering here too means a
+// card that moves into a closed status leaves Open at once.
+export function viewMatches(row: OrderSummary, view: DeskView, closedKeys: ReadonlySet<string>): boolean {
+  switch (view) {
+    case "all":
+      return true;
+    case "open":
+      return !closedKeys.has(row.statusKey);
+    case "closed":
+      return closedKeys.has(row.statusKey);
+    case "approval":
+      return row.kind === "draft" && !row.draftDeleted && !closedKeys.has(row.statusKey);
+  }
+}
+
+// The view counts after a loaded card moved from one status to another.
+// Unchanged (the same object) unless it crossed between open and closed; a
+// request whose draft Shopify deleted counts in no view.
+export function shiftViewCounts(
+  counts: ViewCounts,
+  row: Pick<OrderSummary, "kind" | "draftDeleted">,
+  fromKey: string,
+  toKey: string,
+  closedKeys: ReadonlySet<string>,
+): ViewCounts {
+  if (row.kind === "draft" && row.draftDeleted) {
+    return counts;
+  }
+  const wasClosed = closedKeys.has(fromKey);
+  const isClosed = closedKeys.has(toKey);
+  if (wasClosed === isClosed) {
+    return counts;
+  }
+  const delta = isClosed ? 1 : -1;
+  return {
+    ...counts,
+    open: counts.open - delta,
+    closed: counts.closed + delta,
+    approval: row.kind === "draft" ? counts.approval - delta : counts.approval,
+  };
+}
+
+// Whether a status entry for a card the desk has not loaded moved it
+// between open and closed (then only a reload can fix the counts).
+export function crossesClosed(meta: unknown, closedKeys: ReadonlySet<string>): boolean {
+  const move = metaMove(meta);
+  return move !== null && closedKeys.has(move.from) !== closedKeys.has(move.to);
+}
+
+// The statuses the status filter offers in a view.
+export function chipsForView(chips: StatusChip[], view: DeskView, closedKeys: ReadonlySet<string>): StatusChip[] {
+  if (view === "all") {
+    return chips;
+  }
+  return chips.filter((chip) => (view === "closed" ? closedKeys.has(chip.key) : !closedKeys.has(chip.key)));
 }
 
 // The loaded cards per kind filter (the server's counts cover every card;
@@ -318,16 +374,22 @@ export function arrivalNotice(orders: OrderSummary[]): { title: string; body?: s
   return { title, body: rest > 0 ? `${names.join(", ")} and ${rest} more` : names.join(", ") };
 }
 
-function amount(total: string): number {
-  const value = Number(total);
-  return Number.isFinite(value) ? value : -Infinity;
+// The time a card has waited in its status: since its status was set, else
+// since it arrived.
+function waitingSince(row: OrderSummary): number {
+  return row.statusSetAt ?? row.createdAt;
 }
 
-export function selectOrders(orders: OrderSummary[], filter: DeskFilter): OrderSummary[] {
+export function selectOrders(
+  orders: OrderSummary[],
+  filter: DeskFilter,
+  closedKeys: ReadonlySet<string> = new Set(),
+): OrderSummary[] {
   const query = filter.query.trim().toLowerCase();
   const kind = filter.kind ?? "all";
+  const view = filter.view ?? "all";
   const matches = orders.filter((row) => {
-    if (!kindMatches(row, kind)) {
+    if (!viewMatches(row, view, closedKeys) || !kindMatches(row, kind)) {
       return false;
     }
     if (filter.statusKey !== null && row.statusKey !== filter.statusKey) {
@@ -351,7 +413,7 @@ export function selectOrders(orders: OrderSummary[], filter: DeskFilter): OrderS
       return matches.sort(newest);
     case "oldest":
       return matches.sort((a, b) => -newest(a, b));
-    case "total":
-      return matches.sort((a, b) => amount(b.total) - amount(a.total) || newest(a, b));
+    case "waiting":
+      return matches.sort((a, b) => waitingSince(a) - waitingSince(b) || newest(a, b));
   }
 }

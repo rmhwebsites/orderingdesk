@@ -1,15 +1,25 @@
 import { describe, it, expect } from "vitest";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Db } from "@/db";
 import * as schema from "@/db/schema";
 import {
   EVENT_FEED_CAP,
   ORDER_LIST_CAP,
+  countNeedsApproval,
   getOrderDetail,
   listEvents,
   loadDesk,
 } from "./read";
-import { draftSnapshotOf, openTestDb, seedDraft, seedOrder, seedUser, seedWorkspace, snapshotOf } from "./test-helpers";
+import {
+  draftSnapshotOf,
+  openTestDb,
+  seedDraft,
+  seedDraftStatuses,
+  seedOrder,
+  seedUser,
+  seedWorkspace,
+  snapshotOf,
+} from "./test-helpers";
 
 const WS = "ws_impact";
 const OTHER = "ws_other";
@@ -487,5 +497,47 @@ describe("listEvents", () => {
     expect(await listEvents(db, WS, "x")).toEqual({ kind: "not-found" });
     expect(await listEvents(db, WS, "missing")).toEqual({ kind: "not-found" });
     expect(await listEvents(db, WS, "")).toEqual({ kind: "not-found" });
+  });
+});
+
+// Comprehensive desk design section 1: Open by default.
+describe("loadDesk views", () => {
+  async function seeded() {
+    const db = await setup();
+    await seedDraftStatuses(db, WS);
+    await db.update(schema.statuses).set({ closed: true }).where(and(eq(schema.statuses.workspaceId, WS), eq(schema.statuses.key, "shipped")));
+    // The other workspace closes "new" instead: only this workspace's flags count.
+    await db.update(schema.statuses).set({ closed: true }).where(and(eq(schema.statuses.workspaceId, OTHER), eq(schema.statuses.key, "new")));
+    await seedOrder(db, WS, { id: "o_new", statusKey: "new", createdAt: 6 });
+    await seedOrder(db, WS, { id: "o_shipped", statusKey: "shipped", createdAt: 5 });
+    await seedDraft(db, WS, { id: "d_wait", statusKey: "new", createdAt: 4 });
+    await seedDraft(db, WS, { id: "d_rejected", statusKey: "rejected", createdAt: 3 });
+    await seedDraft(db, WS, { id: "d_gone", statusKey: "new", createdAt: 2, draftDeletedAt: 10 });
+    await seedOrder(db, WS, { id: "o_legacy", statusKey: "legacy_key", createdAt: 1 });
+    return db;
+  }
+
+  it("loads one view at a time: closed statuses out of Open, waiting requests in the approval queue", async () => {
+    const db = await seeded();
+    const ids = async (view: "open" | "closed" | "approval" | "all") =>
+      (await loadDesk(db, WS, { view }))?.orders.map((order) => order.id);
+    expect(await ids("open")).toEqual(["o_new", "d_wait", "d_gone", "o_legacy"]);
+    expect(await ids("closed")).toEqual(["o_shipped", "d_rejected"]);
+    expect(await ids("approval")).toEqual(["d_wait"]);
+    expect(await ids("all")).toHaveLength(6);
+    // No view given: everything (the route always passes one).
+    expect((await loadDesk(db, WS))?.orders).toHaveLength(6);
+  });
+
+  it("counts every view over all cards, leaving deleted requests out", async () => {
+    const db = await seeded();
+    expect((await loadDesk(db, WS, { view: "open" }))?.viewCounts).toEqual({ open: 3, approval: 1, all: 5, closed: 2 });
+    expect(await countNeedsApproval(db, WS)).toBe(1);
+    expect(await countNeedsApproval(db, OTHER)).toBe(0);
+  });
+
+  it("carries the work queue settings", async () => {
+    const db = await seeded();
+    expect((await loadDesk(db, WS))?.queue).toEqual({ ageAmberDays: 2, ageRedDays: 4, priceDisplay: "auto" });
   });
 });

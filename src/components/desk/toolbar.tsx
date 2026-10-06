@@ -5,19 +5,20 @@ import { CaretDownIcon } from "@phosphor-icons/react/CaretDown";
 import { FunnelSimpleIcon } from "@phosphor-icons/react/FunnelSimple";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/MagnifyingGlass";
 import { XIcon } from "@phosphor-icons/react/X";
+import { defaultSort, type DeskView, type ViewCounts } from "@/lib/desk-query";
 import type { DeskKind, SortKey, StatusChip } from "@/lib/desk-state";
 import { Segmented, type SegmentedOption } from "@/components/kit";
 import { ui } from "@/components/ui";
 
 // The desk's filters (comprehensive desk design section 1): one row from
-// 880px (status, kind, search, sort); on phones one row with the status, a
-// search button and a filter button, whose rows open beneath it. Each
-// button is marked while what it holds is on, open or closed.
+// 880px (view, status, kind, search, sort); on phones one row with the
+// view, a search button and a filter button, whose rows open beneath it.
+// Each button is marked while what it holds is on, open or closed.
 
 const SORTS: { value: SortKey; label: string }[] = [
   { value: "newest", label: "Newest first" },
   { value: "oldest", label: "Oldest first" },
-  { value: "total", label: "Highest total" },
+  { value: "waiting", label: "Waiting longest" },
 ];
 
 export type KindFilter = {
@@ -40,6 +41,11 @@ export type ToolbarProps = {
   kindFilter: KindFilter | null;
   // How many cards the list shows now (announced politely).
   shown: number;
+  view: DeskView;
+  onView: (view: DeskView) => void;
+  viewCounts: ViewCounts;
+  // Managers and platform admins see the Needs approval view.
+  showApproval: boolean;
 };
 
 const ALL = "";
@@ -118,6 +124,15 @@ function SortSelect({ sort, onSort, className }: { sort: SortKey; onSort: (sort:
   );
 }
 
+function viewOptions(counts: ViewCounts, approval: boolean): SegmentedOption<DeskView>[] {
+  return [
+    { value: "open", label: "Open", count: counts.open },
+    ...(approval ? [{ value: "approval" as const, label: "Needs approval", count: counts.approval }] : []),
+    { value: "all", label: "All", count: counts.all },
+    { value: "closed", label: "Closed", count: counts.closed },
+  ];
+}
+
 function kindOptions(filter: KindFilter): SegmentedOption<DeskKind>[] {
   return [
     { value: "all", label: "All" },
@@ -182,11 +197,33 @@ function ShownCount({ shown }: { shown: number }) {
   );
 }
 
-function RowToolbar({ statusKey, onStatus, statusChips, query, onQuery, sort, onSort, kindFilter, shown }: ToolbarProps) {
+function RowToolbar({
+  statusKey,
+  onStatus,
+  statusChips,
+  query,
+  onQuery,
+  sort,
+  onSort,
+  kindFilter,
+  shown,
+  view,
+  onView,
+  viewCounts,
+  showApproval,
+}: ToolbarProps) {
   return (
     // Wraps to a second line only between 880px and about 1280px; one row
     // at 1440.
     <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2.5 gap-y-2">
+      <Segmented
+        name="desk-view"
+        legend="Show"
+        value={view}
+        options={viewOptions(viewCounts, showApproval || view === "approval")}
+        onChange={onView}
+        className="shrink-0"
+      />
       <StatusFilter statusKey={statusKey} onStatus={onStatus} chips={statusChips} className="w-52 shrink-0" />
       {kindFilter ? <KindSegments filter={kindFilter} className="shrink-0" /> : null}
       <SearchField query={query} onQuery={onQuery} hasRequests={kindFilter !== null} className="min-w-40 max-w-md flex-1" />
@@ -196,7 +233,21 @@ function RowToolbar({ statusKey, onStatus, statusChips, query, onQuery, sort, on
   );
 }
 
-function PhoneToolbar({ statusKey, onStatus, statusChips, query, onQuery, sort, onSort, kindFilter, shown }: ToolbarProps) {
+function PhoneToolbar({
+  statusKey,
+  onStatus,
+  statusChips,
+  query,
+  onQuery,
+  sort,
+  onSort,
+  kindFilter,
+  shown,
+  view,
+  onView,
+  viewCounts,
+  showApproval,
+}: ToolbarProps) {
   const [searching, setSearching] = useState(query.length > 0);
   const [filtering, setFiltering] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -209,7 +260,8 @@ function PhoneToolbar({ statusKey, onStatus, statusChips, query, onQuery, sort, 
       searchRef.current?.focus();
     }
   }, [searching]);
-  const active = (kindFilter && kindFilter.kind !== "all" ? 1 : 0) + (sort !== "newest" ? 1 : 0);
+  const active =
+    (statusKey ? 1 : 0) + (kindFilter && kindFilter.kind !== "all" ? 1 : 0) + (sort !== defaultSort(view) ? 1 : 0);
   // The search keeps filtering when its row is closed, so the button says
   // so (the same test as the list filter, src/lib/desk-state.ts).
   const searchOn = query.trim().length > 0;
@@ -217,7 +269,13 @@ function PhoneToolbar({ statusKey, onStatus, statusChips, query, onQuery, sort, 
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center gap-2">
-        <StatusFilter statusKey={statusKey} onStatus={onStatus} chips={statusChips} className="min-w-0 flex-1" />
+        <NativeSelect id="desk-view" label="Show" value={view} onChange={(value) => onView(value as DeskView)} className="min-w-0 flex-1">
+          {viewOptions(viewCounts, showApproval || view === "approval").map((option) => (
+            <option key={option.value} value={option.value}>
+              {`${option.label} (${(option.count ?? 0).toLocaleString("en-US")})`}
+            </option>
+          ))}
+        </NativeSelect>
         <button
           type="button"
           aria-expanded={searching}
@@ -264,6 +322,7 @@ function PhoneToolbar({ statusKey, onStatus, statusChips, query, onQuery, sort, 
       ) : null}
       {filtering ? (
         <div id="desk-filter-row" className="flex flex-col gap-2">
+          <StatusFilter statusKey={statusKey} onStatus={onStatus} chips={statusChips} className="w-full" />
           {kindFilter ? <KindSegments filter={kindFilter} /> : null}
           <SortSelect sort={sort} onSort={onSort} className="w-full" />
         </div>

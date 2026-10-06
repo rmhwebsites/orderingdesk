@@ -3,20 +3,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { XIcon } from "@phosphor-icons/react/X";
+import { defaultSort, parseDeskQuery, type DeskView, type ViewCounts } from "@/lib/desk-query";
 import {
   applyLiveEvent,
   arrivalNotice,
+  chipsForView,
+  crossesClosed,
+  deskKindCounts,
   optimisticStatus,
   rollbackStatus,
   selectOrders,
+  shiftViewCounts,
   statusChips,
   totalOrders,
   touchesPurchaseOrders,
+  viewMatches,
   type DeskFilter,
   type DeskKind,
   type DeskState,
   type LiveEffects,
 } from "@/lib/desk-state";
+import { DEFAULT_QUEUE_SETTINGS, type QueueSettingsView } from "@/lib/queue-settings";
 import { roleAtLeast } from "@/lib/roles";
 import { DESK_MEDIA, useMediaQuery } from "@/lib/use-media-query";
 import { useNow } from "@/lib/use-now";
@@ -49,6 +56,9 @@ type DeskPayload = {
   draftCount: number;
   deletedDraftCount: number;
   drafts: { enabled: boolean; missingScopes: string[] };
+  view: DeskView;
+  viewCounts: ViewCounts;
+  queue: QueueSettingsView;
 };
 
 type DraftsState = { draftCount: number; deletedDraftCount: number; enabled: boolean; missingScopes: string[] };
@@ -134,7 +144,19 @@ export function Desk() {
   const [hasMore, setHasMore] = useState(false);
   const [desk, setDesk] = useState<DeskState>({ orders: [], statusCounts: {}, timeline: null });
   const deskRef = useRef(desk);
-  const [filter, setFilter] = useState<DeskFilter>({ query: "", statusKey: null, sort: "newest", kind: "all" });
+  // The view and filters start from the address (src/lib/desk-query.ts);
+  // Task 15 makes the address their only home.
+  const [filter, setFilter] = useState<DeskFilter>(() => {
+    const initial = parseDeskQuery(searchParams);
+    return { query: initial.q, statusKey: initial.status, sort: initial.sort, kind: initial.kind, view: initial.view };
+  });
+  const view: DeskView = filter.view ?? "open";
+  const [viewCounts, setViewCounts] = useState<ViewCounts>({ open: 0, approval: 0, all: 0, closed: 0 });
+  const [queue, setQueue] = useState<QueueSettingsView>(DEFAULT_QUEUE_SETTINGS);
+  // A different view is loading; the list stays while it does.
+  const [switching, setSwitching] = useState(false);
+  const viewRef = useRef<DeskView>(view);
+  const closedRef = useRef<ReadonlySet<string>>(new Set());
   const [drafts, setDrafts] = useState<DraftsState>({ draftCount: 0, deletedDraftCount: 0, enabled: false, missingScopes: [] });
   const [bannerHidden, setBannerHidden] = useState(true);
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
@@ -193,8 +215,9 @@ export function Desk() {
   }, []);
 
   const fetchDesk = useCallback(async () => {
+    const requested = viewRef.current;
     try {
-      const response = await fetch(`/api/workspaces/${encodeURIComponent(workspace.id)}/orders`, {
+      const response = await fetch(`/api/workspaces/${encodeURIComponent(workspace.id)}/orders?view=${requested}`, {
         cache: "no-store",
       });
       if (!response.ok) {
@@ -202,12 +225,20 @@ export function Desk() {
         throw new Error(body?.error ?? `The server answered ${response.status}.`);
       }
       const payload = (await response.json()) as DeskPayload;
+      if (requested !== viewRef.current) {
+        // The view changed while this request was out: load the new one.
+        reloadAgain.current = true;
+        return;
+      }
       let next: DeskState = { ...deskRef.current, orders: payload.orders, statusCounts: payload.statusCounts };
       for (const [orderId, key] of pendingStatus.current) {
         next = optimisticStatus(next, orderId, key)?.state ?? next;
       }
       commit(next);
       setStatuses(payload.statuses);
+      setViewCounts(payload.viewCounts);
+      setQueue(payload.queue);
+      setSwitching(false);
       setHasMore(payload.hasMore);
       setDrafts({
         draftCount: payload.draftCount ?? 0,
@@ -237,6 +268,7 @@ export function Desk() {
       const message = e instanceof Error ? e.message : "Check your connection and try again.";
       // A failed refresh keeps what is on screen; only a first load fails.
       setLoad((current) => (current.status === "ready" ? current : { status: "error", message }));
+      setSwitching(false);
     }
   }, [workspace.id, commit, flash, toast]);
 
@@ -261,6 +293,25 @@ export function Desk() {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  const closedKeys = useMemo(
+    () => new Set(statuses.filter((status) => status.closed).map((status) => status.key)),
+    [statuses],
+  );
+  useEffect(() => {
+    closedRef.current = closedKeys;
+  }, [closedKeys]);
+
+  // A different view: load it (the server filters; the list stays until
+  // the new one lands).
+  useEffect(() => {
+    if (viewRef.current === view) {
+      return;
+    }
+    viewRef.current = view;
+    setSwitching(true);
+    void reload();
+  }, [view, reload]);
 
   const loadMembers = useCallback(async () => {
     membersLoadedAt.current = Date.now();
@@ -379,19 +430,26 @@ export function Desk() {
 
   const applyEvent = useCallback(
     (event: LiveEvent) => {
+      const before = event.kind === "order.status" ? deskRef.current.orders.find((row) => row.id === event.order.id) : undefined;
       const { state, effects } = applyLiveEvent(deskRef.current, event, userId);
       if (state !== deskRef.current) {
         commit(state);
       }
       if (event.kind === "order.status") {
         setDetail((current) => withDetailStatus(current, event.order));
+        const after = state.orders.find((row) => row.id === event.order.id);
+        if (before && after && before.statusKey !== after.statusKey) {
+          setViewCounts((current) => shiftViewCounts(current, before, before.statusKey, after.statusKey, closedRef.current));
+        } else if (!before && crossesClosed(event.event.meta, closedRef.current)) {
+          void reload();
+        }
       }
       if (touchesPurchaseOrders(event, openRef.current)) {
         setPoRefresh((count) => count + 1);
       }
       handleEffects(effects);
     },
-    [userId, commit, handleEffects],
+    [userId, commit, handleEffects, reload],
   );
 
   useEffect(
@@ -419,9 +477,13 @@ export function Desk() {
         delete next[orderId];
         return next;
       });
+      const before = deskRef.current.orders.find((row) => row.id === orderId);
       const optimistic = optimisticStatus(deskRef.current, orderId, nextKey);
       if (optimistic) {
         commit(optimistic.state);
+        if (before) {
+          setViewCounts((current) => shiftViewCounts(current, before, optimistic.previousKey, nextKey, closedRef.current));
+        }
       }
       pendingStatus.current.set(orderId, nextKey);
       setSavingIds((current) => new Set(current).add(orderId));
@@ -468,7 +530,13 @@ export function Desk() {
       } catch (e) {
         pendingStatus.current.delete(orderId);
         if (optimistic) {
-          commit(rollbackStatus(deskRef.current, orderId, nextKey, optimistic.previousKey));
+          const rolled = rollbackStatus(deskRef.current, orderId, nextKey, optimistic.previousKey);
+          if (rolled !== deskRef.current) {
+            commit(rolled);
+            if (before) {
+              setViewCounts((current) => shiftViewCounts(current, before, nextKey, optimistic.previousKey, closedRef.current));
+            }
+          }
         }
         const message = e instanceof StatusRefused ? e.message : "Not saved. Try again.";
         setRowErrors((current) => ({ ...current, [orderId]: message }));
@@ -628,7 +696,16 @@ export function Desk() {
   const showBanner =
     role === "platform" && !drafts.enabled && drafts.missingScopes.length > 0 && !bannerHidden && load.status === "ready";
   const chips = useMemo(() => statusChips(statuses, desk.statusCounts), [statuses, desk.statusCounts]);
-  const visible = useMemo(() => selectOrders(desk.orders, filter), [desk.orders, filter]);
+  const visible = useMemo(
+    () => selectOrders(desk.orders, view === "approval" ? { ...filter, kind: "all" } : filter, closedKeys),
+    [desk.orders, filter, view, closedKeys],
+  );
+  const viewChips = useMemo(() => chipsForView(chips, view, closedKeys), [chips, view, closedKeys]);
+  // Drafts and Deleted counts for what this view holds.
+  const kindCounts = useMemo(
+    () => deskKindCounts(desk.orders.filter((row) => viewMatches(row, view === "approval" ? "open" : view, closedKeys))),
+    [desk.orders, view, closedKeys],
+  );
   const total = totalOrders(desk.statusCounts);
   const drawerSummary = drawerOrderId ? desk.orders.find((order) => order.id === drawerOrderId) : undefined;
   const drawerTimeline =
@@ -652,20 +729,31 @@ export function Desk() {
         {showToolbar ? (
           <Toolbar
             layout={isDesk ? "row" : "phone"}
+            view={view}
+            onView={(next) =>
+              setFilter((current) => ({
+                ...current,
+                view: next,
+                statusKey: null,
+                sort: current.sort === defaultSort(current.view ?? "open") ? defaultSort(next) : current.sort,
+              }))
+            }
+            viewCounts={viewCounts}
+            showApproval={roleAtLeast(role, "manager")}
             statusKey={filter.statusKey}
             onStatus={(statusKey) => setFilter((current) => ({ ...current, statusKey }))}
-            statusChips={chips}
+            statusChips={viewChips}
             query={filter.query}
             onQuery={(query) => setFilter((current) => ({ ...current, query }))}
             sort={filter.sort}
             onSort={(sort) => setFilter((current) => ({ ...current, sort }))}
             kindFilter={
-              showKindFilter
+              showKindFilter && view !== "approval"
                 ? {
                     kind: filter.kind ?? "all",
                     onKind: (kind: DeskKind) => setFilter((current) => ({ ...current, kind })),
-                    draftCount: drafts.draftCount,
-                    deletedCount: drafts.deletedDraftCount,
+                    draftCount: kindCounts.drafts,
+                    deletedCount: kindCounts.deleted,
                   }
                 : null
             }
@@ -703,6 +791,7 @@ export function Desk() {
           <>
             {visible.length === 0 ? (
               <NoMatches
+                view={view}
                 query={filter.query}
                 kind={filter.kind ?? "all"}
                 statusLabel={
@@ -713,18 +802,20 @@ export function Desk() {
                 onClear={() => setFilter((current) => ({ ...current, query: "", statusKey: null, kind: "all" }))}
               />
             ) : (
-              <OrderList
-                layout={isDesk ? "table" : "cards"}
-                orders={visible}
-                statuses={statuses}
-                role={role}
-                flashing={flashing}
-                rowErrors={rowErrors}
-                savingIds={savingIds}
-                now={now}
-                onOpen={openOrder}
-                onChangeStatus={changeStatus}
-              />
+              <div aria-busy={switching || undefined} className={switching ? "opacity-60 transition-opacity" : undefined}>
+                <OrderList
+                  layout={isDesk ? "table" : "cards"}
+                  orders={visible}
+                  statuses={statuses}
+                  role={role}
+                  flashing={flashing}
+                  rowErrors={rowErrors}
+                  savingIds={savingIds}
+                  now={now}
+                  onOpen={openOrder}
+                  onChangeStatus={changeStatus}
+                />
+              </div>
             )}
             {hasMore ? (
               <p className="text-xs text-ink-2">

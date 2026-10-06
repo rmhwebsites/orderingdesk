@@ -20,6 +20,10 @@ const base: ToolbarProps = {
   onSort: () => {},
   kindFilter: { kind: "all", onKind: () => {}, draftCount: 5, deletedCount: 0 },
   shown: 34,
+  view: "open",
+  onView: () => {},
+  viewCounts: { open: 23, approval: 3, all: 35, closed: 12 },
+  showApproval: true,
 };
 
 const render = (overrides: Partial<ToolbarProps> = {}) => renderToStaticMarkup(createElement(Toolbar, { ...base, ...overrides }));
@@ -43,7 +47,7 @@ describe("Toolbar", () => {
 
   it("is one row on phones, with search and the other filters behind buttons", () => {
     const closed = render({ layout: "phone" });
-    expect(closed).toContain('id="desk-status"');
+    expect(closed).toContain('id="desk-view"');
     expect(closed).not.toContain('id="desk-search"');
     expect(closed).not.toContain('id="desk-sort"');
     expect(closed.match(/aria-expanded="false"/g)).toHaveLength(2);
@@ -63,5 +67,30 @@ describe("Toolbar", () => {
     expect(off).not.toContain("bg-primary-strong");
     // Spaces alone filter nothing (selectOrders trims), so they are not on.
     expect(searchButton(render({ layout: "phone", query: "  " }))).toContain('<span class="sr-only">Search</span>');
+  });
+});
+
+describe("Toolbar views", () => {
+  it("starts the row with the views and their counts, Needs approval only for those who approve", () => {
+    const html = render();
+    expect(html.indexOf('name="desk-view"')).toBeLessThan(html.indexOf('id="desk-status"'));
+    // React writes checked before value on a radio.
+    expect(html).toMatch(/<input[^>]*name="desk-view"[^>]*checked=""[^>]*value="open"/);
+    expect(html).toContain("Needs approval");
+    expect(html).toContain(">35<");
+    expect(render({ showApproval: false })).not.toContain("Needs approval");
+  });
+
+  it("puts the view first on phones, as one select with counts, and the status behind More filters", () => {
+    const html = render({ layout: "phone" });
+    expect(html).toContain(">Open (23)</option>");
+    expect(html).toContain(">Needs approval (3)</option>");
+    expect(html).not.toContain('id="desk-status"');
+  });
+
+  it("offers Waiting longest instead of Highest total", () => {
+    const html = render();
+    expect(html).toContain(">Waiting longest</option>");
+    expect(html).not.toContain("Highest total");
   });
 });
