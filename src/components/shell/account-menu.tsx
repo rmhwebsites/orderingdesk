@@ -167,7 +167,7 @@ export function AccountMenu({
               setOpen(false);
             }
           }}
-          className="od-rise absolute right-0 top-full z-10 mt-2 w-[min(18rem,calc(100vw-2rem))] rounded-panel border border-line bg-surface shadow-lift focus:outline-none"
+          className="od-rise absolute right-0 top-full z-10 mt-2 w-[min(20rem,calc(100vw-2rem))] rounded-panel border border-line bg-surface shadow-lift focus:outline-none"
         >
           <AccountMenuPanel
             account={account}

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { workspaceIcons } from "@/lib/brand-assets";
+import { workspaceAccountView } from "@/server/account";
 import { AuthError, requireMemberBySlug } from "@/server/guard";
 import { slugRouteForHost } from "@/server/host";
 import { requestHost } from "@/server/request-host";
@@ -56,10 +57,11 @@ export default async function WorkspaceLayout({
     }
     throw e;
   }
-  const { workspace, role, userId } = guarded;
+  const { workspace, role, userId, viewer, session, db, env } = guarded;
+  const account = await workspaceAccountView(db, env, { viewer, name: session.user.name, role, clientHost: false });
 
   return (
-    <WorkspaceShell workspace={workspace} role={role} userId={userId} clientHost={false}>
+    <WorkspaceShell workspace={workspace} role={role} userId={userId} clientHost={false} account={account}>
       {children}
     </WorkspaceShell>
   );

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { isValidElement, type ReactElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { eq } from "drizzle-orm";
 import type { Db } from "@/db";
 import * as schema from "@/db/schema";
@@ -16,6 +17,7 @@ const state: {
 
 vi.mock("next/headers", () => ({ headers: async () => new Headers({ host: state.host }) }));
 vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push() {}, replace() {}, refresh() {} }),
   redirect: (to: string) => {
     throw new Error(`REDIRECT ${to}`);
   },
@@ -150,5 +152,16 @@ describe("/ claims a signed-in person's pending invites", () => {
     const element = (await outcome()) as ReactElement<{ role: string }>;
     expect(element.type).toBe(WorkspaceShell);
     expect(element.props.role).toBe("staff");
+  });
+});
+
+describe("the hub header", () => {
+  it("puts the account controls in one menu that fits a phone", async () => {
+    state.session = { user: { id: "u_boss", email: "boss@example.com" } };
+    const html = renderToStaticMarkup((await outcome()) as ReactElement);
+    expect(html).toContain('aria-label="Account menu for boss@example.com"');
+    expect(html).not.toContain("Signed in as");
+    expect(html).not.toContain(">Sign out<");
+    expect(html).not.toContain('name="theme"');
   });
 });

@@ -12,8 +12,9 @@ import { APP_NAME } from "@/lib/brand";
 import type { BrandImages } from "@/lib/brand-assets";
 import { CHIP_TONE_COLOR, syncChipState, type ChipTone } from "@/lib/sync-status";
 import { useNow } from "@/lib/use-now";
-import { ThemeToggle } from "@/components/theme-toggle";
+import type { AccountView } from "@/server/account";
 import { ui } from "@/components/ui";
+import { AccountMenu, type AccountSync } from "./account-menu";
 import { Bell } from "./bell";
 import { useWorkspace } from "./workspace-provider";
 import { WorkspaceBrandSlot } from "./workspace-brand-slot";
@@ -43,22 +44,22 @@ function chipIcon(tone: ChipTone, label: string) {
   }
 }
 
+// The sync state from sm up (phones get it in the account menu).
 function SyncChip() {
   const { sync, liveStatus } = useWorkspace();
   const now = useNow(30000);
   const state = syncChipState(sync, now || Date.now());
 
   if (state.kind === "loading") {
-    return <span className="od-skeleton h-8 w-36" aria-label="Loading sync status" />;
+    return <span className="od-skeleton hidden h-8 w-36 sm:block" aria-label="Loading sync status" />;
   }
   return (
-    // shrink-0: the chip never collapses below its icon and label (the
-    // top bar wraps first, and from lg the workspace name truncates
-    // instead; see TopBar).
+    // shrink-0: the chip never collapses below its icon and label; a long
+    // workspace name truncates instead.
     <span
       data-tone={CHIP_TONE_COLOR[state.tone]}
       title={LIVE_TEXT[liveStatus]}
-      className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-control bg-tone-fill px-3 text-xs font-semibold text-tone-text"
+      className="hidden h-8 shrink-0 items-center gap-1.5 rounded-control bg-tone-fill px-3 text-xs font-semibold text-tone-text sm:inline-flex"
     >
       {chipIcon(state.tone, state.label)}
       <span>{state.label}</span>
@@ -67,6 +68,7 @@ function SyncChip() {
   );
 }
 
+// From lg; below it, Sync now lives in the account menu.
 function SyncButton() {
   const { manual, runManualSync } = useWorkspace();
   const now = useNow(1000);
@@ -81,7 +83,7 @@ function SyncButton() {
       disabled={manual.running || coolingDown}
       aria-busy={manual.running || undefined}
       aria-label={coolingDown ? `Sync available in ${waitSeconds} seconds` : "Sync orders from Shopify now"}
-      className={`${ui.buttonPrimary} h-9 min-w-[6.5rem] tabular-nums`}
+      className={`${ui.buttonPrimary} h-9 min-w-[6.5rem] tabular-nums max-lg:hidden`}
     >
       <ArrowsClockwiseIcon size={16} aria-hidden className={manual.running ? "od-spin" : undefined} />
       {label}
@@ -89,49 +91,54 @@ function SyncButton() {
   );
 }
 
-// Below lg the bar wraps: the workspace and its controls on the first row,
-// the sync state and the Sync button on a full-width second row, so the
-// sync state (including "Sync failing") is always readable next to a wide
-// logo. From lg everything shares one row: the sync row and the controls
-// keep their size and a long workspace name truncates (the brand link may
-// shrink, lg:flex-initial with min-w-0).
-export function TopBar({ name, images }: { name: string; images: BrandImages }) {
+// The account menu with this workspace's Settings and Sync now.
+function WorkspaceAccount({ account }: { account: AccountView }) {
+  const { workspace, sync, manual, runManualSync } = useWorkspace();
+  const now = useNow(30000);
+  const state = syncChipState(sync, now || Date.now());
+  const coolingDown = now > 0 && manual.cooldownUntil > now;
+  const syncItem: AccountSync | null =
+    state.kind === "ready"
+      ? { label: state.label, tip: null, running: manual.running, disabled: manual.running || coolingDown, onSync: runManualSync }
+      : null;
+  return <AccountMenu account={account} settingsHref={`${workspace.basePath}/settings`} sync={syncItem} />;
+}
+
+// One 56px row at every width: the workspace (its name truncates first),
+// the sync chip from sm, the Sync button from lg, Settings from sm, the
+// bell, and the account menu last so its panel, right aligned to it, stays
+// on screen.
+export function TopBar({ name, images, account }: { name: string; images: BrandImages; account: AccountView }) {
   const { workspace } = useWorkspace();
   return (
     // z-30: the top layer of the page itself; the drawer (z-40) and toasts
     // (z-50) sit above it.
     <header className="sticky top-0 z-30 border-b border-line bg-surface">
-      <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5 sm:px-6 lg:flex-nowrap">
+      <div className="mx-auto flex h-14 max-w-[1400px] items-center gap-2 px-4 sm:gap-3 sm:px-6">
         {/* On a client host "/" is this workspace itself; on the hub it
             is the workspace list. */}
         <Link
           href="/"
           title={workspace.basePath === "" ? "Orders" : "All workspaces"}
-          className="order-1 -m-1 flex min-w-0 flex-1 items-center gap-3 rounded-control p-1 lg:flex-initial"
+          className="-m-1 flex min-w-0 flex-1 items-center gap-3 rounded-control p-1 lg:flex-initial"
         >
           <WorkspaceBrandSlot name={name} images={images} />
           <span className="min-w-0">
-            <span className="block truncate font-display text-[15px] font-semibold leading-tight text-ink">
-              {name}
-            </span>
+            <span className="block truncate font-display text-[15px] font-semibold leading-tight text-ink">{name}</span>
             <span className="block text-xs leading-tight text-ink-2">{APP_NAME}</span>
           </span>
         </Link>
 
-        <div className="order-3 flex w-full min-w-0 items-center justify-between gap-2 lg:order-2 lg:ml-auto lg:w-auto lg:shrink-0 lg:justify-end">
+        <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-2">
           <SyncChip />
           <SyncButton />
-        </div>
-
-        <div className="order-2 flex shrink-0 items-center gap-1 lg:order-3">
-          <ThemeToggle />
           {/* Every member: each role sees its own Settings sections. */}
-          <Link href={`${workspace.basePath}/settings`} className={`${ui.buttonQuiet} h-10`}>
+          <Link href={`${workspace.basePath}/settings`} className={`${ui.buttonQuiet} h-10 max-sm:hidden`}>
             <GearSixIcon size={18} aria-hidden />
-            <span className="sr-only sm:not-sr-only">Settings</span>
+            <span className="sr-only lg:not-sr-only">Settings</span>
           </Link>
-          {/* Last, so its dropdown, right aligned to it, stays on screen. */}
           <Bell />
+          <WorkspaceAccount account={account} />
         </div>
       </div>
     </header>

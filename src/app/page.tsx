@@ -5,6 +5,7 @@ import { accentStyle } from "@/lib/accent";
 import { APP_NAME } from "@/lib/brand";
 import { workspaceIcons } from "@/lib/brand-assets";
 import { roleLabel } from "@/lib/roles";
+import { workspaceAccountView } from "@/server/account";
 import { AuthError, requireMemberBySlug, requireSession } from "@/server/guard";
 import type { HostWorkspace } from "@/server/host";
 import { hubView } from "@/server/hub";
@@ -12,9 +13,9 @@ import { claimAccessOnSignIn } from "@/server/invites";
 import { requestHost } from "@/server/request-host";
 import { listWorkspacesForViewer } from "@/server/workspaces";
 import { Desk } from "@/components/desk/desk";
+import { AccountMenu } from "@/components/shell/account-menu";
 import { ThemedImage } from "@/components/shell/workspace-brand-slot";
 import { WorkspaceShell } from "@/components/shell/workspace-shell";
-import { ThemeToggle } from "@/components/theme-toggle";
 import { Monogram } from "@/components/kit";
 import { ui } from "@/components/ui";
 import { NewWorkspaceForm } from "./new-workspace-form";
@@ -60,8 +61,14 @@ async function clientHostDesk(workspace: HostWorkspace) {
     }
     throw e;
   }
+  const account = await workspaceAccountView(guarded.db, guarded.env, {
+    viewer: guarded.viewer,
+    name: guarded.session.user.name,
+    role: guarded.role,
+    clientHost: true,
+  });
   return (
-    <WorkspaceShell workspace={guarded.workspace} role={guarded.role} userId={guarded.userId} clientHost>
+    <WorkspaceShell workspace={guarded.workspace} role={guarded.role} userId={guarded.userId} clientHost account={account}>
       <Desk />
     </WorkspaceShell>
   );
@@ -120,23 +127,17 @@ export default async function Home() {
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-xl flex-col gap-10 px-4 py-10 sm:px-6 sm:py-14">
-      <header className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <h1 className="font-display text-2xl font-semibold tracking-tight">{APP_NAME}</h1>
-          <p className="mt-1 break-words text-sm text-ink-2">Signed in as {viewer.email}</p>
-          {viewer.platformAdmin ? (
-            <p className="mt-1 text-xs font-semibold text-ink-2">{roleLabel("platform")}</p>
-          ) : null}
-        </div>
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-          {viewer.platformAdmin ? (
-            <Link href="/admin" className={ui.buttonQuiet}>
-              Platform admin
-            </Link>
-          ) : null}
-          <ThemeToggle />
-          <SignOutButton />
-        </div>
+      <header className="flex items-center justify-between gap-4">
+        <h1 className="min-w-0 truncate font-display text-2xl font-semibold tracking-tight">{APP_NAME}</h1>
+        <AccountMenu
+          account={{
+            name: guarded.session.user.name?.trim() || null,
+            email: viewer.email,
+            roleLabel: viewer.platformAdmin ? roleLabel("platform") : null,
+            switchHref: null,
+            links: viewer.platformAdmin ? [{ href: "/admin", label: "Platform admin" }] : [],
+          }}
+        />
       </header>
 
       <section aria-labelledby="workspaces-heading" className="flex flex-col gap-3">

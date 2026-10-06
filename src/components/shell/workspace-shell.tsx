@@ -1,6 +1,7 @@
 import { brandImages } from "@/lib/brand-assets";
 import type { WorkspaceBranding } from "@/lib/branding";
 import type { Role } from "@/lib/roles";
+import type { AccountView } from "@/server/account";
 import { DevicePushSetup, InstallHint } from "./app-install";
 import { BrandScope } from "./brand-scope";
 import { SyncBanner } from "./sync-banner";
@@ -16,6 +17,7 @@ export function WorkspaceShell({
   role,
   userId,
   clientHost,
+  account,
   children,
 }: {
   workspace: {
@@ -29,6 +31,8 @@ export function WorkspaceShell({
   userId: string;
   // True on the workspace's own client host, which serves it at "/".
   clientHost: boolean;
+  // The account menu's contents (src/server/account.ts).
+  account: AccountView;
   children: React.ReactNode;
 }) {
   return (
@@ -50,7 +54,7 @@ export function WorkspaceShell({
           {/* Made inert while the order drawer is open (it renders into
               #workspace-overlays, inside the brand scope). */}
           <div id="workspace-main" className="flex min-h-dvh flex-col">
-            <TopBar name={workspace.name} images={brandImages(workspace.id, workspace.branding)} />
+            <TopBar name={workspace.name} images={brandImages(workspace.id, workspace.branding)} account={account} />
             <SyncBanner />
             <InstallHint />
             <div className="flex-1">{children}</div>

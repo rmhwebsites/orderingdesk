@@ -3,21 +3,29 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 // The top bar on the server, with the workspace context stood in.
-vi.mock("./workspace-provider", () => ({
-  useWorkspace: () => ({
+const state = vi.hoisted(() => ({
+  value: {
     workspace: { id: "ws_impact", slug: "impact", name: "Impact", basePath: "" },
+    role: "manager",
+    userId: "u_me",
     liveStatus: "live",
     sync: { status: "ready", connection: null },
+    connection: null,
     manual: { running: false, cooldownUntil: 0, failure: null },
     runManualSync: () => {},
     subscribe: () => () => {},
-  }),
+  } as Record<string, unknown>,
 }));
+vi.mock("./workspace-provider", () => ({ useWorkspace: () => state.value }));
 vi.mock("@/components/toasts", () => ({ useToast: () => () => {} }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ replace() {}, refresh() {} }) }));
 
 const { TopBar } = await import("./top-bar");
 
+const ACCOUNT = { name: "Casey Lin", email: "casey@example.com", roleLabel: "Manager", switchHref: null, links: [] };
 const LONG_NAME = "Impact Rentals Construction Equipment and Site Services of Southern Ontario Ltd.";
+const render = (name = "Impact") =>
+  renderToStaticMarkup(createElement(TopBar, { name, images: { logo: null, symbol: null }, account: ACCOUNT }));
 
 function classOf(html: string, marker: RegExp): string {
   const match = html.match(marker);
@@ -27,37 +35,29 @@ function classOf(html: string, marker: RegExp): string {
   return match[1];
 }
 
-describe("TopBar from lg up", () => {
-  it("lets a long workspace name shrink and truncate instead of running under the sync chip", () => {
+describe("TopBar", () => {
+  it("is one 56px row with the account menu last and the theme switch inside it", () => {
+    const html = render();
+    const bar = classOf(html, /<header[^>]*><div class="([^"]*)"/).split(" ");
+    expect(bar).toContain("h-14");
+    expect(bar).not.toContain("flex-wrap");
+    expect(html.indexOf('aria-label="Activity"')).toBeLessThan(html.indexOf("Account menu for Casey Lin"));
+    // The account button is the last button in the bar.
+    expect(html.slice(html.lastIndexOf("<button"))).toMatch(/^<button[^>]*aria-label="Account menu for Casey Lin"/);
+    expect(html).not.toContain('name="theme"');
+  });
+
+  it("lets a long workspace name shrink and truncate", () => {
     expect(LONG_NAME).toHaveLength(80);
-    const html = renderToStaticMarkup(createElement(TopBar, { name: LONG_NAME, images: { logo: null, symbol: null } }));
-    // The brand link may shrink (flex: 0 1 auto) and min-w-0 lets it go
-    // below its content, so the name's truncate takes effect.
-    const brand = classOf(html, /<a[^>]*title="Orders"[^>]*class="([^"]*)"/).split(" ");
-    expect(brand).toContain("lg:flex-initial");
+    const brand = classOf(render(LONG_NAME), /<a[^>]*title="Orders"[^>]*class="([^"]*)"/).split(" ");
     expect(brand).toContain("min-w-0");
-    expect(brand).not.toContain("lg:flex-none");
-    // The chip row keeps its size; the name gives way.
-    const chipRow = classOf(html, /<div class="([^"]*lg:order-2[^"]*)"/).split(" ");
-    expect(chipRow).toContain("lg:shrink-0");
-    // The chip itself never shrinks, so min-w-0 and a truncating label did
-    // nothing there.
+    expect(brand).toContain("lg:flex-initial");
+  });
+
+  it("keeps the sync chip from shrinking, and the Sync button for the large breakpoint", () => {
+    const html = render();
     const chip = classOf(html, /<span data-tone="[^"]+" title="[^"]+" class="([^"]*)"/).split(" ");
     expect(chip).toContain("shrink-0");
-    expect(chip).not.toContain("min-w-0");
-    expect(html).not.toMatch(/<span class="truncate">Store not connected<\/span>/);
-  });
-});
-
-describe("TopBar bell", () => {
-  // Last in the controls row, so its dropdown (right aligned to it) stays
-  // on screen at phone width.
-  it("puts the activity bell last in the controls row, labeled for screen readers", () => {
-    const html = renderToStaticMarkup(createElement(TopBar, { name: "Impact", images: { logo: null, symbol: null } }));
-    const controls = html.match(/<div class="[^"]*lg:order-3[^"]*">([\s\S]*)<\/div><\/div><\/header>/);
-    expect(controls).not.toBeNull();
-    const row = controls![1];
-    expect(row.lastIndexOf('aria-label="Activity"')).toBeGreaterThan(row.lastIndexOf("Settings"));
-    expect(html).toContain('aria-expanded="false"');
+    expect(html).toMatch(/<button[^>]*aria-label="Sync orders from Shopify now"[^>]*class="[^"]*max-lg:hidden/);
   });
 });

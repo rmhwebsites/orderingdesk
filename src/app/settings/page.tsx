@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { workspaceIcons } from "@/lib/brand-assets";
+import { workspaceAccountView } from "@/server/account";
 import { AuthError, requireMemberBySlug } from "@/server/guard";
 import { requestHost } from "@/server/request-host";
 import { loadSettingsPage } from "@/server/settings-page";
@@ -42,16 +43,19 @@ export default async function ClientHostSettingsPage() {
     }
     throw e;
   }
-  const { db, env, workspace, role, userId, viewer } = guarded;
-  const data = await loadSettingsPage(db, env, {
-    workspace,
-    role,
-    userId,
-    basePath: "",
-    platformAdminOnClientHost: viewer.platformAdminOnClientHost === true,
-  });
+  const { db, env, workspace, role, userId, viewer, session } = guarded;
+  const [data, account] = await Promise.all([
+    loadSettingsPage(db, env, {
+      workspace,
+      role,
+      userId,
+      basePath: "",
+      platformAdminOnClientHost: viewer.platformAdminOnClientHost === true,
+    }),
+    workspaceAccountView(db, env, { viewer, name: session.user.name, role, clientHost: true }),
+  ]);
   return (
-    <WorkspaceShell workspace={workspace} role={role} userId={userId} clientHost>
+    <WorkspaceShell workspace={workspace} role={role} userId={userId} clientHost account={account}>
       <SettingsPage data={data} />
     </WorkspaceShell>
   );
