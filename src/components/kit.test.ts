@@ -112,6 +112,33 @@ describe("Segmented", () => {
     expect(html).toContain('<span class="sr-only">Dark</span>');
     expect(html).not.toContain('checked=""');
   });
+
+  it("draws each option's focus ring inside the option, so the scrolling track cannot clip it", () => {
+    const html = renderToStaticMarkup(
+      createElement(Segmented, {
+        name: "theme",
+        legend: "Theme",
+        value: "light",
+        options: [
+          { value: "light", label: "Light" },
+          { value: "dark", label: "Dark" },
+        ],
+        onChange: () => {},
+      }),
+    );
+    // The track scrolls at narrow widths, and a scrolling box clips whatever
+    // is drawn outside it on every side. Its 2px padding cannot hold a ring
+    // drawn 2px to 4px outside an option.
+    const track = html.match(/<div class="([^"]*)"/)?.[1] ?? "";
+    expect(track).toContain("overflow-x-auto");
+    const labels = (html.match(/<label[^>]*>/g) ?? []).map((tag) => tag.match(/class="([^"]*)"/)?.[1] ?? "");
+    expect(labels).toHaveLength(2);
+    for (const label of labels) {
+      expect(label).toContain("has-[:focus-visible]:outline-2");
+      expect(label).toContain("has-[:focus-visible]:-outline-offset-2");
+      expect(label).not.toMatch(/(^|[\s:])outline-offset-[1-9]/);
+    }
+  });
 });
 
 describe("Monogram and Spinner", () => {

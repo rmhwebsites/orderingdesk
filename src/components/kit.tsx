@@ -159,7 +159,9 @@ export type SegmentedOption<T extends string> = {
 // A one-of-several choice as a native radio group: arrow keys move between
 // options and the group is one tab stop. The active option carries a bar in
 // primary-strong (a plain primary can read under 3:1 on light surfaces;
-// lime reads at 1.76:1). 40px tall on touch screens.
+// lime reads at 1.76:1). 40px tall on touch screens. The focus ring sits
+// inside each option: the track scrolls, and a scrolling box clips anything
+// drawn outside it.
 export function Segmented<T extends string>({
   name,
   legend,
@@ -187,7 +189,7 @@ export function Segmented<T extends string>({
             <label
               key={option.value}
               title={option.iconOnly ? option.label : undefined}
-              className={`relative inline-flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-control text-sm transition-colors pointer-coarse:h-10 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-focus ${
+              className={`relative inline-flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-control text-sm transition-colors pointer-coarse:h-10 has-[:focus-visible]:outline-2 has-[:focus-visible]:-outline-offset-2 has-[:focus-visible]:outline-focus ${
                 size === "sm" ? "h-8 px-2.5" : "h-9 px-3.5"
               } ${checked ? "bg-surface font-semibold text-ink shadow-panel" : "text-ink-2 hover:text-ink"}`}
             >

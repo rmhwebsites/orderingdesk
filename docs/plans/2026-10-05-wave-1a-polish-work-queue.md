@@ -172,6 +172,33 @@ describe("Segmented", () => {
     expect(html).toContain('<span class="sr-only">Dark</span>');
     expect(html).not.toContain('checked=""');
   });
+
+  it("draws each option's focus ring inside the option, so the scrolling track cannot clip it", () => {
+    const html = renderToStaticMarkup(
+      createElement(Segmented, {
+        name: "theme",
+        legend: "Theme",
+        value: "light",
+        options: [
+          { value: "light", label: "Light" },
+          { value: "dark", label: "Dark" },
+        ],
+        onChange: () => {},
+      }),
+    );
+    // The track scrolls at narrow widths, and a scrolling box clips whatever
+    // is drawn outside it on every side. Its 2px padding cannot hold a ring
+    // drawn 2px to 4px outside an option.
+    const track = html.match(/<div class="([^"]*)"/)?.[1] ?? "";
+    expect(track).toContain("overflow-x-auto");
+    const labels = (html.match(/<label[^>]*>/g) ?? []).map((tag) => tag.match(/class="([^"]*)"/)?.[1] ?? "");
+    expect(labels).toHaveLength(2);
+    for (const label of labels) {
+      expect(label).toContain("has-[:focus-visible]:outline-2");
+      expect(label).toContain("has-[:focus-visible]:-outline-offset-2");
+      expect(label).not.toMatch(/(^|[\s:])outline-offset-[1-9]/);
+    }
+  });
 });
 
 describe("Monogram and Spinner", () => {
@@ -358,7 +385,9 @@ export type SegmentedOption<T extends string> = {
 // A one-of-several choice as a native radio group: arrow keys move between
 // options and the group is one tab stop. The active option carries a bar in
 // primary-strong (a plain primary can read under 3:1 on light surfaces;
-// lime reads at 1.76:1). 40px tall on touch screens.
+// lime reads at 1.76:1). 40px tall on touch screens. The focus ring sits
+// inside each option: the track scrolls, and a scrolling box clips anything
+// drawn outside it.
 export function Segmented<T extends string>({
   name,
   legend,
@@ -386,7 +415,7 @@ export function Segmented<T extends string>({
             <label
               key={option.value}
               title={option.iconOnly ? option.label : undefined}
-              className={`relative inline-flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-control text-sm transition-colors pointer-coarse:h-10 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-focus ${
+              className={`relative inline-flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-control text-sm transition-colors pointer-coarse:h-10 has-[:focus-visible]:outline-2 has-[:focus-visible]:-outline-offset-2 has-[:focus-visible]:outline-focus ${
                 size === "sm" ? "h-8 px-2.5" : "h-9 px-3.5"
               } ${checked ? "bg-surface font-semibold text-ink shadow-panel" : "text-ink-2 hover:text-ink"}`}
             >
@@ -444,7 +473,7 @@ export function Spinner({ size = 16 }: { size?: number }) {
 **Step 4: Run it and see it pass**
 
 Run: `npx vitest run src/components/kit.test.ts`
-Expected: PASS (7 tests).
+Expected: PASS (8 tests).
 
 **Step 5: Gates and commit**
 
