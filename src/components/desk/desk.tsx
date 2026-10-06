@@ -857,6 +857,9 @@ export function Desk() {
                       : (chips.find((chip) => chip.key === filter.statusKey)?.label ?? "this status")
                   }
                   onClear={() => updateDeskQuery({ q: "", status: null, kind: "all" })}
+                  // The same switch as picking All in the toolbar: the
+                  // search stays, the status (a per-view pick) clears.
+                  onSearchAll={view === "all" ? undefined : () => updateDeskQuery({ view: "all", status: null })}
                 />
               ) : (
                 <OrderList

@@ -40,6 +40,7 @@ describe("NoMatches", () => {
     kind?: "all" | "drafts" | "orders" | "deleted";
     statusLabel?: string | null;
     view?: "open" | "approval" | "all" | "closed";
+    onSearchAll?: () => void;
   }) =>
     renderToStaticMarkup(
       createElement(NoMatches, {
@@ -48,6 +49,7 @@ describe("NoMatches", () => {
         statusLabel: props.statusLabel ?? null,
         view: props.view,
         onClear: () => {},
+        onSearchAll: props.onSearchAll,
       }),
     );
 
@@ -100,5 +102,30 @@ describe("NoMatches", () => {
     expect(render({ view: "closed" })).toContain("Nothing closed yet");
     // A search in a view still says what matched nothing.
     expect(render({ view: "open", query: "vest" })).toContain("Nothing matches &quot;vest&quot;.");
+  });
+
+  // Until the server search (Wave 1c) covers every card, a search looks only
+  // in the loaded view, and the desk opens on Open: a search that misses
+  // there says so and offers the All view, where Delivered and Rejected
+  // cards are, since Clear filters leaves the view as it is.
+  it("says a search looks in this view only, and offers to search all cards", () => {
+    const searchAll = () => {};
+    for (const view of ["open", "approval", "closed"] as const) {
+      const html = render({ view, query: "vest", onSearchAll: searchAll });
+      expect(html).toContain("Search looks in this view only.");
+      expect(html).toContain(">Search all cards<");
+      expect(html).toContain(">Clear filters<");
+    }
+    // Nothing to offer in All, with no search, or with nowhere to switch.
+    for (const html of [
+      render({ view: "all", query: "vest", onSearchAll: searchAll }),
+      render({ view: "open", onSearchAll: searchAll }),
+      render({ view: "open", query: "   ", onSearchAll: searchAll }),
+      render({ view: "open", statusLabel: "Ordered", onSearchAll: searchAll }),
+      render({ view: "open", query: "vest" }),
+    ]) {
+      expect(html).not.toContain("this view only");
+      expect(html).not.toContain("Search all cards");
+    }
   });
 });

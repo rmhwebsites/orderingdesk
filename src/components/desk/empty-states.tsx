@@ -96,6 +96,7 @@ export function NoMatches({
   statusLabel,
   view = "all",
   onClear,
+  onSearchAll,
 }: {
   query: string;
   kind: DeskKind;
@@ -105,23 +106,40 @@ export function NoMatches({
   view?: DeskView;
   // Clears the search and the status, and goes back to All.
   onClear: () => void;
+  // Switches the address to the All view, keeping the search. Left out
+  // when the address already asks for All.
+  onSearchAll?: () => void;
 }) {
   const copy = noMatchesCopy(query.trim(), kind, statusLabel, view);
   const hintId = useId();
   // Clear filters only when something besides the view filters the list.
   const canClear = query.trim().length > 0 || kind !== "all" || statusLabel !== null;
+  // A search looks only in the loaded view until the server search (Wave
+  // 1c) covers every card, and Clear filters keeps the view, so a search
+  // that misses outside All offers the All view.
+  const searchAll = onSearchAll !== undefined && query.trim().length > 0 && view !== "all";
   return (
     <Frame icon={<ListMagnifyingGlassIcon size={24} aria-hidden />} title={copy.title}>
       <p className="max-w-[46ch] break-words text-sm text-ink-2">{copy.body}</p>
-      {canClear ? (
-        <button
-          type="button"
-          onClick={onClear}
-          aria-describedby={kind !== "all" ? hintId : undefined}
-          className={`${ui.buttonSecondary} mt-1`}
-        >
-          Clear filters
-        </button>
+      {searchAll ? <p className="max-w-[46ch] text-sm text-ink-2">Search looks in this view only.</p> : null}
+      {canClear || searchAll ? (
+        <div className="mt-1 flex flex-wrap gap-2 sm:justify-center">
+          {searchAll ? (
+            <button type="button" onClick={onSearchAll} className={ui.buttonSecondary}>
+              Search all cards
+            </button>
+          ) : null}
+          {canClear ? (
+            <button
+              type="button"
+              onClick={onClear}
+              aria-describedby={kind !== "all" ? hintId : undefined}
+              className={ui.buttonSecondary}
+            >
+              Clear filters
+            </button>
+          ) : null}
+        </div>
       ) : null}
       {canClear && kind !== "all" ? (
         <p id={hintId} className="max-w-[46ch] text-xs text-ink-2">
