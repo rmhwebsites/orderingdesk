@@ -95,8 +95,31 @@ export function PoRowActions({
   );
 }
 
+// The section's line when the order has no purchase order. needsPo: the
+// order's status label when that status usually needs one (owner decision
+// after the Wave 1a plan: Approve and next skips the review, so the order
+// says PO not created until it has one).
+export function PoEmptyNote({ canManage, needsPo }: { canManage: boolean; needsPo: string | null }) {
+  if (needsPo) {
+    return (
+      <InlineMessage tone="warn">
+        <span className="font-semibold">PO not created.</span>{" "}
+        {`${needsPo} usually needs a purchase order. ${canManage ? "Create it when you are ready." : "A manager creates it."}`}
+      </InlineMessage>
+    );
+  }
+  return (
+    <p className="text-sm text-ink-2">
+      {canManage
+        ? "No purchase orders yet. Create one to send this order's items to a vendor after you review it."
+        : "No purchase orders yet. A manager creates them."}
+    </p>
+  );
+}
+
 export function PurchaseOrders({
   orderId,
+  needsPo = null,
   canManage,
   refreshKey,
   onCreate,
@@ -104,6 +127,9 @@ export function PurchaseOrders({
   onChanged,
 }: {
   orderId: string;
+  // The order's status label when that status usually needs a purchase
+  // order (PoEmptyNote).
+  needsPo?: string | null;
   canManage: boolean;
   refreshKey: number;
   onCreate: () => void;
@@ -205,13 +231,7 @@ export function PurchaseOrders({
         </p>
       ) : null}
 
-      {list.status === "ready" && pos.length === 0 ? (
-        <p className="text-sm text-ink-2">
-          {canManage
-            ? "No purchase orders yet. Create one to send this order's items to a vendor after you review it."
-            : "No purchase orders yet. A manager creates them."}
-        </p>
-      ) : null}
+      {list.status === "ready" && pos.length === 0 ? <PoEmptyNote canManage={canManage} needsPo={needsPo} /> : null}
 
       {pos.length > 0 ? (
         <ul className="flex flex-col divide-y divide-line">

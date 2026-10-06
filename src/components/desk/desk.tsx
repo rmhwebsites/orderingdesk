@@ -6,10 +6,12 @@ import { XIcon } from "@phosphor-icons/react/X";
 import { defaultSort, parseDeskQuery, type DeskView, type ViewCounts } from "@/lib/desk-query";
 import {
   applyLiveEvent,
+  approvalNotice,
   arrivalNotice,
   chipsForView,
   crossesClosed,
   deskKindCounts,
+  nextWaitingRequest,
   optimisticStatus,
   rollbackStatus,
   selectOrders,
@@ -18,6 +20,7 @@ import {
   totalOrders,
   touchesPurchaseOrders,
   viewMatches,
+  withPurchaseOrder,
   type DeskFilter,
   type DeskKind,
   type DeskState,
@@ -132,7 +135,7 @@ function withDetailStatus(detail: DrawerDetail, change: LiveOrderStatus): Drawer
 }
 
 export function Desk() {
-  const { workspace, userId, role, connection, subscribe } = useWorkspace();
+  const { workspace, userId, role, connection, subscribe, refreshQueue } = useWorkspace();
   const toast = useToast();
   const searchParams = useSearchParams();
   const openOrderId = searchParams.get("order");
@@ -574,9 +577,11 @@ export function Desk() {
 
   // Approve a request (draft orders spec section 9.1): the error to show
   // inline, or null. The server is idempotent, so a retry after a lost
-  // answer never creates a second order.
+  // answer never creates a second order. openPo false (Approve and next)
+  // skips the purchase order review the status would open; the toast says
+  // to create it from the order, which says PO not created until then.
   const approve = useCallback(
-    async (orderId: string): Promise<string | null> => {
+    async (orderId: string, opts: { openPo: boolean } = { openPo: true }): Promise<string | null> => {
       let response: Response;
       try {
         response = await fetch(`/api/orders/${encodeURIComponent(orderId)}/approve`, { method: "POST" });
@@ -603,8 +608,9 @@ export function Desk() {
             applyEvent({ kind: "order.activity", event });
           }
         }
-        toast({ title: `Approved. Order ${body.orderName ?? ""} created in Shopify.`, tone: "good" });
-        if (body.triggersPo && canManagePos) {
+        const poLater = !opts.openPo && body.triggersPo === true && canManagePos;
+        toast({ ...approvalNotice(body.orderName ?? "", poLater), tone: "good" });
+        if (body.triggersPo && canManagePos && opts.openPo) {
           setPoModal({ orderId, po: null });
         }
       } else if (body.kind === "already-approved") {
@@ -613,12 +619,13 @@ export function Desk() {
         toast({ title: body.message ?? "This draft was already completed in Shopify.", tone: "info" });
       }
       void reload();
+      refreshQueue();
       if (openRef.current === orderId) {
         void loadDrawer(orderId, true);
       }
       return null;
     },
-    [applyEvent, toast, canManagePos, reload, loadDrawer],
+    [applyEvent, toast, canManagePos, reload, refreshQueue, loadDrawer],
   );
 
   // Reject a request with its reason (draft orders spec section 9.2).
@@ -652,12 +659,30 @@ export function Desk() {
           }
         }
         toast({ title: "Rejected. The reason is saved as a note.", tone: "good" });
+        refreshQueue();
       } else {
         toast({ title: "This request was already rejected.", tone: "info" });
       }
       return null;
     },
-    [applyEvent, toast],
+    [applyEvent, toast, refreshQueue],
+  );
+
+  // Approve and next (comprehensive desk design section 1): approve, then
+  // open the next waiting request in place of this one (no extra history
+  // entry, so Back still closes the drawer).
+  const approveAndNext = useCallback(
+    async (orderId: string, nextId: string): Promise<string | null> => {
+      const failure = await approve(orderId, { openPo: false });
+      if (failure) {
+        return failure;
+      }
+      const params = new URLSearchParams(window.location.search);
+      params.set("order", nextId);
+      window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
+      return null;
+    },
+    [approve],
   );
 
   // Opening pushes a history entry so the browser's back closes the drawer;
@@ -708,6 +733,7 @@ export function Desk() {
   );
   const total = totalOrders(desk.statusCounts);
   const drawerSummary = drawerOrderId ? desk.orders.find((order) => order.id === drawerOrderId) : undefined;
+  const nextRequest = drawerOrderId ? nextWaitingRequest(visible, drawerOrderId, closedKeys) : null;
   const drawerTimeline =
     drawerOrderId && desk.timeline?.orderId === drawerOrderId ? desk.timeline.events : [];
 
@@ -849,6 +875,8 @@ export function Desk() {
             onAddNote={(text) => addNote(drawerOrderId, text)}
             onApprove={() => approve(drawerOrderId)}
             onReject={(reason) => reject(drawerOrderId, reason)}
+            nextRequest={nextRequest}
+            onApproveAndNext={nextRequest ? () => approveAndNext(drawerOrderId, nextRequest.id) : undefined}
             onClose={closeOrder}
             onRetry={() => void loadDrawer(drawerOrderId, false)}
             canManagePos={canManagePos}
@@ -866,9 +894,13 @@ export function Desk() {
           orderId={poModal.orderId}
           po={poModal.po}
           onClose={() => setPoModal(null)}
-          onSaved={() => setPoRefresh((count) => count + 1)}
+          onSaved={() => {
+            setPoRefresh((count) => count + 1);
+            commit(withPurchaseOrder(deskRef.current, poModal.orderId));
+          }}
           onSent={(po) => {
             setPoRefresh((count) => count + 1);
+            commit(withPurchaseOrder(deskRef.current, poModal.orderId));
             toast({
               title: `Purchase order ${po.number ?? ""} sent`,
               body: po.vendor ? `To ${po.vendor.name}` : undefined,

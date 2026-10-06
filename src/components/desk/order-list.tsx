@@ -2,6 +2,7 @@
 
 import { InfoIcon } from "@phosphor-icons/react/Info";
 import { cardAge } from "@/lib/age";
+import { poNotCreated } from "@/lib/desk-state";
 import { formatDateTime, formatDay, formatMoney } from "@/lib/format";
 import type { Role } from "@/lib/roles";
 import { statusOptionsFor } from "@/lib/status-options";
@@ -88,6 +89,17 @@ function ItemsLine({ order }: { order: OrderSummary }) {
         </span>
       ) : null}
     </span>
+  );
+}
+
+// Owner decision after the Wave 1a plan: Approve and next skips the
+// purchase order review, so an order whose status usually needs one says so
+// until it has one.
+function PoMissing({ className = "" }: { className?: string }) {
+  return (
+    <Chip tone="amber" size="sm" title="This status usually needs a purchase order. Create it from the order." className={className}>
+      PO not created
+    </Chip>
   );
 }
 
@@ -249,7 +261,10 @@ export function OrderTable({
                   <CustomerLine order={order} />
                 </td>
                 <td className={`px-3 ${flash}`}>
-                  <ItemsLine order={order} />
+                  <span className="flex min-w-0 items-center gap-2">
+                    <ItemsLine order={order} />
+                    {poNotCreated(order, statuses) ? <PoMissing className="ml-auto" /> : null}
+                  </span>
                 </td>
                 <td className={`px-3 ${flash}`}>
                   <AgeBadge order={order} statuses={statuses} ageRule={ageRule} closedKeys={closedKeys} now={now} withLabel={false} />
@@ -319,7 +334,10 @@ export function OrderCards({
           </div>
           <div className="mt-2.5 flex items-center justify-between gap-3">
             <div className="relative z-10 flex min-w-0 flex-col items-start">
-              <RowStatus order={order} statuses={statuses} role={role} busy={savingIds.has(order.id)} onChangeStatus={onChangeStatus} />
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <RowStatus order={order} statuses={statuses} role={role} busy={savingIds.has(order.id)} onChangeStatus={onChangeStatus} />
+                {poNotCreated(order, statuses) ? <PoMissing /> : null}
+              </div>
               <RowError message={rowErrors[order.id]} />
             </div>
             <Total order={order} />

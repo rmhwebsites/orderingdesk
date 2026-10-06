@@ -3,17 +3,21 @@ import type { OrderSummary } from "@/server/desk/read";
 import type { EventView, StatusView } from "@/server/desk/shapes";
 import {
   applyLiveEvent,
+  approvalNotice,
   arrivalNotice,
   chipsForView,
   crossesClosed,
   deskKindCounts,
+  nextWaitingRequest,
   optimisticStatus,
+  poNotCreated,
   rollbackStatus,
   selectOrders,
   shiftViewCounts,
   statusChips,
   totalOrders,
   touchesPurchaseOrders,
+  withPurchaseOrder,
   type DeskState,
 } from "./desk-state";
 
@@ -48,6 +52,7 @@ function order(id: string, overrides: Partial<OrderSummary> = {}): OrderSummary 
     requestFor: "",
     branch: "",
     searchText: [],
+    hasPo: false,
     ...overrides,
   };
 }
@@ -493,5 +498,58 @@ describe("views", () => {
     expect(chipsForView(chips, "approval", closed).map((chip) => chip.key)).toEqual(["new", "gone"]);
     expect(chipsForView(chips, "closed", closed).map((chip) => chip.key)).toEqual(["delivered"]);
     expect(chipsForView(chips, "all", closed)).toHaveLength(3);
+  });
+});
+
+describe("nextWaitingRequest", () => {
+  it("finds the next request waiting after the current one, wrapping to the top", () => {
+    const closed = new Set(["rejected"]);
+    const list = [
+      order("d1", { kind: "draft", name: "#D1" }),
+      order("o1"),
+      order("d2", { kind: "draft", name: "#D2", statusKey: "rejected" }),
+      order("d3", { kind: "draft", name: "#D3" }),
+      order("d4", { kind: "draft", name: "#D4", draftDeleted: true }),
+    ];
+    expect(nextWaitingRequest(list, "d1", closed)).toEqual({ id: "d3", name: "#D3" });
+    expect(nextWaitingRequest(list, "d3", closed)).toEqual({ id: "d1", name: "#D1" });
+    expect(nextWaitingRequest(list, "zz", closed)).toEqual({ id: "d1", name: "#D1" });
+    expect(nextWaitingRequest([order("d1", { kind: "draft" })], "d1", closed)).toBeNull();
+  });
+});
+
+// Owner decision after the plan: Approve and next skips the purchase order
+// review, so an order that needs one says so until it has one.
+describe("purchase order hints", () => {
+  const poStatuses: StatusView[] = [
+    { key: "approved", label: "Approved", color: "green", sort: 0, triggersPo: true, shopifyLink: "draft_completed", closed: false },
+    { key: "new", label: "New", color: "lime", sort: 1, triggersPo: false, shopifyLink: null, closed: false },
+  ];
+
+  it("says PO not created for an order whose status triggers one and that has none", () => {
+    expect(poNotCreated(order("o1", { statusKey: "approved" }), poStatuses)).toBe(true);
+    expect(poNotCreated(order("o1", { statusKey: "approved", hasPo: true }), poStatuses)).toBe(false);
+    expect(poNotCreated(order("o1", { statusKey: "new" }), poStatuses)).toBe(false);
+    expect(poNotCreated(order("d1", { kind: "draft", statusKey: "approved" }), poStatuses)).toBe(false);
+  });
+
+  it("drops the hint once a purchase order is drafted, sent or fails, from a live entry or a save here", () => {
+    const state: DeskState = { orders: [order("o1", { statusKey: "approved" })], statusCounts: { approved: 1 }, timeline: null };
+    for (const type of ["po_draft", "po_sent", "po_failed"] as const) {
+      const after = applyLiveEvent(state, { kind: "order.activity", event: timelineEvent("e1", { orderId: "o1", type }) }, ME);
+      expect(after.state.orders[0].hasPo).toBe(true);
+    }
+    const other = applyLiveEvent(state, { kind: "order.activity", event: timelineEvent("e2", { orderId: "o1", type: "shopify_write" }) }, ME);
+    expect(other.state).toBe(state);
+    expect(withPurchaseOrder(state, "o1").orders[0].hasPo).toBe(true);
+    expect(withPurchaseOrder(state, "missing")).toBe(state);
+  });
+
+  it("tells the approver to create the purchase order later when Approve and next skipped its review", () => {
+    expect(approvalNotice("#1234", false)).toEqual({ title: "Approved. Order #1234 created in Shopify." });
+    expect(approvalNotice("#1234", true)).toEqual({
+      title: "Approved. Order #1234 created in Shopify.",
+      body: "Create its purchase order from the order when you are ready.",
+    });
   });
 });

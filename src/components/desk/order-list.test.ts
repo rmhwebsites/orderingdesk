@@ -38,6 +38,7 @@ function card(id: string, overrides: Partial<OrderSummary> = {}): OrderSummary {
     requestFor: "",
     branch: "",
     searchText: [],
+    hasPo: false,
     ...overrides,
   };
 }
@@ -116,5 +117,20 @@ describe("OrderList ages", () => {
     expect(table).toContain("In Delivered for 9 days");
     expect(table).not.toMatch(/data-tone="red"[^>]*><span aria-hidden="true">9d</);
     expect(render("cards", props)).toContain('<span aria-hidden="true">New, 3h</span>');
+  });
+});
+
+// Owner decision after the plan: Approve and next skips the purchase order
+// review, so the order says PO not created until it has one.
+describe("OrderList purchase order hint", () => {
+  it("marks an order whose status needs a purchase order and has none, on the row and the card", () => {
+    const statuses: StatusView[] = [
+      ...STATUSES,
+      { key: "approved", label: "Approved", color: "green", sort: 1, triggersPo: true, shopifyLink: "draft_completed", closed: false },
+    ];
+    const orders = [card("o1", { statusKey: "approved" }), card("o2", { statusKey: "approved", hasPo: true }), card("o3")];
+    for (const layout of ["table", "cards"] as const) {
+      expect(render(layout, { orders, statuses }).match(/>PO not created</g)).toHaveLength(1);
+    }
   });
 });

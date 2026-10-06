@@ -4,7 +4,7 @@
 
 import { and, asc, count, desc, eq, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@/db";
-import { events, orders, statuses, storeConnections, user, workspaceSettings, workspaces } from "@/db/schema";
+import { events, orders, purchaseOrders, statuses, storeConnections, user, workspaceSettings, workspaces } from "@/db/schema";
 import type { DeskView, ViewCounts } from "@/lib/desk-query";
 import type { QueueSettingsView } from "@/lib/queue-settings";
 import { requestFieldsOf } from "@/lib/request-fields";
@@ -67,6 +67,9 @@ export type OrderSummary = {
   branch: string;
   // What a desk search matches besides the name, customer, email and items.
   searchText: string[];
+  // The card has at least one purchase order, of any state (an order whose
+  // status triggers one says "PO not created" until it does).
+  hasPo: boolean;
 };
 
 function draftStatusOf(snapshot: unknown): OrderSummary["draftStatus"] {
@@ -116,7 +119,7 @@ function quantity(item: Record<string, unknown>): number {
 // snapshot is served per order by getOrderDetail. Snapshots are read
 // defensively: a malformed one degrades to empty fields instead of failing
 // the whole desk.
-function summarize(row: typeof orders.$inferSelect): OrderSummary {
+function summarize(row: typeof orders.$inferSelect, hasPo: boolean): OrderSummary {
   const snapshot = isRecord(row.shopify) ? row.shopify : {};
   const items = Array.isArray(snapshot.items) ? snapshot.items.filter(isRecord) : [];
   const kind = row.shopifyOrderId === null ? "draft" : "order";
@@ -153,6 +156,7 @@ function summarize(row: typeof orders.$inferSelect): OrderSummary {
     searchText: [row.draftName ?? "", request.company, request.location, request.requestFor, request.branch].filter(
       (part) => part.length > 0,
     ),
+    hasPo,
   };
 }
 
@@ -161,6 +165,8 @@ function summarize(row: typeof orders.$inferSelect): OrderSummary {
 const statusJoin = and(eq(statuses.workspaceId, orders.workspaceId), eq(statuses.key, orders.statusKey));
 const isOpen = sql`coalesce(${statuses.closed}, 0) = 0`;
 const isClosed = sql`coalesce(${statuses.closed}, 0) = 1`;
+// Whether a card has any purchase order (one indexed lookup per card).
+const hasPurchaseOrder = sql<number>`exists (select 1 from ${purchaseOrders} where ${purchaseOrders.orderId} = ${orders.id} and ${purchaseOrders.workspaceId} = ${orders.workspaceId})`;
 
 // Which cards a view loads (comprehensive desk design section 1). Deleted
 // requests come with Open, All and Closed; the desk's Deleted filter shows
@@ -226,7 +232,7 @@ export async function loadDesk(
       .groupBy(orders.statusKey),
     // One row past the cap answers hasMore without a second count query.
     db
-      .select({ order: orders })
+      .select({ order: orders, hasPo: hasPurchaseOrder })
       .from(orders)
       .leftJoin(statuses, statusJoin)
       .where(and(eq(orders.workspaceId, workspaceId), viewCondition(view)))
@@ -279,7 +285,7 @@ export async function loadDesk(
     statuses: statusRows.map(statusView),
     settings: settingsView(settingsRows[0]),
     statusCounts,
-    orders: orderRows.slice(0, limit).map((row) => summarize(row.order)),
+    orders: orderRows.slice(0, limit).map((row) => summarize(row.order, Boolean(row.hasPo))),
     hasMore: orderRows.length > limit,
     draftCount: draftsCounted(false),
     deletedDraftCount: draftsCounted(true),

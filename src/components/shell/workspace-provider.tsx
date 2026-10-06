@@ -5,7 +5,7 @@ import type { LiveEvent } from "@/lib/live-events";
 import { startSyncRechecks, syncAfterFailedCheck, type SyncLoadState } from "@/lib/sync-status";
 import { useLive, type LiveStatus } from "@/lib/use-live";
 import type { SyncConnectionView } from "@/server/desk/sync";
-import type { Role } from "@/lib/roles";
+import { roleAtLeast, type Role } from "@/lib/roles";
 import type { SyncResult } from "@/server/sync/run";
 import { useToast } from "@/components/toasts";
 
@@ -40,6 +40,11 @@ type WorkspaceContextValue = {
   manual: ManualSyncState;
   runManualSync: () => void;
   subscribe: (listener: (message: BusMessage) => void) => () => void;
+  // Requests waiting for approval (managers and platform admins; null for
+  // staff and until it loads).
+  needsApproval: number | null;
+  // Ask for the count again soon (after an approve, a reject, a bulk move).
+  refreshQueue: () => void;
 };
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
@@ -78,6 +83,9 @@ export function WorkspaceProvider({
   const [sync, setSync] = useState<SyncLoadState>({ status: "loading" });
   const [manual, setManual] = useState<ManualSyncState>({ running: false, cooldownUntil: 0, failure: null });
   const runningRef = useRef(false);
+  const canApprove = roleAtLeast(role, "manager");
+  const [needsApproval, setNeedsApproval] = useState<number | null>(null);
+  const queueTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const publish = useCallback((message: BusMessage) => {
     for (const listener of listeners.current) {
@@ -117,6 +125,42 @@ export function WorkspaceProvider({
   // (src/lib/sync-status.ts SYNC_RECHECK_MS).
   useEffect(() => startSyncRechecks(() => void reloadSync(), document), [reloadSync]);
 
+  const loadQueue = useCallback(async () => {
+    if (!canApprove) {
+      return;
+    }
+    try {
+      const response = await fetch(`/api/workspaces/${encodeURIComponent(workspace.id)}/queue`, { cache: "no-store" });
+      if (!response.ok) {
+        return;
+      }
+      const body = (await response.json()) as { needsApproval?: unknown };
+      setNeedsApproval(typeof body.needsApproval === "number" ? body.needsApproval : null);
+    } catch {
+      // Keep the last count through a blip.
+    }
+  }, [workspace.id, canApprove]);
+
+  // Many live events can land together (a sync): one reload for all of them.
+  const refreshQueue = useCallback(() => {
+    if (queueTimer.current) {
+      clearTimeout(queueTimer.current);
+    }
+    queueTimer.current = setTimeout(() => {
+      queueTimer.current = null;
+      void loadQueue();
+    }, 400);
+  }, [loadQueue]);
+
+  useEffect(() => {
+    void loadQueue();
+    return () => {
+      if (queueTimer.current) {
+        clearTimeout(queueTimer.current);
+      }
+    };
+  }, [loadQueue]);
+
   const liveStatus = useLive({
     workspaceId: workspace.id,
     onEvent: (event) => {
@@ -124,10 +168,14 @@ export function WorkspaceProvider({
       if (event.kind === "orders.synced") {
         void reloadSync();
       }
+      if (event.kind !== "order.note") {
+        refreshQueue();
+      }
     },
     onResync: () => {
       publish({ type: "resync" });
       void reloadSync();
+      refreshQueue();
     },
   });
 
@@ -220,8 +268,10 @@ export function WorkspaceProvider({
       manual,
       runManualSync: () => void runManualSync(),
       subscribe,
+      needsApproval,
+      refreshQueue,
     }),
-    [workspace, role, userId, liveStatus, sync, manual, runManualSync, subscribe],
+    [workspace, role, userId, liveStatus, sync, manual, runManualSync, subscribe, needsApproval, refreshQueue],
   );
 
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;

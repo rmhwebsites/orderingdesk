@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ToastProvider } from "@/components/toasts";
-import { PoRowActions, PurchaseOrders } from "./po-history";
+import { PoEmptyNote, PoRowActions, PurchaseOrders } from "./po-history";
 import { DraftActions, footerFocusTarget, PoModalBody, PoModalFooter, PoModalStatus } from "./po-modal";
 import { CONFIRM_ARM_MS, confirmArmed, confirmFocus, pendingFromPo, reconfirmPending, SendConfirm, type PendingSend } from "./po-send-confirm";
 import type { PoView } from "@/server/po/service";
@@ -34,6 +34,26 @@ describe("PurchaseOrders", () => {
     expect(html).not.toContain("Create purchase order");
     expect(html).not.toContain("Send to vendor");
     expect(html).not.toContain("Retry");
+  });
+});
+
+// Owner decision after the plan: Approve and next skips the purchase order
+// review, so the drawer says PO not created while the status needs one.
+describe("PoEmptyNote", () => {
+  const note = (canManage: boolean, needsPo: string | null) =>
+    renderToStaticMarkup(createElement(PoEmptyNote, { canManage, needsPo }));
+
+  it("says PO not created when the order's status usually needs one", () => {
+    const manager = note(true, "Approved");
+    expect(manager).toContain("PO not created.");
+    expect(manager).toContain("Approved usually needs a purchase order. Create it when you are ready.");
+    expect(note(false, "Approved")).toContain("Approved usually needs a purchase order. A manager creates it.");
+  });
+
+  it("keeps the plain empty line otherwise", () => {
+    expect(note(true, null)).toContain("No purchase orders yet. Create one to send");
+    expect(note(false, null)).toContain("No purchase orders yet. A manager creates them.");
+    expect(note(true, null)).not.toContain("PO not created");
   });
 });
 

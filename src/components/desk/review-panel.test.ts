@@ -56,4 +56,14 @@ describe("ReviewPanel", () => {
     expect(html).toContain(">Approve<");
     expect(html).not.toContain(">Reject<");
   });
+
+  it("offers Approve and next while another request waits, through the same confirmation", () => {
+    const html = render({ next: { id: "d13", name: "#D13" }, onApproveAndNext: async () => null });
+    expect(html).toContain(">Approve and next<");
+    expect(html).toContain("Then request #D13 opens.");
+    expect(render({ next: null })).not.toContain("Approve and next");
+    expect(
+      render({ next: { id: "d13", name: "#D13" }, onApproveAndNext: async () => null, completeInShopify: { url: null } }),
+    ).not.toContain("Approve and next");
+  });
 });

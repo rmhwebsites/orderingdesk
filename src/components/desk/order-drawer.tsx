@@ -32,7 +32,7 @@ import { PurchaseOrders } from "./po-history";
 import { Chip, Spinner } from "@/components/kit";
 import { CopyButton, Section } from "./drawer-kit";
 import { ItemsSection, RequestSection, ShipToSection } from "./request-parts";
-import { ReviewPanel } from "./review-panel";
+import { ReviewPanel, type NextRequest } from "./review-panel";
 
 export type DrawerOrder = {
   id: string;
@@ -421,6 +421,8 @@ export function OrderDrawerContent({
   onAddNote,
   onApprove,
   onReject,
+  nextRequest,
+  onApproveAndNext,
   onClose,
   onRetry,
   canManagePos,
@@ -448,6 +450,10 @@ export function OrderDrawerContent({
   // Approve and Reject a request: the error to show, or null.
   onApprove: () => Promise<string | null>;
   onReject: (reason: string) => Promise<string | null>;
+  // Approve and next: the next request waiting, and the approval that then
+  // opens it (comprehensive desk design section 1).
+  nextRequest?: NextRequest | null;
+  onApproveAndNext?: () => Promise<string | null>;
   onClose: () => void;
   onRetry: () => void;
   // Managers and platform admins create and send purchase orders; staff
@@ -559,7 +565,7 @@ export function OrderDrawerContent({
               </>
             ) : (
               <>
-                <h2 id={labelId} className="sr-only">
+                <h2 id={labelId} tabIndex={-1} className="sr-only">
                   Order details
                 </h2>
                 <HeaderSkeleton />
@@ -671,6 +677,18 @@ export function OrderDrawerContent({
                   return failure;
                 }}
                 onReject={onReject}
+                next={nextRequest ?? null}
+                onApproveAndNext={
+                  onApproveAndNext
+                    ? async () => {
+                        const failure = await onApproveAndNext();
+                        if (!failure) {
+                          focusSoon(() => document.getElementById(labelId));
+                        }
+                        return failure;
+                      }
+                    : undefined
+                }
               />
             ) : null}
 
@@ -723,6 +741,7 @@ export function OrderDrawerContent({
             {kind === "order" ? (
               <PurchaseOrders
                 orderId={orderId}
+                needsPo={statuses.find((status) => status.key === statusKey && status.triggersPo)?.label ?? null}
                 canManage={canManagePos}
                 refreshKey={poRefreshKey}
                 onCreate={onCreatePo}

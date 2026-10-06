@@ -136,6 +136,7 @@ describe("loadDesk", () => {
         requestFor: "",
         branch: "",
         searchText: [],
+        hasPo: false,
       },
     ]);
     expect(JSON.stringify(desk)).not.toContain("shipping");
@@ -534,6 +535,30 @@ describe("loadDesk views", () => {
     expect((await loadDesk(db, WS, { view: "open" }))?.viewCounts).toEqual({ open: 3, approval: 1, all: 5, closed: 2 });
     expect(await countNeedsApproval(db, WS)).toBe(1);
     expect(await countNeedsApproval(db, OTHER)).toBe(0);
+  });
+
+  // Owner decision after the plan: an order whose status triggers a
+  // purchase order and that has none says "PO not created".
+  it("says whether each card has a purchase order", async () => {
+    const db = await setup();
+    await seedOrder(db, WS, { id: "o_po", createdAt: 2 });
+    await seedOrder(db, WS, { id: "o_none", createdAt: 1 });
+    await db.insert(schema.vendors).values({ id: "v1", workspaceId: WS, name: "Northline Supply", email: "orders@northline.example" });
+    await db.insert(schema.purchaseOrders).values({
+      id: "po1",
+      workspaceId: WS,
+      orderId: "o_po",
+      vendorId: "v1",
+      poNumber: "draft:po1",
+      lineItems: [],
+      createdBy: "u_manager",
+      createdAt: 3,
+    });
+    const desk = await loadDesk(db, WS, { view: "open" });
+    expect(desk?.orders.map((order) => [order.id, order.hasPo])).toEqual([
+      ["o_po", true],
+      ["o_none", false],
+    ]);
   });
 
   it("carries the work queue settings", async () => {

@@ -52,7 +52,9 @@ function statusEvent(overrides: Partial<EventView> = {}): EventView {
 const noop = () => {};
 const none = async () => null;
 
-function render(opts: { order?: DrawerOrder; timeline?: EventView[]; members?: MemberView[] } = {}) {
+function render(
+  opts: { order?: DrawerOrder; timeline?: EventView[]; members?: MemberView[]; extra?: Record<string, unknown> } = {},
+) {
   return renderToStaticMarkup(
     createElement(OrderDrawerContent, {
       labelId: "drawer-title",
@@ -77,6 +79,7 @@ function render(opts: { order?: DrawerOrder; timeline?: EventView[]; members?: M
       poRefreshKey: 0,
       onCreatePo: noop,
       onEditPo: noop,
+      ...(opts.extra ?? {}),
     }),
   );
 }
@@ -122,5 +125,13 @@ describe("OrderDrawerContent", () => {
     const open = render();
     expect(open).toContain(">Open<");
     expect(open).not.toContain(">Deleted in Shopify<");
+  });
+
+  it("offers Approve and next for the next request waiting", () => {
+    const html = render({
+      order: draftCard({ statusKey: "new" }),
+      extra: { nextRequest: { id: "d13", name: "#D13" }, onApproveAndNext: async () => null },
+    });
+    expect(html).toContain(">Approve and next<");
   });
 });

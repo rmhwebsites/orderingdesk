@@ -108,8 +108,18 @@ function onOwnHost(workspace: LinkWorkspace, host: string | null): boolean {
   return workspace.customDomainStatus === "active" && !!workspace.customDomain && host === workspace.customDomain;
 }
 
-function orderQuery(orderId: string | null): string {
-  return orderId ? `?order=${encodeURIComponent(orderId)}` : "";
+// A desk link's query: the approval queue for a new request (the approver
+// lands on the queue with the request open), the order alone otherwise.
+function orderQuery(orderId: string | null, view: "approval" | null = null): string {
+  const params = new URLSearchParams();
+  if (view) {
+    params.set("view", view);
+  }
+  if (orderId) {
+    params.set("order", orderId);
+  }
+  const text = params.toString();
+  return text.length > 0 ? `?${text}` : "";
 }
 
 // Whether a device that subscribed on `host` may receive this workspace's
@@ -125,19 +135,30 @@ export function deliversTo(env: CloudflareEnv, workspace: LinkWorkspace, host: s
 }
 
 // The desk (or one order in it) for a device that subscribed on `host`.
-export function pushLink(env: CloudflareEnv, workspace: LinkWorkspace, orderId: string | null, host: string | null): string {
+export function pushLink(
+  env: CloudflareEnv,
+  workspace: LinkWorkspace,
+  orderId: string | null,
+  host: string | null,
+  view: "approval" | null = null,
+): string {
   if (onOwnHost(workspace, host)) {
-    return `${workspaceOrigin(env, workspace)}/${orderQuery(orderId)}`;
+    return `${workspaceOrigin(env, workspace)}/${orderQuery(orderId, view)}`;
   }
-  return `${appOrigin(env)}/w/${encodeURIComponent(workspace.slug)}${orderQuery(orderId)}`;
+  return `${appOrigin(env)}/w/${encodeURIComponent(workspace.slug)}${orderQuery(orderId, view)}`;
 }
 
 // Email links: the client host when it is active, else the hub.
-export function emailLink(env: CloudflareEnv, workspace: LinkWorkspace, orderId: string | null): string {
+export function emailLink(
+  env: CloudflareEnv,
+  workspace: LinkWorkspace,
+  orderId: string | null,
+  view: "approval" | null = null,
+): string {
   if (workspace.customDomainStatus === "active" && workspace.customDomain) {
-    return `${workspaceOrigin(env, workspace)}/${orderQuery(orderId)}`;
+    return `${workspaceOrigin(env, workspace)}/${orderQuery(orderId, view)}`;
   }
-  return `${appOrigin(env)}/w/${encodeURIComponent(workspace.slug)}${orderQuery(orderId)}`;
+  return `${appOrigin(env)}/w/${encodeURIComponent(workspace.slug)}${orderQuery(orderId, view)}`;
 }
 
 // ---- Notices ------------------------------------------------------------
@@ -413,14 +434,17 @@ export async function notifyNewOrders(
     // Up to DIGEST_AFTER orders: a notification and an email each (the
     // push tag keeps them apart). More: one summary of each.
     const digest = fresh.length > DIGEST_AFTER;
-    const context = (target: PushTarget, orderId: string | null) => ({
+    // A request opens the approval queue; a digest of requests only, too.
+    const viewFor = (order: OrderSummaryForEmail | null) =>
+      (order ? order.kind === "draft" : fresh.every((entry) => entry.kind === "draft")) ? ("approval" as const) : null;
+    const context = (target: PushTarget, order: OrderSummaryForEmail | null) => ({
       workspaceName: workspace.name,
       ownHost: onOwnHost(workspace, target.host),
-      url: pushLink(env, workspace, orderId, target.host),
+      url: pushLink(env, workspace, order?.id ?? null, target.host, viewFor(order)),
     });
     const noticeBuilders: Array<(target: PushTarget) => PushNotice> = digest
       ? [(target) => digestNotice(fresh, context(target, null))]
-      : fresh.map((order) => (target: PushTarget) => newOrderNotice(order, context(target, order.id)));
+      : fresh.map((order) => (target: PushTarget) => newOrderNotice(order, context(target, order)));
     const pushUserIds = members.filter((member) => member.pushNewOrders).map((member) => member.userId);
     for (const noticeFor of noticeBuilders) {
       result.pushed += await pushTo(db, env, workspace, pushUserIds, noticeFor, { ...opts, urgency: "high", ttl: 86400 });
@@ -428,8 +452,8 @@ export async function notifyNewOrders(
 
     const recipients = emailRecipients(list, members);
     const emails = digest
-      ? [newOrdersDigestEmail(env, workspace, fresh, emailLink(env, workspace, null))]
-      : fresh.map((order) => newOrderEmail(env, workspace, order, emailLink(env, workspace, order.id)));
+      ? [newOrdersDigestEmail(env, workspace, fresh, emailLink(env, workspace, null, viewFor(null)))]
+      : fresh.map((order) => newOrderEmail(env, workspace, order, emailLink(env, workspace, order.id, viewFor(order))));
     for (const email of emails) {
       result.emailed += await emailEach(env, workspace, recipients, email);
     }

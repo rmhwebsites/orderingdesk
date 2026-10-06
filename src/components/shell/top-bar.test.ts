@@ -14,6 +14,8 @@ const state = vi.hoisted(() => ({
     manual: { running: false, cooldownUntil: 0, failure: null },
     runManualSync: () => {},
     subscribe: () => () => {},
+    needsApproval: 3,
+    refreshQueue: () => {},
   } as Record<string, unknown>,
 }));
 vi.mock("./workspace-provider", () => ({ useWorkspace: () => state.value }));
@@ -95,5 +97,16 @@ describe("TopBar sync chip on phones", () => {
     expect(html).not.toContain('data-tone="red"');
     expect(html).toContain("Checking sync");
     expect(classOf(html, /<span data-tone="slate" title="[^"]+" class="([^"]*)"/).split(" ")[0]).toBe("hidden");
+  });
+});
+
+describe("TopBar Needs approval", () => {
+  it("shows those who approve the queue with its count, and staff nothing", () => {
+    state.value = { ...state.value, role: "manager", needsApproval: 3 };
+    const html = render();
+    expect(html).toContain('href="/?view=approval"');
+    expect(html).toContain('aria-label="Needs approval, 3 waiting"');
+    state.value = { ...state.value, role: "staff" };
+    expect(render()).not.toContain("view=approval");
   });
 });

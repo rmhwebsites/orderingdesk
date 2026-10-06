@@ -386,7 +386,7 @@ describe("requests", () => {
     expect(phone).toEqual({
       title: "New request #D12",
       body: "Jordan, Buford HQ",
-      url: "https://orders.impactrentals.store/?order=12",
+      url: "https://orders.impactrentals.store/?view=approval&order=12",
       tag: "order-12",
     });
     expect(pushed.find((entry) => entry.target.id === "s_staff")!.notice.body).toBe("IMPACT Rentals. Jordan, Buford HQ");
@@ -397,6 +397,10 @@ describe("requests", () => {
       expect(message.html).not.toContain("jordan.vale@example.com");
       expect(message.html).not.toContain("Depot Way");
       expect(message.html).not.toContain("_pplr");
+    }
+    // The approver lands on the approval queue with the request open.
+    for (const message of sent) {
+      expect(message.html).toContain("view=approval");
     }
     for (const { notice } of pushed) {
       expect(JSON.stringify(notice)).not.toContain("jordan.vale@example.com");

@@ -175,12 +175,22 @@ export function applyLiveEvent(
     }
 
     case "order.activity": {
-      // A system entry (the outcome of writing a status to Shopify): the
-      // open drawer's timeline only, no row change and no flash.
+      // A system entry (the outcome of writing a status to Shopify, a
+      // purchase order drafted, sent or failed): the open drawer's timeline,
+      // and a purchase order entry drops its card's "PO not created" hint.
+      // No flash.
       const timeline = withTimelineEvent(state.timeline, event.event);
-      return { state: timeline === state.timeline ? state : { ...state, timeline }, effects: NO_EFFECTS };
+      const next = timeline === state.timeline ? state : { ...state, timeline };
+      return {
+        state: isPurchaseOrderEntry(event.event) && event.event.orderId ? withPurchaseOrder(next, event.event.orderId) : next,
+        effects: NO_EFFECTS,
+      };
     }
   }
+}
+
+function isPurchaseOrderEntry(event: EventView): boolean {
+  return event.type === "po_draft" || event.type === "po_sent" || event.type === "po_failed";
 }
 
 // Whether a live event is a purchase order entry (drafted, sent, failed)
@@ -190,8 +200,37 @@ export function touchesPurchaseOrders(event: LiveEvent, openOrderId: string | nu
     openOrderId !== null &&
     event.kind === "order.activity" &&
     event.event.orderId === openOrderId &&
-    (event.event.type === "po_draft" || event.event.type === "po_sent" || event.event.type === "po_failed")
+    isPurchaseOrderEntry(event.event)
   );
+}
+
+// A card the desk now knows has a purchase order (one was drafted, sent or
+// failed, here or by someone else). Unchanged when it is not loaded or
+// already had one. Purchase orders are never deleted.
+export function withPurchaseOrder(state: DeskState, orderId: string): DeskState {
+  const index = state.orders.findIndex((row) => row.id === orderId);
+  if (index === -1 || state.orders[index].hasPo) {
+    return state;
+  }
+  const orders = state.orders.slice();
+  orders[index] = { ...orders[index], hasPo: true };
+  return { ...state, orders };
+}
+
+// Owner decision after the Wave 1a plan: Approve and next skips the
+// purchase order review, so an order whose status triggers a purchase order
+// and that has none yet says "PO not created" (on its card and in the
+// drawer). Requests never have purchase orders.
+export function poNotCreated(row: Pick<OrderSummary, "kind" | "statusKey" | "hasPo">, statuses: StatusView[]): boolean {
+  return row.kind === "order" && !row.hasPo && statuses.some((status) => status.key === row.statusKey && status.triggersPo);
+}
+
+// The toast after an approval. poLater: Approve and next skipped the
+// purchase order review the status would open, so it says where to create
+// it.
+export function approvalNotice(orderName: string, poLater: boolean): { title: string; body?: string } {
+  const title = `Approved. Order ${orderName} created in Shopify.`;
+  return poLater ? { title, body: "Create its purchase order from the order when you are ready." } : { title };
 }
 
 // Shows a status change before the server confirms it. Null when there is
@@ -416,4 +455,18 @@ export function selectOrders(
     case "waiting":
       return matches.sort((a, b) => waitingSince(a) - waitingSince(b) || newest(a, b));
   }
+}
+
+// The request to open after an approval (comprehensive desk design section
+// 1, Approve and next): the next waiting request after the current card in
+// the list's order, wrapping round to the top; null when none waits.
+export function nextWaitingRequest(
+  visible: OrderSummary[],
+  currentId: string,
+  closedKeys: ReadonlySet<string>,
+): { id: string; name: string } | null {
+  const index = visible.findIndex((row) => row.id === currentId);
+  const ordered = index === -1 ? visible : [...visible.slice(index + 1), ...visible.slice(0, index)];
+  const next = ordered.find((row) => row.id !== currentId && viewMatches(row, "approval", closedKeys));
+  return next ? { id: next.id, name: next.name } : null;
 }

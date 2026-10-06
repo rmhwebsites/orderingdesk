@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { ArrowsClockwiseIcon } from "@phosphor-icons/react/ArrowsClockwise";
 import { CheckCircleIcon } from "@phosphor-icons/react/CheckCircle";
+import { ClipboardTextIcon } from "@phosphor-icons/react/ClipboardText";
 import { CloudSlashIcon } from "@phosphor-icons/react/CloudSlash";
 import { GearSixIcon } from "@phosphor-icons/react/GearSix";
 import { PauseIcon } from "@phosphor-icons/react/Pause";
@@ -10,6 +11,7 @@ import { WarningIcon } from "@phosphor-icons/react/Warning";
 import { WarningCircleIcon } from "@phosphor-icons/react/WarningCircle";
 import { APP_NAME } from "@/lib/brand";
 import type { BrandImages } from "@/lib/brand-assets";
+import { roleAtLeast } from "@/lib/roles";
 import { CHIP_TONE_COLOR, syncChipState, type ChipTone } from "@/lib/sync-status";
 import { useNow } from "@/lib/use-now";
 import type { AccountView } from "@/server/account";
@@ -99,6 +101,36 @@ function SyncButton() {
   );
 }
 
+// Managers and platform admins: the approval queue, with how many wait.
+function ApprovalLink() {
+  const { workspace, role, needsApproval } = useWorkspace();
+  if (!roleAtLeast(role, "manager")) {
+    return null;
+  }
+  const count = needsApproval ?? 0;
+  const href = `${workspace.basePath === "" ? "/" : workspace.basePath}?view=approval`;
+  return (
+    <Link
+      href={href}
+      aria-label={count > 0 ? `Needs approval, ${count} waiting` : "Needs approval"}
+      className={`${ui.buttonQuiet} h-10 max-lg:px-2.5`}
+    >
+      <ClipboardTextIcon size={18} aria-hidden />
+      <span aria-hidden className="max-lg:hidden">
+        Needs approval
+      </span>
+      {count > 0 ? (
+        <span
+          aria-hidden
+          className="grid h-5 min-w-5 place-items-center rounded-control bg-primary px-1 text-xs font-semibold tabular-nums text-primary-ink"
+        >
+          {count > 99 ? "99+" : count}
+        </span>
+      ) : null}
+    </Link>
+  );
+}
+
 // The account menu with this workspace's Settings and Sync now.
 function WorkspaceAccount({ account }: { account: AccountView }) {
   const { workspace, sync, manual, runManualSync } = useWorkspace();
@@ -113,8 +145,9 @@ function WorkspaceAccount({ account }: { account: AccountView }) {
 }
 
 // One 56px row at every width: the workspace (its name truncates first),
-// the sync chip from sm, the Sync button from lg, Settings from sm, the
-// bell, and the account menu last so its panel, right aligned to it, stays
+// the sync chip from sm, the Sync button from lg, Needs approval for those
+// who approve (its label from lg), Settings from sm, the bell, and the
+// account menu last so its panel, right aligned to it, stays
 // on screen.
 export function TopBar({ name, images, account }: { name: string; images: BrandImages; account: AccountView }) {
   const { workspace } = useWorkspace();
@@ -140,6 +173,7 @@ export function TopBar({ name, images, account }: { name: string; images: BrandI
         <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-2">
           <SyncChip />
           <SyncButton />
+          <ApprovalLink />
           {/* Every member: each role sees its own Settings sections. */}
           <Link href={`${workspace.basePath}/settings`} className={`${ui.buttonQuiet} h-10 max-sm:hidden`}>
             <GearSixIcon size={18} aria-hidden />
