@@ -13,7 +13,16 @@ import { ui } from "@/components/ui";
 const FORGET_PUSH_MS = 2000;
 
 // variant "menu": a row of the account menu (className from the menu).
-export function SignOutButton({ variant = "button", className }: { variant?: "button" | "menu"; className?: string }) {
+// label: the idle text, for a page where signing out is how to switch email.
+export function SignOutButton({
+  variant = "button",
+  className,
+  label = "Sign out",
+}: {
+  variant?: "button" | "menu";
+  className?: string;
+  label?: string;
+}) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
 
@@ -43,7 +52,7 @@ export function SignOutButton({ variant = "button", className }: { variant?: "bu
       className={className ?? ui.buttonSecondary}
     >
       {busy ? <Spinner /> : variant === "menu" ? <SignOutIcon size={18} aria-hidden /> : null}
-      {busy ? "Signing out" : "Sign out"}
+      {busy ? "Signing out" : label}
     </button>
   );
 }

@@ -2,15 +2,30 @@ import Link from "next/link";
 import { headers } from "next/headers";
 import { APP_NAME } from "@/lib/brand";
 import { signInView } from "@/server/client-host";
+import { requireSession } from "@/server/guard";
 import { requestHost } from "@/server/request-host";
 import { Monogram } from "@/components/kit";
 import { BrandScope } from "@/components/shell/brand-scope";
 import { ThemedImage } from "@/components/shell/workspace-brand-slot";
 import { ui } from "@/components/ui";
+import { SignOutButton } from "./sign-out-button";
+
+// Who is signed in on this host, if anyone. Never fails: this page is the
+// fallback for everything else.
+async function signedInEmail(): Promise<string | null> {
+  try {
+    return (await requireSession()).email;
+  } catch {
+    return null;
+  }
+}
 
 // Not found, by host (src/server/client-host.ts): the hub keeps the
 // Ordering Desk page; a workspace's client host shows it in the workspace's
-// theme with its name and a way back to its orders.
+// theme with its name and a way back to its orders. Someone signed in with
+// an email that has no access lands here from "/" (clientHostDesk in
+// page.tsx), and "/" only brings them back, so they are told how to get
+// access and can sign in with another email (sessions are per host).
 export default async function NotFound() {
   // Read the request first: it marks this page dynamic before anything
   // touches the Cloudflare context (there is none at build time).
@@ -31,6 +46,7 @@ export default async function NotFound() {
       </main>
     );
   }
+  const email = await signedInEmail();
   return (
     <BrandScope branding={view.branding} accentColor={view.accent} className="min-h-dvh bg-bg font-sans text-ink">
       <main className="mx-auto flex min-h-dvh max-w-md flex-col justify-center gap-4 px-4 sm:px-6">
@@ -43,10 +59,16 @@ export default async function NotFound() {
         )}
         <p className="text-sm font-medium text-ink-2">{view.name}</p>
         <h1 className="font-display text-2xl font-semibold tracking-tight">This page is not here</h1>
-        <p className="text-sm text-ink-2">The link may be old or mistyped.</p>
-        <Link href="/" className={`${ui.buttonSecondary} self-start`}>
-          {`Go to ${view.name} orders`}
-        </Link>
+        <p className="text-sm text-ink-2">
+          {`The link may be old or mistyped. If you expected to open ${view.name} orders, ask your manager to invite you.`}
+        </p>
+        {email ? <p className="break-words text-sm text-ink-2">Signed in as {email}</p> : null}
+        <div className="flex flex-wrap gap-2">
+          <Link href="/" className={ui.buttonSecondary}>
+            {`Go to ${view.name} orders`}
+          </Link>
+          {email ? <SignOutButton label="Sign in with a different email" /> : null}
+        </div>
       </main>
     </BrandScope>
   );
