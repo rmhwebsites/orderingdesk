@@ -61,3 +61,26 @@ describe("TopBar", () => {
     expect(html).toMatch(/<button[^>]*aria-label="Sync orders from Shopify now"[^>]*class="[^"]*max-lg:hidden/);
   });
 });
+
+describe("TopBar sync chip on phones", () => {
+  it("shows a stale sync at every width, with its tip", () => {
+    state.value = {
+      ...state.value,
+      sync: {
+        status: "ready",
+        connection: {
+          shopDomain: "x.myshopify.com",
+          adminShopDomain: "x.myshopify.com",
+          status: "ok",
+          lastSyncAt: Date.now() - 5 * 3600000,
+          lastError: null,
+          catchingUp: false,
+        },
+      },
+    };
+    const html = render();
+    const chip = classOf(html, /<span data-tone="red" title="([^"]+)"/);
+    expect(chip).toContain("check the store connection");
+    expect(classOf(html, /<span data-tone="red" title="[^"]+" class="([^"]*)"/).split(" ")[0]).toBe("inline-flex");
+  });
+});

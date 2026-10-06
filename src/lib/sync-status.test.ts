@@ -73,4 +73,17 @@ describe("syncChipState", () => {
       label: "Not synced yet",
     });
   });
+
+  // Comprehensive desk design section 1: an old sync must not look healthy.
+  it("turns amber after 30 minutes and red after 3 hours, with a tip", () => {
+    const at = (minutesAgo: number) =>
+      syncChipState({ status: "ready", connection: connection({ lastSyncAt: NOW - minutesAgo * 60000 }) }, NOW);
+    expect(at(29)).toMatchObject({ tone: "good", label: "Synced 29 min ago", tip: null });
+    const late = at(30);
+    expect(late).toMatchObject({ tone: "warn", label: "Synced 30 min ago", detail: null });
+    expect(late.kind === "ready" ? late.tip : "").toContain("Press Sync");
+    const old = at(17 * 60);
+    expect(old).toMatchObject({ tone: "bad", label: "Synced 17 h ago", detail: null });
+    expect(old.kind === "ready" ? old.tip : "").toContain("check the store connection");
+  });
 });

@@ -44,7 +44,8 @@ function chipIcon(tone: ChipTone, label: string) {
   }
 }
 
-// The sync state from sm up (phones get it in the account menu).
+// The sync state: from sm up, and at every width when something is wrong
+// (phones also get it in the account menu).
 function SyncChip() {
   const { sync, liveStatus } = useWorkspace();
   const now = useNow(30000);
@@ -53,16 +54,20 @@ function SyncChip() {
   if (state.kind === "loading") {
     return <span className="od-skeleton hidden h-8 w-36 sm:block" aria-label="Loading sync status" />;
   }
+  // A quiet state stays hidden on phones; a problem shows at every width,
+  // as its icon below sm.
+  const quiet = state.tone === "good" || state.tone === "neutral" || state.tone === "info";
   return (
     // shrink-0: the chip never collapses below its icon and label; a long
     // workspace name truncates instead.
     <span
       data-tone={CHIP_TONE_COLOR[state.tone]}
-      title={LIVE_TEXT[liveStatus]}
-      className="hidden h-8 shrink-0 items-center gap-1.5 rounded-control bg-tone-fill px-3 text-xs font-semibold text-tone-text sm:inline-flex"
+      title={state.tip ?? LIVE_TEXT[liveStatus]}
+      className={`${quiet ? "hidden sm:inline-flex" : "inline-flex"} h-8 shrink-0 items-center gap-1.5 rounded-control bg-tone-fill px-2.5 text-xs font-semibold text-tone-text sm:px-3`}
     >
       {chipIcon(state.tone, state.label)}
-      <span>{state.label}</span>
+      <span className="sr-only sm:not-sr-only">{state.label}</span>
+      {state.tip ? <span className="sr-only">. {state.tip}</span> : null}
       <span className="sr-only">. {LIVE_TEXT[liveStatus]}.</span>
     </span>
   );
@@ -99,7 +104,7 @@ function WorkspaceAccount({ account }: { account: AccountView }) {
   const coolingDown = now > 0 && manual.cooldownUntil > now;
   const syncItem: AccountSync | null =
     state.kind === "ready"
-      ? { label: state.label, tip: null, running: manual.running, disabled: manual.running || coolingDown, onSync: runManualSync }
+      ? { label: state.label, tip: state.tip, running: manual.running, disabled: manual.running || coolingDown, onSync: runManualSync }
       : null;
   return <AccountMenu account={account} settingsHref={`${workspace.basePath}/settings`} sync={syncItem} />;
 }
