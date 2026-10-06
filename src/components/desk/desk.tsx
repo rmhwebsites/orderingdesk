@@ -827,7 +827,7 @@ export function Desk() {
         const moved = body.results.filter((row) => row.outcome === "changed").length;
         const refusals = body.results
           .filter((row) => row.outcome === "refused" || row.outcome === "not-found")
-          .map((row) => ({ name: row.name ?? "A card", error: row.error ?? "It is no longer in this workspace." }));
+          .map((row) => ({ name: row.name, error: row.error ?? "It is no longer in this workspace." }));
         setBulkResult({
           tone: refusals.length > 0 ? "warn" : "good",
           text: `Moved ${moved} ${moved === 1 ? "card" : "cards"} to ${body.statusLabel ?? "the status"}.`,

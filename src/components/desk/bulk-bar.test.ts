@@ -70,4 +70,39 @@ describe("BulkBar", () => {
     expect(html).toContain("Moved 1 card to Shipped.");
     expect(html).toContain("#D12: A draft cannot be marked Shipped.");
   });
+
+  it("groups the cards that stayed by reason, so a long outcome stays short and Dismiss stays in view", () => {
+    const draftRule = "A draft cannot be marked Shipped until it is approved and becomes an order.";
+    const refusals = [
+      ...Array.from({ length: 20 }, (_, i) => ({ name: `#D${i + 1}`, error: draftRule })),
+      { name: "#D40", error: "Only a manager can reopen a rejected request." },
+      { name: null, error: "It is no longer in this workspace." },
+      { name: null, error: "It is no longer in this workspace." },
+    ];
+    const html = renderToStaticMarkup(
+      createElement(BulkBar, {
+        cards: CARDS,
+        statuses: STATUSES,
+        role: "staff",
+        busy: false,
+        result: { tone: "warn", text: "Moved 5 cards to Shipped.", refusals },
+        onMove: async () => {},
+        onClear: () => {},
+        onDismissResult: () => {},
+      }),
+    );
+    // Each reason once, with how many cards it kept and every card named.
+    expect(html.split(draftRule)).toHaveLength(2);
+    expect(html).toContain(`20 cards did not move: ${draftRule}`);
+    expect(html).toContain(`${Array.from({ length: 20 }, (_, i) => `#D${i + 1}`).join(", ")}<`);
+    expect(html).toContain("#D40: Only a manager can reopen a rejected request.");
+    expect(html).toContain("2 cards did not move: It is no longer in this workspace.");
+    expect(html).not.toContain("A card, A card");
+    // The bar never outgrows the screen: the outcome (with Dismiss) sits
+    // above a controls area that scrolls, and its own list scrolls too.
+    expect(html).toMatch(/^<div class="fixed [^"]*max-h-\[60dvh\]/);
+    expect(html).toMatch(/<ul aria-label="Cards that did not move" tabindex="0" class="[^"]*max-h-28 [^"]*overflow-y-auto/);
+    expect(html).toMatch(/<div class="min-h-0 overflow-y-auto overscroll-contain">[^]*2 selected/);
+    expect(html.indexOf(">Dismiss<")).toBeLessThan(html.indexOf("2 selected"));
+  });
 });
