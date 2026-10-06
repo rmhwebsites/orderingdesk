@@ -7,10 +7,12 @@ import { asc, eq } from "drizzle-orm";
 import type { Db } from "@/db";
 import { statuses, workspaces } from "@/db/schema";
 import type { WorkspaceBranding } from "@/lib/branding";
+import type { QueueSettingsView } from "@/lib/queue-settings";
 import type { Role } from "@/lib/roles";
 import { settingsAccess, type SettingsAccess } from "@/lib/settings-access";
 import { brandingView, type BrandingView } from "./branding/assets";
 import { getConnectionSettings, type ConnectionSettingsView } from "./desk/connection-view";
+import { getQueueSettings } from "./desk/queue-settings";
 import { getWorkspaceSettings } from "./desk/settings";
 import { statusView, type SettingsView, type StatusView } from "./desk/shapes";
 import { listVendors, type VendorView } from "./desk/vendors";
@@ -35,6 +37,9 @@ export type SettingsPageData = {
   vendors: VendorView[];
   team: { members: MemberView[]; invites: PendingInviteView[]; requests: RosterRequests; rosterTags: RosterTags } | null;
   statuses: StatusView[] | null;
+  // The work queue settings (age thresholds, price display), shown with
+  // the statuses.
+  queue: QueueSettingsView | null;
   notifications: SettingsView | null;
   sender: SenderView | null;
   domain: DomainView | null;
@@ -65,7 +70,7 @@ export async function loadSettingsPage(
   const access = settingsAccess(role);
   const shows = (section: SettingsAccess["sections"][number]) => access.sections.includes(section);
 
-  const [alerts, connection, vendors, team, statusRows, settings, mail] = await Promise.all([
+  const [alerts, connection, vendors, team, statusRows, settings, mail, queue] = await Promise.all([
     getNotificationPrefs(db, workspace.id, input.userId),
     getConnectionSettings(db, workspace.id),
     listVendors(db, workspace.id),
@@ -75,6 +80,7 @@ export async function loadSettingsPage(
       : Promise.resolve(null),
     shows("notifications") ? getWorkspaceSettings(db, workspace.id) : Promise.resolve(null),
     access.canEditSender ? loadMailWorkspace(db, workspace.id) : Promise.resolve(null),
+    shows("statuses") ? getQueueSettings(db, workspace.id) : Promise.resolve(null),
   ]);
 
   return {
@@ -94,6 +100,7 @@ export async function loadSettingsPage(
         }
       : null,
     statuses: statusRows ? statusRows.map(statusView) : null,
+    queue,
     notifications: settings ? settings.settings : null,
     sender: mail ? senderView(env, mail) : null,
     domain: shows("domain") ? { domain: workspace.customDomain, status: workspace.customDomainStatus } : null,

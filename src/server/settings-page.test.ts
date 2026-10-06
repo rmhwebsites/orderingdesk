@@ -48,6 +48,7 @@ describe("loadSettingsPage", () => {
     expect(page.vendors.map((vendor) => vendor.name)).toEqual(["Hard Hat Supply"]);
     expect(page.team).toBeNull();
     expect(page.statuses).toBeNull();
+    expect(page.queue).toBeNull();
     expect(page.notifications).toBeNull();
     expect(page.sender).toBeNull();
     expect(page.domain).toBeNull();
@@ -67,6 +68,7 @@ describe("loadSettingsPage", () => {
       approved: [],
     });
     expect(page.statuses?.map((status) => status.key)).toEqual(["new", "processing", "approved", "shipped"]);
+    expect(page.queue).toEqual({ ageAmberDays: 2, ageRedDays: 4, priceDisplay: "auto" });
     expect(page.notifications).toEqual({ notificationEmails: [], poPrefix: "PO", replyTo: null, fromName: null });
     expect(page.sender).toBeNull();
     expect(page.domain).toBeNull();

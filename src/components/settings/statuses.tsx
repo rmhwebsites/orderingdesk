@@ -6,10 +6,12 @@ import { ArrowUpIcon } from "@phosphor-icons/react/ArrowUp";
 import { PlusIcon } from "@phosphor-icons/react/Plus";
 import { TrashIcon } from "@phosphor-icons/react/Trash";
 import { STATUS_LABEL_MAX } from "@/lib/status-label";
+import type { QueueSettingsView } from "@/lib/queue-settings";
 import type { StatusView } from "@/server/desk/shapes";
 import { ui } from "@/components/ui";
 import { Spinner } from "@/components/kit";
 import { focusSoon, InlineMessage, Panel, requestJson, SaveStatus, Select, SettingsSection, Switch } from "./kit";
+import { QueueSettingsPanel } from "./queue-settings";
 
 // The nine status colors (STATUS_COLORS in src/server/desk/statuses.ts),
 // each a semantic token pair in globals.css.
@@ -60,7 +62,15 @@ function payload(rows: Row[]) {
   }));
 }
 
-export function StatusesSection({ workspaceId, initial }: { workspaceId: string; initial: StatusView[] }) {
+export function StatusesSection({
+  workspaceId,
+  initial,
+  queue,
+}: {
+  workspaceId: string;
+  initial: StatusView[];
+  queue?: QueueSettingsView | null;
+}) {
   const [saved, setSaved] = useState<Row[]>(() => rowsOf(initial));
   const [rows, setRows] = useState<Row[]>(saved);
   const [busy, setBusy] = useState(false);
@@ -326,6 +336,7 @@ export function StatusesSection({ workspaceId, initial }: { workspaceId: string;
           <SaveStatus text={done} />
         </div>
       </Panel>
+      {queue ? <QueueSettingsPanel workspaceId={workspaceId} initial={queue} /> : null}
     </SettingsSection>
   );
 }

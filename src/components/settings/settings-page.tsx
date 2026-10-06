@@ -73,7 +73,7 @@ export function SettingsPage({ data }: { data: SettingsPageData }) {
               canEditRosterTags={access.canEditRosterTags}
             />
           ) : null}
-          {data.statuses ? <StatusesSection workspaceId={workspace.id} initial={data.statuses} /> : null}
+          {data.statuses ? <StatusesSection workspaceId={workspace.id} initial={data.statuses} queue={data.queue} /> : null}
           <VendorsSection workspaceId={workspace.id} initial={data.vendors} canEdit={access.canEditVendors} />
           {data.notifications ? (
             <NotificationsSection
