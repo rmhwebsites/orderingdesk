@@ -11,7 +11,8 @@ import { ui } from "@/components/ui";
 
 // The desk's filters (comprehensive desk design section 1): one row from
 // 880px (status, kind, search, sort); on phones one row with the status, a
-// search button and a filter button, whose rows open beneath it.
+// search button and a filter button, whose rows open beneath it. Each
+// button is marked while what it holds is on, open or closed.
 
 const SORTS: { value: SortKey; label: string }[] = [
   { value: "newest", label: "Newest first" },
@@ -209,6 +210,9 @@ function PhoneToolbar({ statusKey, onStatus, statusChips, query, onQuery, sort, 
     }
   }, [searching]);
   const active = (kindFilter && kindFilter.kind !== "all" ? 1 : 0) + (sort !== "newest" ? 1 : 0);
+  // The search keeps filtering when its row is closed, so the button says
+  // so (the same test as the list filter, src/lib/desk-state.ts).
+  const searchOn = query.trim().length > 0;
 
   return (
     <div className="flex flex-col gap-2">
@@ -222,10 +226,11 @@ function PhoneToolbar({ statusKey, onStatus, statusChips, query, onQuery, sort, 
             focusSearch.current = !searching;
             setSearching((current) => !current);
           }}
-          className={`${ui.iconButton} border border-line-strong`}
+          className={`${ui.iconButton} relative border border-line-strong`}
         >
           <MagnifyingGlassIcon size={18} aria-hidden />
-          <span className="sr-only">Search</span>
+          <span className="sr-only">{searchOn ? "Search, on" : "Search"}</span>
+          {searchOn ? <span aria-hidden className="absolute -right-0.5 -top-0.5 size-3 rounded-full bg-primary-strong ring-2 ring-surface" /> : null}
         </button>
         <button
           type="button"

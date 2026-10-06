@@ -52,4 +52,16 @@ describe("Toolbar", () => {
     expect(searching).toContain('value="vest"');
     expect(render({ layout: "phone", sort: "oldest" })).toContain("More filters, 1 on");
   });
+
+  it("marks the phone search button while a search is set, so closing the row never hides it", () => {
+    const searchButton = (html: string) => html.match(/<button[^>]*aria-controls="desk-search-row"[^>]*>.*?<\/button>/)?.[0] ?? "";
+    const on = searchButton(render({ layout: "phone", query: "vest" }));
+    expect(on).toContain('<span class="sr-only">Search, on</span>');
+    expect(on).toMatch(/<span aria-hidden="true" class="[^"]*rounded-full bg-primary-strong/);
+    const off = searchButton(render({ layout: "phone" }));
+    expect(off).toContain('<span class="sr-only">Search</span>');
+    expect(off).not.toContain("bg-primary-strong");
+    // Spaces alone filter nothing (selectOrders trims), so they are not on.
+    expect(searchButton(render({ layout: "phone", query: "  " }))).toContain('<span class="sr-only">Search</span>');
+  });
 });

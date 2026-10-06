@@ -5291,6 +5291,8 @@ function viewOptions(counts: ViewCounts, approval: boolean): SegmentedOption<Des
 
   and the active filter count becomes `(statusKey ? 1 : 0) + (kindFilter && kindFilter.kind !== "all" ? 1 : 0) + (sort !== defaultSort(view) ? 1 : 0)`. Destructure `view`, `onView`, `viewCounts`, `showApproval` in both toolbars.
 
+  Keep the search button exactly as the Task 10 review fix left it: while `query.trim()` is not empty it reads "Search, on" (sr-only) and carries the small `bg-primary-strong` dot, whether its row is open or closed, so closing the row never hides a search that still filters the list. The search stays out of the More filters count (it has its own button). The test "marks the phone search button while a search is set, so closing the row never hides it" in `src/components/desk/toolbar.test.ts` must stay green.
+
 3f. `src/components/desk/empty-states.tsx`: import `type { DeskView }` from `@/lib/desk-query`; `noMatchesCopy(query, kind, statusLabel, view)` starts with
 
 ```ts
