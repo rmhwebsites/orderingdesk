@@ -147,7 +147,7 @@ function ItemRow({ item, currency, showPrices }: { item: SnapshotItem; currency:
           </p>
           <p className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-ink-2">
             {item.variant ? <span>{item.variant}</span> : null}
-            {item.sku ? <span className="font-mono">SKU {item.sku}</span> : null}
+            {item.sku ? <span className="whitespace-nowrap font-mono">{`SKU ${item.sku}`}</span> : null}
           </p>
         </div>
         {showPrices ? (

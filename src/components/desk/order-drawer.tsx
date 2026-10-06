@@ -33,7 +33,7 @@ import { PurchaseOrders } from "./po-history";
 import { Chip, Spinner } from "@/components/kit";
 import { CopyButton, Section } from "./drawer-kit";
 import { ItemsSection, RequestSection, ShipToSection } from "./request-parts";
-import { ReviewPanel, type NextRequest } from "./review-panel";
+import { ReviewActions, ReviewSummary, type NextRequest } from "./review-panel";
 
 export type DrawerOrder = {
   id: string;
@@ -536,6 +536,32 @@ export function OrderDrawerContent({
     rejectionNote && rejectedBy
       ? { reason: rejectionNote.text, by: rejectedBy === "You" ? "you" : rejectedBy, at: rejectionNote.createdAt }
       : null;
+  const completeInShopify = zeroTotal || deleted ? null : { url: shopifyUrl };
+  // Managers decide from the footer, which stays in reach while the body
+  // scrolls (comprehensive desk design section 1, phone ergonomics).
+  const reviewInFooter = kind === "draft" && canReview && snapshot !== null && order !== null;
+  const statusControls =
+    statusKey !== null && statusOptions ? (
+      <>
+        <StatusSelect
+          statuses={statusOptions.options}
+          value={statusKey}
+          onChange={onChangeStatus}
+          label={`Status for ${kind === "draft" ? "request" : "order"} ${name}`}
+          size="md"
+          busy={statusBusy}
+          disabled={statusOptions.disabled}
+          hint={statusOptions.hint}
+        />
+        {shopifyUrl ? (
+          <a href={shopifyUrl} target="_blank" rel="noopener noreferrer" className={`${ui.buttonSecondary} h-9`}>
+            <ArrowSquareOutIcon size={16} aria-hidden />
+            Open in Shopify
+            <span className="sr-only"> (opens in a new tab)</span>
+          </a>
+        ) : null}
+      </>
+    ) : null;
 
   return (
     <>
@@ -597,27 +623,7 @@ export function OrderDrawerContent({
           </div>
         ) : null}
 
-        {statusKey !== null && statusOptions ? (
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            <StatusSelect
-              statuses={statusOptions.options}
-              value={statusKey}
-              onChange={onChangeStatus}
-              label={`Status for ${kind === "draft" ? "request" : "order"} ${name}`}
-              size="md"
-              busy={statusBusy}
-              disabled={statusOptions.disabled}
-              hint={statusOptions.hint}
-            />
-            {shopifyUrl ? (
-              <a href={shopifyUrl} target="_blank" rel="noopener noreferrer" className={`${ui.buttonSecondary} h-9`}>
-                <ArrowSquareOutIcon size={16} aria-hidden />
-                Open in Shopify
-                <span className="sr-only"> (opens in a new tab)</span>
-              </a>
-            ) : null}
-          </div>
-        ) : null}
+        {statusControls ? <div className="mt-4 hidden flex-wrap items-center gap-2 sm:flex">{statusControls}</div> : null}
         {statusOptions?.hint ? (
           <p aria-hidden className="mt-2 text-xs text-ink-2">
             {statusOptions.hint}
@@ -669,37 +675,16 @@ export function OrderDrawerContent({
             ) : null}
 
             {kind === "draft" ? (
-              <ReviewPanel
-                name={name}
-                email={snapshot.email}
-                canReview={canReview}
-                rejected={isRejected}
-                deleted={deleted}
-                rejection={rejection}
-                approveBlock={approveBlock}
-                rejectBlock={rejectBlock}
-                completeInShopify={zeroTotal || deleted ? null : { url: shopifyUrl }}
-                onApprove={async () => {
-                  const failure = await onApprove();
-                  if (!failure) {
-                    focusSoon(() => document.getElementById(labelId));
-                  }
-                  return failure;
-                }}
-                onReject={onReject}
-                next={nextRequest ?? null}
-                onApproveAndNext={
-                  onApproveAndNext
-                    ? async () => {
-                        const failure = await onApproveAndNext();
-                        if (!failure) {
-                          focusSoon(() => document.getElementById(labelId));
-                        }
-                        return failure;
-                      }
-                    : undefined
-                }
-              />
+              <section aria-labelledby={`${labelId}-review`} className="mb-5 rounded-panel border border-line bg-surface-2 p-4">
+                <ReviewSummary
+                  canReview={canReview}
+                  rejected={isRejected}
+                  deleted={deleted}
+                  rejection={rejection}
+                  completeInShopify={completeInShopify}
+                  titleId={`${labelId}-review`}
+                />
+              </section>
             ) : null}
 
             {showsDraft || draftName ? (
@@ -776,6 +761,50 @@ export function OrderDrawerContent({
           </Section>
         ) : null}
       </div>
+
+      {statusControls || reviewInFooter ? (
+        <footer
+          className={`max-h-[60dvh] overflow-y-auto overscroll-contain border-t border-line bg-surface px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-6 ${
+            reviewInFooter ? "" : "sm:hidden"
+          }`}
+        >
+          {statusControls ? <div className="flex flex-wrap items-center gap-2 sm:hidden">{statusControls}</div> : null}
+          {reviewInFooter ? (
+            <div className={statusControls ? "mt-3 sm:mt-0" : undefined}>
+              <ReviewActions
+                key={orderId}
+                name={name}
+                email={snapshot?.email ?? ""}
+                rejected={isRejected}
+                approveBlock={approveBlock}
+                rejectBlock={rejectBlock}
+                completeInShopify={completeInShopify}
+                next={nextRequest ?? null}
+                onApprove={async () => {
+                  const failure = await onApprove();
+                  if (!failure) {
+                    focusSoon(() => document.getElementById(labelId));
+                  }
+                  return failure;
+                }}
+                onApproveAndNext={
+                  onApproveAndNext
+                    ? async () => {
+                        const failure = await onApproveAndNext();
+                        if (!failure) {
+                          focusSoon(() => document.getElementById(labelId));
+                        }
+                        return failure;
+                      }
+                    : undefined
+                }
+                onReject={onReject}
+                afterReject={() => document.getElementById(`${labelId}-review`)}
+              />
+            </div>
+          ) : null}
+        </footer>
+      ) : null}
     </>
   );
 }

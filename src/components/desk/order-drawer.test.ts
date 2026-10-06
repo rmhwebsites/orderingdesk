@@ -167,4 +167,21 @@ describe("OrderDrawerContent", () => {
     expect(html).toContain(">Duplicate of #D11</blockquote>");
     expect(html).toContain("Rejected by Ryan Hale,");
   });
+
+  it("keeps the decision and the status in a footer within reach, and the header's status row from sm", () => {
+    const html = render({ order: draftCard({ statusKey: "new" }) });
+    const footer = html.match(/<footer[\s\S]*<\/footer>/)?.[0] ?? "";
+    expect(footer).toContain(">Approve<");
+    expect(footer).toContain(">Reject<");
+    expect(footer).toMatch(/<div class="flex flex-wrap items-center gap-2 sm:hidden"><span data-tone/);
+    const header = html.match(/<header[\s\S]*<\/header>/)?.[0] ?? "";
+    expect(header).toContain("hidden flex-wrap items-center gap-2 sm:flex");
+    expect(html.match(/>Approve</g)).toHaveLength(1);
+  });
+
+  it("gives staff the phone footer with the status alone", () => {
+    const html = render({ order: draftCard({ statusKey: "new" }), extra: { role: "staff" } });
+    expect(html.match(/<footer[^>]*>/)?.[0]).toContain("sm:hidden");
+    expect(html).not.toContain(">Approve<");
+  });
 });

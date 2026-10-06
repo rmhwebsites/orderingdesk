@@ -314,6 +314,15 @@ describe("SendConfirm", () => {
     expect(html).not.toMatch(new RegExp(`<p id="${questionId}"[^>]*>[\\s\\S]*?</p><div[^>]*tabindex="-1"`));
   });
 
+  it("keeps Cancel and the send button side by side at the bottom of a phone screen, and SKUs whole", () => {
+    const html = confirmStep(pendingOf());
+    const row = html.match(/<div class="sticky bottom-0[^"]*">([\s\S]*?)<\/div>/);
+    expect(row).not.toBeNull();
+    expect(row?.[0]).toContain("grid-cols-2");
+    expect((row?.[1] ?? "").indexOf(">Cancel<")).toBeLessThan((row?.[1] ?? "").indexOf("Send to vendor"));
+    expect(html).toContain('whitespace-nowrap font-mono text-xs text-ink-2">HH-1<');
+  });
+
   it("shows an offline or error message under the question too", () => {
     const html = confirmStep(pendingOf({ message: "Could not reach the server, so it is not known whether it went out." }));
     const questionId = html.match(/role="group" aria-labelledby="([^"]+)"/)?.[1] ?? "";

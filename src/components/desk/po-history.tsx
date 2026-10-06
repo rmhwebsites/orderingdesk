@@ -28,7 +28,7 @@ import { SendConfirm, useSendFlow } from "./po-send-confirm";
 
 type ListState = { status: "loading" } | { status: "error" } | { status: "ready"; pos: PoView[] };
 
-const small = "h-8 px-3 text-xs";
+const small = "h-8 px-3 text-xs pointer-coarse:h-10";
 
 function rowFocusId(poId: string): string {
   return `po-${poId}-number`;

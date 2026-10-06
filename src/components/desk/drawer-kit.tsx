@@ -35,7 +35,7 @@ export function CopyButton({ text, label }: { text: string; label: string }) {
 
   return (
     <span className="inline-flex items-center gap-2">
-      <button type="button" onClick={copy} className={`${ui.buttonQuiet} h-8 border border-line px-3 text-xs`}>
+      <button type="button" onClick={copy} className={`${ui.buttonQuiet} h-8 border border-line px-3 text-xs pointer-coarse:h-10`}>
         {state === "copied" ? <CheckIcon size={14} aria-hidden /> : <CopyIcon size={14} aria-hidden />}
         {state === "copied" ? "Copied" : label}
       </button>

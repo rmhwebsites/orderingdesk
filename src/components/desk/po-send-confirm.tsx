@@ -133,7 +133,7 @@ function SendContent({ content, labelId }: { content: PendingContent; labelId: s
               <li key={index} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 px-3 py-2">
                 <span className="min-w-0 break-words text-ink">
                   {line.description}
-                  {line.sku ? <span className="ml-2 font-mono text-xs text-ink-2">{line.sku}</span> : null}
+                  {line.sku ? <span className="ml-2 inline-block whitespace-nowrap font-mono text-xs text-ink-2">{line.sku}</span> : null}
                 </span>
                 <span className="ml-auto font-mono text-xs tabular-nums text-ink-2">
                   {unit === null ? `${line.quantity} × Not priced` : `${line.quantity} × ${formatCents(unit, content.currency)}`}
@@ -259,7 +259,9 @@ export function SendConfirm({
       {!sendable ? (
         <InlineMessage tone="bad">A line has no unit cost, so this cannot be sent. Cancel and enter every cost first.</InlineMessage>
       ) : null}
-      <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+      {/* On phones the buttons stay pinned to the bottom of the scrolling
+          footer, side by side, Cancel first, so Cancel is always visible. */}
+      <div className="sticky bottom-0 z-10 -mx-4 -mb-4 grid grid-cols-2 gap-2 rounded-b-panel border-t border-line bg-surface-2 px-4 py-3 sm:static sm:mx-0 sm:mb-0 sm:flex sm:justify-end sm:rounded-none sm:border-0 sm:bg-transparent sm:p-0">
         <button type="button" onClick={onCancel} disabled={busy} className={ui.buttonSecondary}>
           Cancel
         </button>
@@ -274,7 +276,7 @@ export function SendConfirm({
           disabled={busy || !sendable}
           aria-busy={busy || undefined}
           aria-describedby={pending.message ? `${questionId} ${messageId}` : questionId}
-          className={ui.buttonPrimary}
+          className={`${ui.buttonPrimary} min-w-0 max-sm:h-auto max-sm:min-h-10 max-sm:whitespace-normal max-sm:py-2 max-sm:text-center max-sm:leading-tight`}
         >
           {busy ? <Spinner /> : <PaperPlaneTiltIcon size={16} aria-hidden />}
           {busy ? "Sending" : pending.resend ? `Send again to ${pending.vendorName}` : "Send to vendor"}

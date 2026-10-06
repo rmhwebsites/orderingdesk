@@ -73,4 +73,10 @@ describe("ItemsSection prices", () => {
       "Order total",
     );
   });
+
+  it("never breaks a SKU in the middle", () => {
+    const snapshot = readSnapshot(snapshotOf({ items: [{ title: "Insulated Work Jacket", qty: 1, price: "0.00", sku: "EX-JKT-CH-XL", variant: "XL" }] }));
+    const html = renderToStaticMarkup(createElement(ItemsSection, { snapshot, itemsTruncated: false, shopifyUrl: null }));
+    expect(html).toContain('class="whitespace-nowrap font-mono">SKU EX-JKT-CH-XL<');
+  });
 });

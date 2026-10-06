@@ -216,7 +216,7 @@ export function Bell() {
                 onClick={markAllRead}
                 disabled={marking}
                 aria-busy={marking || undefined}
-                className={`${ui.buttonQuiet} -mr-2 h-8 text-xs`}
+                className={`${ui.buttonQuiet} -mr-2 h-8 text-xs pointer-coarse:h-10`}
               >
                 {marking ? <Spinner /> : <ChecksIcon size={16} aria-hidden />}
                 {marking ? "Marking" : "Mark all read"}

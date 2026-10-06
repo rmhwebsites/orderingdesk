@@ -45,7 +45,7 @@ export function StatusSelect({
   const [staged, setStaged] = useState<string | null>(null);
   const shown = staged ?? value;
   const current = statuses.find((status) => status.key === shown);
-  const height = size === "md" ? "h-9 text-sm pl-3.5 pr-9" : "h-8 text-xs pl-3 pr-8";
+  const height = size === "md" ? "h-9 text-sm pl-3.5 pr-9 pointer-coarse:h-10" : "h-8 text-xs pl-3 pr-8 pointer-coarse:h-10";
 
   function step(event: StatusInput) {
     const result = statusInput(input.current, event, value, busy);

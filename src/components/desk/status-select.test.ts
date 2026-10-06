@@ -34,5 +34,6 @@ describe("StatusSelect", () => {
     expect(html).not.toContain("aria-busy");
     expect(html).not.toContain("Press Enter to save");
     expect(html).toContain('data-tone="lime"');
+    expect(html).toContain("pointer-coarse:h-10");
   });
 });
