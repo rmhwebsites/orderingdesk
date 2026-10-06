@@ -4,6 +4,7 @@ import { InfoIcon } from "@phosphor-icons/react/Info";
 import { cardAge } from "@/lib/age";
 import { poNotCreated } from "@/lib/desk-state";
 import { formatDateTime, formatDay, formatMoney } from "@/lib/format";
+import { isPriced } from "@/lib/queue-settings";
 import type { Role } from "@/lib/roles";
 import { statusOptionsFor } from "@/lib/status-options";
 import type { OrderSummary } from "@/server/desk/read";
@@ -39,6 +40,9 @@ export type ListProps = {
     onToggle: (orderId: string, range: boolean) => void;
     onToggleAll: () => void;
   } | null;
+  // Totals and the Total column; when false, a card with a price shows it
+  // as an amber chip.
+  showPrices: boolean;
 };
 
 function itemsLine(order: OrderSummary): string {
@@ -148,6 +152,16 @@ function Total({ order }: { order: OrderSummary }) {
   return <span className="font-mono text-sm tabular-nums text-ink">{formatMoney(order.total, order.currency)}</span>;
 }
 
+// A card with a price while prices are hidden: worth noticing on a $0 store.
+function PricedMark({ order }: { order: OrderSummary }) {
+  return isPriced(order.total) ? (
+    <Chip tone="amber" size="sm" title="This card has a price">
+      <span className="sr-only">Price </span>
+      {formatMoney(order.total, order.currency)}
+    </Chip>
+  ) : null;
+}
+
 function DayText({ order, now }: { order: OrderSummary; now: number }) {
   return (
     <span className="block truncate text-sm tabular-nums text-ink" title={formatDateTime(order.createdAt)}>
@@ -212,6 +226,7 @@ export function OrderTable({
   ageRule,
   closedKeys,
   selection,
+  showPrices,
 }: ListProps) {
   return (
     <div className="overflow-hidden rounded-panel border border-line bg-surface shadow-panel">
@@ -223,7 +238,7 @@ export function OrderTable({
           <col className="w-[24%]" />
           <col />
           <col className="w-[5.5rem]" />
-          <col className="w-[7rem]" />
+          {showPrices ? <col className="w-[7rem]" /> : null}
           <col className="w-[11rem]" />
         </colgroup>
         <thead>
@@ -245,7 +260,7 @@ export function OrderTable({
             <th scope="col" className="px-3 font-semibold">Customer</th>
             <th scope="col" className="px-3 font-semibold">Items</th>
             <th scope="col" className="px-3 font-semibold">Age</th>
-            <th scope="col" className="px-3 text-right font-semibold">Total</th>
+            {showPrices ? <th scope="col" className="px-3 text-right font-semibold">Total</th> : null}
             <th scope="col" className="px-4 font-semibold">Status</th>
           </tr>
         </thead>
@@ -281,6 +296,7 @@ export function OrderTable({
                       {order.name}
                     </button>
                     <KindMark order={order} />
+                    {showPrices ? null : <PricedMark order={order} />}
                   </span>
                 </td>
                 <td className={`px-3 ${flash}`}>
@@ -298,9 +314,11 @@ export function OrderTable({
                 <td className={`px-3 ${flash}`}>
                   <AgeBadge order={order} statuses={statuses} ageRule={ageRule} closedKeys={closedKeys} now={now} withLabel={false} />
                 </td>
-                <td className={`px-3 text-right ${flash}`}>
-                  <Total order={order} />
-                </td>
+                {showPrices ? (
+                  <td className={`px-3 text-right ${flash}`}>
+                    <Total order={order} />
+                  </td>
+                ) : null}
                 <td className={`px-4 ${flash}`} onClick={(event) => event.stopPropagation()}>
                   <RowStatus order={order} statuses={statuses} role={role} busy={savingIds.has(order.id)} onChangeStatus={onChangeStatus} />
                   <RowError message={rowErrors[order.id]} />
@@ -332,6 +350,7 @@ export function OrderCards({
   ageRule,
   closedKeys,
   selection,
+  showPrices,
 }: ListProps) {
   return (
     <ul className="flex flex-col gap-2">
@@ -379,7 +398,7 @@ export function OrderCards({
               </div>
               <RowError message={rowErrors[order.id]} />
             </div>
-            <Total order={order} />
+            {showPrices ? <Total order={order} /> : <PricedMark order={order} />}
           </div>
         </li>
       ))}

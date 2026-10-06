@@ -13,6 +13,7 @@ import { LinkSimpleIcon } from "@phosphor-icons/react/LinkSimple";
 import { formatMoney } from "@/lib/format";
 import { classifyProperty, clipText, type PropertyView } from "@/lib/item-properties";
 import { itemsSubtotal, shippingLines, type OrderSnapshot, type SnapshotItem } from "@/lib/order-snapshot";
+import { isPriced } from "@/lib/queue-settings";
 import type { RequestFields } from "@/lib/request-fields";
 import { Chip, DetailRow, InlineMessage } from "@/components/kit";
 import { CopyButton, Section } from "./drawer-kit";
@@ -126,7 +127,7 @@ export function PropertyList({ props, itemTitle }: { props: SnapshotItem["props"
   );
 }
 
-function ItemRow({ item, currency }: { item: SnapshotItem; currency: string }) {
+function ItemRow({ item, currency, showPrices }: { item: SnapshotItem; currency: string; showPrices: boolean }) {
   const unit = item.price === null ? null : formatMoney(item.price, currency);
   const line =
     item.price === null || !Number.isFinite(Number(item.price))
@@ -149,12 +150,14 @@ function ItemRow({ item, currency }: { item: SnapshotItem; currency: string }) {
             {item.sku ? <span className="font-mono">SKU {item.sku}</span> : null}
           </p>
         </div>
-        <div className="shrink-0 text-right">
-          <p className="font-mono text-sm tabular-nums text-ink">{line ?? "No price"}</p>
-          <p className="font-mono text-xs tabular-nums text-ink-2">
-            {item.qty} x {unit ?? "?"}
-          </p>
-        </div>
+        {showPrices ? (
+          <div className="shrink-0 text-right">
+            <p className="font-mono text-sm tabular-nums text-ink">{line ?? "No price"}</p>
+            <p className="font-mono text-xs tabular-nums text-ink-2">
+              {item.qty} x {unit ?? "?"}
+            </p>
+          </div>
+        ) : null}
       </div>
       <PropertyList props={item.props} itemTitle={item.title} />
     </li>
@@ -162,17 +165,22 @@ function ItemRow({ item, currency }: { item: SnapshotItem; currency: string }) {
 }
 
 // Items with their personalization, then the totals: a draft's subtotal,
-// discount and total, or an order's items sum and total.
+// discount and total, or an order's items sum and total. showPrices false
+// (the workspace's Show prices setting) leaves the prices out, except on a
+// card that has a price.
 export function ItemsSection({
   snapshot,
   itemsTruncated,
   shopifyUrl,
+  showPrices = true,
 }: {
   snapshot: OrderSnapshot;
   itemsTruncated: boolean;
   shopifyUrl: string | null;
+  showPrices?: boolean;
 }) {
   const subtotal = itemsSubtotal(snapshot.items);
+  const pricesHere = showPrices || isPriced(snapshot.total);
   return (
     <Section title="Items">
       {itemsTruncated ? (
@@ -195,11 +203,11 @@ export function ItemsSection({
       ) : (
         <ul className="divide-y divide-line">
           {snapshot.items.map((item, index) => (
-            <ItemRow key={index} item={item} currency={snapshot.currency} />
+            <ItemRow key={index} item={item} currency={snapshot.currency} showPrices={pricesHere} />
           ))}
         </ul>
       )}
-      {snapshot.kind === "draft" ? (
+      {!pricesHere ? null : snapshot.kind === "draft" ? (
         <dl className="mt-4 flex flex-col gap-1.5 border-t border-line pt-3 text-sm">
           {snapshot.subtotal ? (
             <div className="flex justify-between gap-4">

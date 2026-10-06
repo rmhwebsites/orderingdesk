@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { EventView, StatusView } from "@/server/desk/shapes";
-import { draftSnapshotOf } from "@/server/desk/test-helpers";
+import { draftSnapshotOf, snapshotOf } from "@/server/desk/test-helpers";
+import { ToastProvider } from "@/components/toasts";
 import { OrderDrawerContent, type DrawerOrder, type MemberView } from "./order-drawer";
 
 // The request drawer as a manager or platform admin sees it (draft orders
@@ -56,31 +57,35 @@ function render(
   opts: { order?: DrawerOrder; timeline?: EventView[]; members?: MemberView[]; extra?: Record<string, unknown> } = {},
 ) {
   return renderToStaticMarkup(
-    createElement(OrderDrawerContent, {
-      labelId: "drawer-title",
-      orderId: "d1",
-      summary: undefined,
-      detail: { status: "ready", order: opts.order ?? draftCard(), itemsTruncated: false },
-      timeline: opts.timeline ?? [],
-      timelineStatus: "ready",
-      statuses: STATUSES,
-      members: new Map((opts.members ?? []).map((member) => [member.userId, member])),
-      selfUserId: SELF,
-      role: "manager",
-      shopDomain: "impactrentals.myshopify.com",
-      drafts: { draftsEnabled: true },
-      onChangeStatus: noop,
-      onAddNote: none,
-      onApprove: none,
-      onReject: none,
-      onClose: noop,
-      onRetry: noop,
-      canManagePos: true,
-      poRefreshKey: 0,
-      onCreatePo: noop,
-      onEditPo: noop,
-      ...(opts.extra ?? {}),
-    }),
+    createElement(
+      ToastProvider,
+      null,
+      createElement(OrderDrawerContent, {
+        labelId: "drawer-title",
+        orderId: "d1",
+        summary: undefined,
+        detail: { status: "ready", order: opts.order ?? draftCard(), itemsTruncated: false },
+        timeline: opts.timeline ?? [],
+        timelineStatus: "ready",
+        statuses: STATUSES,
+        members: new Map((opts.members ?? []).map((member) => [member.userId, member])),
+        selfUserId: SELF,
+        role: "manager",
+        shopDomain: "impactrentals.myshopify.com",
+        drafts: { draftsEnabled: true },
+        onChangeStatus: noop,
+        onAddNote: none,
+        onApprove: none,
+        onReject: none,
+        onClose: noop,
+        onRetry: noop,
+        canManagePos: true,
+        poRefreshKey: 0,
+        onCreatePo: noop,
+        onEditPo: noop,
+        ...(opts.extra ?? {}),
+      }),
+    ),
   );
 }
 
@@ -133,5 +138,22 @@ describe("OrderDrawerContent", () => {
       extra: { nextRequest: { id: "d13", name: "#D13" }, onApproveAndNext: async () => null },
     });
     expect(html).toContain(">Approve and next<");
+  });
+
+  it("hides the Paid chip and a $0 order's totals when prices are hidden", () => {
+    const order = draftCard({
+      shopifyOrderId: "5001",
+      name: "#1001",
+      shopify: snapshotOf({ total: "0.00", currency: "USD" }),
+      statusKey: "new",
+      draftName: null,
+      shopifyDraftId: null,
+    });
+    const shown = render({ order, extra: { showPrices: true } });
+    expect(shown).toContain(">Paid</span>");
+    expect(shown).toContain("Order total");
+    const hidden = render({ order, extra: { showPrices: false } });
+    expect(hidden).not.toContain(">Paid</span>");
+    expect(hidden).not.toContain("Order total");
   });
 });

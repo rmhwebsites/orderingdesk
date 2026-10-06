@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { PropertyList, RequestSection } from "./request-parts";
+import { readSnapshot } from "@/lib/order-snapshot";
+import { snapshotOf } from "@/server/desk/test-helpers";
+import { ItemsSection, PropertyList, RequestSection } from "./request-parts";
 
 // Personalization and request fields as the drawer renders them (draft
 // orders spec sections 11.3 and 11.4 with section 18).
@@ -57,5 +59,18 @@ describe("RequestSection", () => {
     expect(html).toContain("&lt;b&gt;Ship to Branch&lt;/b&gt;");
     expect(html).toContain("PO-77");
     expect(html).not.toContain(">Note<");
+  });
+});
+
+describe("ItemsSection prices", () => {
+  it("leaves the prices out of a $0 card when the workspace hides them, and keeps them for a priced one", () => {
+    const free = readSnapshot(snapshotOf({ total: "0.00", items: [{ title: "Hard Hat", qty: 2, price: "0.00", sku: "HH-1" }] }));
+    expect(renderToStaticMarkup(createElement(ItemsSection, { snapshot: free, itemsTruncated: false, shopifyUrl: null, showPrices: false }))).not.toContain(
+      "Order total",
+    );
+    const priced = readSnapshot(snapshotOf({ total: "48.00" }));
+    expect(renderToStaticMarkup(createElement(ItemsSection, { snapshot: priced, itemsTruncated: false, shopifyUrl: null, showPrices: false }))).toContain(
+      "Order total",
+    );
   });
 });

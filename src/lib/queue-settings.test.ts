@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { DEFAULT_QUEUE_SETTINGS, parseQueueSettings } from "./queue-settings";
+import { DEFAULT_QUEUE_SETTINGS, isPriced, parseQueueSettings, pricesShown } from "./queue-settings";
 
 describe("parseQueueSettings", () => {
   it("accepts whole days with red after amber, and a price display mode", () => {
@@ -25,5 +25,24 @@ describe("parseQueueSettings", () => {
     expect(parseQueueSettings({ ageAmberDays: 2, ageRedDays: 4, priceDisplay: "always" })).toBe(
       "Show prices must be auto, show or hide",
     );
+  });
+});
+
+describe("pricesShown", () => {
+  it("follows show and hide, and in auto shows prices only when more than 5% of cards have one", () => {
+    const free = Array.from({ length: 40 }, () => "0.00");
+    expect(pricesShown("show", free)).toBe(true);
+    expect(pricesShown("hide", ["48.00"])).toBe(false);
+    expect(pricesShown("auto", free)).toBe(false);
+    expect(pricesShown("auto", [...free.slice(0, 39), "48.00"])).toBe(false);
+    expect(pricesShown("auto", [...free.slice(0, 18), "48.00", "12.00"])).toBe(true);
+    expect(pricesShown("auto", [])).toBe(false);
+  });
+
+  it("counts a total as a price only when it is a number other than 0", () => {
+    expect(isPriced("0.00")).toBe(false);
+    expect(isPriced("")).toBe(false);
+    expect(isPriced("n/a")).toBe(false);
+    expect(isPriced("12.50")).toBe(true);
   });
 });

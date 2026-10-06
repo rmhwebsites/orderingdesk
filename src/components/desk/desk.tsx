@@ -29,7 +29,7 @@ import {
   type DeskState,
   type LiveEffects,
 } from "@/lib/desk-state";
-import { DEFAULT_QUEUE_SETTINGS, type QueueSettingsView } from "@/lib/queue-settings";
+import { DEFAULT_QUEUE_SETTINGS, pricesShown, type QueueSettingsView } from "@/lib/queue-settings";
 import { roleAtLeast } from "@/lib/roles";
 import { selectAll, toggleSelection, type Selection } from "@/lib/selection";
 import { BULK_STATUS_MAX, type BulkCard } from "@/lib/status-rules";
@@ -757,6 +757,11 @@ export function Desk() {
     () => selectOrders(desk.orders, listFilter(filter, loadedView), closedKeys),
     [desk.orders, filter, loadedView, closedKeys],
   );
+  // Totals and the Paid chip (the workspace's Show prices setting).
+  const showPrices = useMemo(
+    () => pricesShown(queue.priceDisplay, desk.orders.map((row) => row.total)),
+    [queue.priceDisplay, desk.orders],
+  );
   const visibleIds = useMemo(() => visible.map((row) => row.id), [visible]);
   const selectedCards: BulkCard[] = useMemo(
     () =>
@@ -992,6 +997,7 @@ export function Desk() {
                   ageRule={{ amberDays: queue.ageAmberDays, redDays: queue.ageRedDays }}
                   closedKeys={closedKeys}
                   selection={{ selected: selection.selected, onToggle: toggleCard, onToggleAll: toggleAll }}
+                  showPrices={showPrices}
                 />
               )}
             </div>
@@ -1044,6 +1050,7 @@ export function Desk() {
             poRefreshKey={poRefresh}
             onCreatePo={() => setPoModal({ orderId: drawerOrderId, po: null })}
             onEditPo={(po) => setPoModal({ orderId: drawerOrderId, po })}
+            showPrices={showPrices}
           />
         ) : null}
       </DrawerShell>

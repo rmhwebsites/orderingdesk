@@ -60,6 +60,7 @@ const base: ListProps = {
   ageRule: { amberDays: 2, redDays: 4 },
   closedKeys: new Set(),
   selection: null,
+  showPrices: true,
 };
 
 const render = (layout: "table" | "cards", overrides: Partial<ListProps> = {}) =>
@@ -144,5 +145,20 @@ describe("OrderList selection", () => {
     expect(table.match(/aria-label="Select #/g)).toHaveLength(3);
     expect(table).toMatch(/<input type="checkbox" aria-label="Select #1001"[^>]*checked=""/);
     expect(render("cards", { selection }).match(/aria-label="Select #/g)).toHaveLength(3);
+  });
+});
+
+describe("OrderList prices", () => {
+  it("drops the Total column when prices are hidden, and still marks a card that has a price", () => {
+    const orders = [card("free"), card("priced", { total: "48.00" })];
+    const shown = render("table", { orders, showPrices: true });
+    expect(shown).toContain(">Total</th>");
+    expect(shown).toContain("$0.00");
+    const hidden = render("table", { orders, showPrices: false });
+    expect(hidden).not.toContain(">Total</th>");
+    expect(hidden).not.toContain("$0.00");
+    expect(hidden).toContain("$48.00");
+    expect(hidden).toContain('title="This card has a price"');
+    expect(render("cards", { orders, showPrices: false })).not.toContain("$0.00");
   });
 });

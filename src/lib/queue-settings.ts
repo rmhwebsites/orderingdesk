@@ -41,3 +41,24 @@ export function parseQueueSettings(body: unknown): QueueSettingsView | string {
   }
   return { ageAmberDays: amber, ageRedDays: red, priceDisplay: display as PriceDisplay };
 }
+
+// A total is a price when it is a number other than 0.
+export function isPriced(total: string): boolean {
+  const value = Number(total);
+  return total.trim().length > 0 && Number.isFinite(value) && value !== 0;
+}
+
+// Auto shows prices only when more than this share of the loaded cards has
+// one: a company store where nearly every order is $0 reads cleaner
+// without them (comprehensive desk design section 1).
+export const AUTO_PRICE_SHARE = 0.05;
+
+export function pricesShown(mode: PriceDisplay, totals: readonly string[]): boolean {
+  if (mode !== "auto") {
+    return mode === "show";
+  }
+  if (totals.length === 0) {
+    return false;
+  }
+  return totals.filter(isPriced).length / totals.length > AUTO_PRICE_SHARE;
+}

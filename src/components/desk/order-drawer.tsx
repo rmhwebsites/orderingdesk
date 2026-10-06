@@ -429,6 +429,7 @@ export function OrderDrawerContent({
   poRefreshKey,
   onCreatePo,
   onEditPo,
+  showPrices = true,
 }: {
   labelId: string;
   orderId: string;
@@ -462,6 +463,9 @@ export function OrderDrawerContent({
   poRefreshKey: number;
   onCreatePo: () => void;
   onEditPo: (po: PoView) => void;
+  // Totals and the Paid chip (the workspace's Show prices setting); a card
+  // with a price keeps its totals either way.
+  showPrices?: boolean;
 }) {
   const order = detail.status === "ready" ? detail.order : null;
   const snapshot = order ? readSnapshot(order.shopify) : null;
@@ -582,9 +586,9 @@ export function OrderDrawerContent({
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <Chip tone="blue">{DRAFT_STATUS_LABEL[draftStatus]}</Chip>
           </div>
-        ) : financial || fulfillment ? (
+        ) : (financial && showPrices) || fulfillment ? (
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            {financial ? <Chip tone={financialTone(financial)}>{sentenceCase(financial)}</Chip> : null}
+            {financial && showPrices ? <Chip tone={financialTone(financial)}>{sentenceCase(financial)}</Chip> : null}
             {fulfillment ? <Chip tone={fulfillmentTone(fulfillment)}>{sentenceCase(fulfillment)}</Chip> : null}
           </div>
         ) : null}
@@ -714,7 +718,7 @@ export function OrderDrawerContent({
               </Section>
             )}
 
-            <ItemsSection snapshot={snapshot} itemsTruncated={itemsTruncated} shopifyUrl={shopifyUrl} />
+            <ItemsSection snapshot={snapshot} itemsTruncated={itemsTruncated} shopifyUrl={shopifyUrl} showPrices={showPrices} />
 
             <ShipToSection shipping={snapshot.shipping} />
 
