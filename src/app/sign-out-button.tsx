@@ -2,16 +2,18 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { SignOutIcon } from "@phosphor-icons/react/SignOut";
 import { authClient } from "@/lib/auth-client";
 import { disableDevicePush } from "@/lib/push-client";
-import { ui } from "@/components/ui";
 import { Spinner } from "@/components/kit";
+import { ui } from "@/components/ui";
 
 // How long signing out waits for this browser's push subscription to be
 // forgotten before it signs out anyway.
 const FORGET_PUSH_MS = 2000;
 
-export function SignOutButton() {
+// variant "menu": a row of the account menu (className from the menu).
+export function SignOutButton({ variant = "button", className }: { variant?: "button" | "menu"; className?: string }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
 
@@ -33,8 +35,14 @@ export function SignOutButton() {
   }
 
   return (
-    <button type="button" onClick={handleClick} disabled={busy} aria-busy={busy || undefined} className={ui.buttonSecondary}>
-      {busy ? <Spinner /> : null}
+    <button
+      type="button"
+      onClick={handleClick}
+      disabled={busy}
+      aria-busy={busy || undefined}
+      className={className ?? ui.buttonSecondary}
+    >
+      {busy ? <Spinner /> : variant === "menu" ? <SignOutIcon size={18} aria-hidden /> : null}
       {busy ? "Signing out" : "Sign out"}
     </button>
   );

@@ -3,6 +3,7 @@ import {
   formatDate,
   formatMoney,
   formatTime,
+  initials,
   relativeTime,
   sentenceCase,
   shopifyAdminDraftUrl,
@@ -81,5 +82,14 @@ describe("shopifyAdminDraftUrl", () => {
     expect(shopifyAdminDraftUrl(null, "1")).toBeNull();
     expect(shopifyAdminDraftUrl("impact-rentals.myshopify.com", "d-12")).toBeNull();
     expect(shopifyAdminDraftUrl("impact-rentals.myshopify.com", null)).toBeNull();
+  });
+});
+
+describe("initials", () => {
+  it("takes up to two first letters of the name, else the email's first letter", () => {
+    expect(initials("Casey Lin", "casey@example.com")).toBe("CL");
+    expect(initials("  sam  ortiz  vale ", "sam@example.com")).toBe("SO");
+    expect(initials("", "jordan@example.com")).toBe("J");
+    expect(initials(null, "")).toBe("?");
   });
 });

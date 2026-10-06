@@ -100,3 +100,12 @@ function adminUrl(shopDomain: string | null, section: "orders" | "draft_orders",
   }
   return `https://admin.shopify.com/store/${match[1]}/${section}/${legacyId}`;
 }
+
+// "Casey Lin" -> "CL"; no name: the email's first letter. Uppercase, at
+// most two letters, "?" when there is nothing to use.
+export function initials(name: string | null | undefined, email: string): string {
+  const words = (name ?? "").trim().split(/\s+/).filter((word) => word.length > 0);
+  const letters = words.length > 0 ? words.slice(0, 2).map((word) => word.charAt(0)) : [email.trim().charAt(0)];
+  const text = letters.join("").toUpperCase();
+  return text.length > 0 ? text : "?";
+}
