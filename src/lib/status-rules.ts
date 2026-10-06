@@ -8,9 +8,9 @@
 import type { StatusView } from "../server/desk/shapes";
 import { roleAtLeast, type Role } from "./roles";
 
-// A bulk move takes at most this many cards: after the response each moved
-// card's status is written to Shopify one card at a time, within the time a
-// Worker has after its response.
+// A bulk move takes at most this many cards: after the response the moved
+// cards' statuses are written to Shopify four cards at a time, within the
+// time a Worker has after its response (the bulk status route).
 export const BULK_STATUS_MAX = 25;
 
 type RuleStatus = { label: string; shopifyLink: string | null };

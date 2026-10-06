@@ -82,6 +82,81 @@ describe("POST /api/workspaces/[id]/orders/status", () => {
     expect(notifyActivity).not.toHaveBeenCalled();
   });
 
+  it("writes 25 cards to Shopify four at a time, each card once, so the run fits the time after the response", async () => {
+    state.session = { user: { id: "u_staff", email: "staff@example.com" } };
+    const ids = Array.from({ length: 25 }, (_, i) => `o${i + 1}`);
+    for (const id of ids.slice(2)) {
+      await seedOrder(state.db!, "ws_impact", { id });
+    }
+    let inFlight = 0;
+    let most = 0;
+    vi.mocked(pushAndShare).mockImplementation(async () => {
+      inFlight++;
+      most = Math.max(most, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      inFlight--;
+    });
+    try {
+      const response = await POST(post({ orderIds: ids, statusKey: "shipped" }), context);
+      expect(response.status).toBe(200);
+      await Promise.all(state.after);
+    } finally {
+      vi.mocked(pushAndShare).mockImplementation(async () => undefined);
+    }
+    expect(most).toBe(4);
+    const written = vi.mocked(pushAndShare).mock.calls.map((call) => call[3]);
+    expect([...written].sort()).toEqual([...ids].sort());
+    expect(vi.mocked(broadcast)).toHaveBeenCalledTimes(25);
+  });
+
+  it("logs the cards not yet written to Shopify when the writes run past 20 seconds", async () => {
+    state.session = { user: { id: "u_staff", email: "staff@example.com" } };
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    let release = () => {};
+    vi.mocked(pushAndShare).mockImplementation(async (_db, _env, _workspaceId, orderId) => {
+      if (orderId === "o2") {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
+    });
+    try {
+      const response = await POST(post({ orderIds: ["o1", "o2"], statusKey: "shipped" }), context);
+      expect(response.status).toBe(200);
+      await vi.advanceTimersByTimeAsync(19_999);
+      expect(warn).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[0]).toBe(
+        "[bulk-status] " + JSON.stringify({ workspaceId: "ws_impact", afterMs: 20_000, unfinished: ["o2"] }),
+      );
+      release();
+      await Promise.all(state.after);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.mocked(pushAndShare).mockImplementation(async () => undefined);
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("logs nothing when the writes finish in time", async () => {
+    state.session = { user: { id: "u_staff", email: "staff@example.com" } };
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await POST(post({ orderIds: ["o1", "o2"], statusKey: "shipped" }), context);
+      await Promise.all(state.after);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("refuses more than 25 cards at once", async () => {
     state.session = { user: { id: "u_staff", email: "staff@example.com" } };
     const response = await POST(post({ orderIds: Array.from({ length: 26 }, (_, i) => `o${i}`), statusKey: "shipped" }), context);

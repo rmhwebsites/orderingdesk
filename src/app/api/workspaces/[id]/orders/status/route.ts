@@ -16,9 +16,20 @@ type RouteContext = { params: Promise<{ id: string }> };
 // why, and nothing about them changes. 200 {statusLabel, results:
 // [{orderId, name, outcome, error?}], changed: [{event, order}],
 // triggersPo}; 400 {error}. After the response each moved card is
-// broadcast, then its status goes to Shopify one card at a time, each write
-// sent once (pushAndShare, as for one change). A bulk move sends no
-// all-activity pushes: one per card would flood phones.
+// broadcast, then its status goes to Shopify, PUSH_CONCURRENCY cards at a
+// time, each write sent once (pushAndShare, as for one change). A bulk move
+// sends no all-activity pushes: one per card would flood phones.
+//
+// A Worker has about 30 seconds after its response. One card's write takes
+// several Shopify calls (more for a status linked to fulfilled), so 25 cards
+// one at a time could run past that and silently lose the last writes; four
+// at a time fits, and stays well inside Shopify's GraphQL rate limit. If the
+// writes are still running after PUSH_WARN_MS, the cards not yet written are
+// logged, so a write the Worker never finished can be found (its order has
+// no shopify_write entry for the move) and its status saved again.
+const PUSH_CONCURRENCY = 4;
+const PUSH_WARN_MS = 20_000;
+
 export async function POST(request: Request, context: RouteContext) {
   try {
     const { id } = await context.params;
@@ -35,8 +46,22 @@ export async function POST(request: Request, context: RouteContext) {
           for (const change of result.changed) {
             await broadcast(env, id, { kind: "order.status", event: change.event, order: change.order });
           }
-          for (const change of result.changed) {
-            await pushAndShare(db, env, id, change.order.id);
+          const queue = result.changed.map((change) => change.order.id);
+          const unfinished = new Set(queue);
+          const slow = setTimeout(() => {
+            console.warn("[bulk-status] " + JSON.stringify({ workspaceId: id, afterMs: PUSH_WARN_MS, unfinished: [...unfinished] }));
+          }, PUSH_WARN_MS);
+          // pushAndShare never throws, so one card cannot stop the others.
+          const worker = async () => {
+            for (let orderId = queue.shift(); orderId; orderId = queue.shift()) {
+              await pushAndShare(db, env, id, orderId);
+              unfinished.delete(orderId);
+            }
+          };
+          try {
+            await Promise.all(Array.from({ length: Math.min(PUSH_CONCURRENCY, queue.length) }, worker));
+          } finally {
+            clearTimeout(slow);
           }
         })(),
       );
