@@ -136,6 +136,12 @@ describe("loadActivityFeed items", () => {
       expect.objectContaining({ id: "e001", orderName: "#1001", actorName: "Jamie Rivers", mine: true }),
     ]);
   });
+
+  it("carries each entry's meta, so the bell can show what it means", async () => {
+    await event({ createdAt: 10, actorId: "u_other", type: "status", text: "Approved the request", meta: { action: "approve" } });
+    const feed = await loadActivityFeed(db, WS, "u_me");
+    expect(feed.items[0].meta).toEqual({ action: "approve" });
+  });
 });
 
 describe("markAllRead", () => {

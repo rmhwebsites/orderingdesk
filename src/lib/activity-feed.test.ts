@@ -11,6 +11,7 @@ const item = (overrides: Partial<ActivityItem>): ActivityItem => ({
   actorId: "u_other",
   actorName: "Jamie Rivers",
   source: "app",
+  meta: null,
   createdAt: 1,
   unread: true,
   mine: false,

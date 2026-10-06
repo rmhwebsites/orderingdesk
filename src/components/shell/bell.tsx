@@ -3,19 +3,13 @@
 import Link from "next/link";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { BellIcon } from "@phosphor-icons/react/Bell";
-import { ChatTextIcon } from "@phosphor-icons/react/ChatText";
-import { CheckCircleIcon } from "@phosphor-icons/react/CheckCircle";
 import { ChecksIcon } from "@phosphor-icons/react/Checks";
-import { FileTextIcon } from "@phosphor-icons/react/FileText";
-import { ShoppingBagIcon } from "@phosphor-icons/react/ShoppingBag";
-import { StorefrontIcon } from "@phosphor-icons/react/Storefront";
-import { TagIcon } from "@phosphor-icons/react/Tag";
-import { TrashIcon } from "@phosphor-icons/react/Trash";
-import { WarningIcon } from "@phosphor-icons/react/Warning";
 import { actorLabel, activityToasts, orderHref, unreadBadge } from "@/lib/activity-feed";
+import { eventLook } from "@/lib/event-look";
 import { formatDateTime, relativeTime } from "@/lib/format";
 import { useNow } from "@/lib/use-now";
 import type { ActivityFeed, ActivityItem } from "@/server/activity";
+import { EventIcon } from "@/components/event-icon";
 import { useToast } from "@/components/toasts";
 import { ui } from "@/components/ui";
 import { Spinner } from "@/components/kit";
@@ -30,20 +24,6 @@ import { useWorkspace } from "./workspace-provider";
 
 const RELOAD_DELAY_MS = 400;
 
-const ICONS: Record<ActivityItem["type"], typeof BellIcon> = {
-  order_new: ShoppingBagIcon,
-  status: TagIcon,
-  note: ChatTextIcon,
-  po_draft: FileTextIcon,
-  po_sent: FileTextIcon,
-  po_failed: WarningIcon,
-  sync_error: WarningIcon,
-  // Only failed Shopify writes reach the feed.
-  shopify_write: StorefrontIcon,
-  draft_completed: CheckCircleIcon,
-  draft_deleted: TrashIcon,
-};
-
 function itemTitle(item: ActivityItem): string {
   if (item.orderName) {
     return item.orderName;
@@ -52,12 +32,9 @@ function itemTitle(item: ActivityItem): string {
 }
 
 function ItemContent({ item, now }: { item: ActivityItem; now: number }) {
-  const Icon = item.type === "shopify_write" ? WarningIcon : ICONS[item.type] ?? BellIcon;
   return (
     <>
-      <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-control bg-surface-2 text-ink-2">
-        <Icon size={16} aria-hidden />
-      </span>
+      <EventIcon look={eventLook(item)} className="mt-0.5" />
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline gap-2">
           <span

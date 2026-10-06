@@ -37,6 +37,7 @@ export type ActivityItem = {
   // still has an account) did it.
   actorName: string | null;
   source: EventView["source"];
+  meta: unknown;
   createdAt: number;
   unread: boolean;
   mine: boolean;
@@ -98,6 +99,7 @@ export async function loadActivityFeed(db: Db, workspaceId: string, viewerUserId
         actorUserName: user.name,
         actorEmail: user.email,
         source: events.source,
+        meta: events.meta,
         createdAt: events.createdAt,
       })
       .from(events)
@@ -122,6 +124,7 @@ export async function loadActivityFeed(db: Db, workspaceId: string, viewerUserId
         actorId: row.actorId,
         actorName: row.actorId ? row.actorUserName?.trim() || row.actorEmail || null : null,
         source: row.source,
+        meta: row.meta ?? null,
         createdAt: row.createdAt,
         unread: lastSeenAt !== null && !mine && row.createdAt > lastSeenAt,
         mine,

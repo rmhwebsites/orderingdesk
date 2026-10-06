@@ -3,19 +3,9 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/ArrowSquareOut";
-import { ChatTextIcon } from "@phosphor-icons/react/ChatText";
-import { CheckCircleIcon } from "@phosphor-icons/react/CheckCircle";
-import { ClipboardTextIcon } from "@phosphor-icons/react/ClipboardText";
-import { FileTextIcon } from "@phosphor-icons/react/FileText";
 import { InfoIcon } from "@phosphor-icons/react/Info";
 import { PaperPlaneRightIcon } from "@phosphor-icons/react/PaperPlaneRight";
-import { ShoppingBagIcon } from "@phosphor-icons/react/ShoppingBag";
-import { StorefrontIcon } from "@phosphor-icons/react/Storefront";
-import { TagIcon } from "@phosphor-icons/react/Tag";
-import { TrashIcon } from "@phosphor-icons/react/Trash";
-import { WarningIcon } from "@phosphor-icons/react/Warning";
 import { XIcon } from "@phosphor-icons/react/X";
-import { XCircleIcon } from "@phosphor-icons/react/XCircle";
 import {
   formatDateTime,
   relativeTime,
@@ -28,9 +18,11 @@ import { financialTone, fulfillmentTone, readSnapshot } from "@/lib/order-snapsh
 import { requestFieldsOf } from "@/lib/request-fields";
 import { roleAtLeast, type Role } from "@/lib/roles";
 import { statusOptionsFor } from "@/lib/status-options";
+import { eventLook } from "@/lib/event-look";
 import { useNow } from "@/lib/use-now";
 import type { OrderSummary } from "@/server/desk/read";
 import type { EventView, StatusView } from "@/server/desk/shapes";
+import { EventIcon } from "@/components/event-icon";
 import { ui } from "@/components/ui";
 import { focusSoon } from "@/components/settings/kit";
 import { StatusSelect } from "./status-select";
@@ -230,46 +222,8 @@ function statusSetterName(
   return entry?.actorName?.trim() || "a former member";
 }
 
-const EVENT_ICONS: Record<EventView["type"], typeof ChatTextIcon> = {
-  note: ChatTextIcon,
-  status: TagIcon,
-  order_new: ShoppingBagIcon,
-  po_draft: FileTextIcon,
-  po_sent: FileTextIcon,
-  po_failed: WarningIcon,
-  sync_error: WarningIcon,
-  shopify_write: StorefrontIcon,
-  draft_completed: CheckCircleIcon,
-  draft_deleted: TrashIcon,
-};
-
 function metaOf(event: EventView): Record<string, unknown> {
   return typeof event.meta === "object" && event.meta !== null ? (event.meta as Record<string, unknown>) : {};
-}
-
-// A Shopify write that failed reads as a warning, so it stands out. Request
-// entries (draft orders spec section 11.6): a new request, an approval, a
-// rejection, and a completion that came from Shopify.
-function eventIcon(event: EventView): typeof ChatTextIcon {
-  const meta = metaOf(event);
-  if (event.type === "shopify_write" && meta.ok === false) {
-    return WarningIcon;
-  }
-  if (event.type === "order_new" && meta.kind === "draft") {
-    return ClipboardTextIcon;
-  }
-  if (event.type === "status") {
-    if (meta.action === "approve") {
-      return CheckCircleIcon;
-    }
-    if (meta.action === "reject") {
-      return XCircleIcon;
-    }
-    if (event.source === "shopify" && (meta.reason === "completed" || meta.completed === true)) {
-      return StorefrontIcon;
-    }
-  }
-  return EVENT_ICONS[event.type] ?? InfoIcon;
 }
 
 function Timeline({
@@ -316,40 +270,35 @@ function Timeline({
   }
   return (
     <ol className="flex flex-col gap-4">
-      {events.map((event) => {
-        const Icon = eventIcon(event);
-        return (
-          <li key={event.id} className="flex gap-3">
-            <span className="grid size-8 shrink-0 place-items-center rounded-control bg-surface-2 text-ink-2">
-              <Icon size={16} aria-hidden />
-            </span>
-            <div className="min-w-0 flex-1 pt-1">
-              <p className="flex flex-wrap items-baseline gap-x-2 text-sm">
-                <span className="font-semibold text-ink">{actorName(event, members, selfUserId)}</span>
-                <time
-                  dateTime={new Date(event.createdAt).toISOString()}
-                  title={formatDateTime(event.createdAt)}
-                  className="text-xs tabular-nums text-ink-2"
-                >
-                  {now > 0 ? relativeTime(event.createdAt, now) : formatDateTime(event.createdAt)}
-                </time>
-              </p>
-              {event.type === "note" ? (
-                <>
-                  {metaOf(event).rejectReason === true ? (
-                    <p className="mt-1 text-xs font-semibold text-ink-2">Reason</p>
-                  ) : null}
-                  <p className="mt-1.5 whitespace-pre-wrap break-words rounded-panel bg-surface-2 px-3 py-2 text-sm text-ink">
-                    {event.text}
-                  </p>
-                </>
-              ) : (
-                <p className="mt-0.5 break-words text-sm text-ink-2">{event.text}</p>
-              )}
-            </div>
-          </li>
-        );
-      })}
+      {events.map((event) => (
+        <li key={event.id} className="flex gap-3">
+          <EventIcon look={eventLook(event)} />
+          <div className="min-w-0 flex-1 pt-1">
+            <p className="flex flex-wrap items-baseline gap-x-2 text-sm">
+              <span className="font-semibold text-ink">{actorName(event, members, selfUserId)}</span>
+              <time
+                dateTime={new Date(event.createdAt).toISOString()}
+                title={formatDateTime(event.createdAt)}
+                className="text-xs tabular-nums text-ink-2"
+              >
+                {now > 0 ? relativeTime(event.createdAt, now) : formatDateTime(event.createdAt)}
+              </time>
+            </p>
+            {event.type === "note" ? (
+              <>
+                {metaOf(event).rejectReason === true ? (
+                  <p className="mt-1 text-xs font-semibold text-ink-2">Reason</p>
+                ) : null}
+                <p className="mt-1.5 whitespace-pre-wrap break-words rounded-panel bg-surface-2 px-3 py-2 text-sm text-ink">
+                  {event.text}
+                </p>
+              </>
+            ) : (
+              <p className="mt-0.5 break-words text-sm text-ink-2">{event.text}</p>
+            )}
+          </div>
+        </li>
+      ))}
     </ol>
   );
 }
