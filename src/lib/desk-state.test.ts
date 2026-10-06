@@ -9,6 +9,7 @@ import {
   crossesClosed,
   deskKindCounts,
   dropsDeletedFilter,
+  listFilter,
   nextWaitingRequest,
   optimisticStatus,
   poNotCreated,
@@ -18,6 +19,8 @@ import {
   statusChips,
   totalOrders,
   touchesPurchaseOrders,
+  viewLoadState,
+  viewMatches,
   withPurchaseOrder,
   type DeskState,
 } from "./desk-state";
@@ -508,6 +511,35 @@ describe("views", () => {
     expect(chipsForView(chips, "approval", closed).map((chip) => chip.key)).toEqual(["new", "gone"]);
     expect(chipsForView(chips, "closed", closed).map((chip) => chip.key)).toEqual(["delivered"]);
     expect(chipsForView(chips, "all", closed)).toHaveLength(3);
+  });
+
+  // The address changes at once; the asked-for view's cards land later.
+  it("filters by the loaded view while another view loads, so the list stays instead of showing the new view's empty state", () => {
+    const loaded = (view: "open" | "closed") => list.filter((row) => !row.draftDeleted && viewMatches(row, view, closed));
+    const asked = (view: "open" | "closed" | "approval", kind: "all" | "drafts" = "all") =>
+      ({ query: "", statusKey: null, sort: "newest", kind, view }) as const;
+    const shown = (cards: typeof list, view: "open" | "closed" | "approval", from: "open" | "closed", kind?: "all" | "drafts") =>
+      selectOrders(cards, listFilter(asked(view, kind), from), closed).map((row) => row.id);
+    // Open to Closed: the Open cards stay until Closed lands (filtering
+    // them by Closed left nothing, so "Nothing closed yet" showed).
+    expect(selectOrders(loaded("open"), asked("closed"), closed)).toEqual([]);
+    expect(shown(loaded("open"), "closed", "open")).toEqual(["o1", "d1"]);
+    // Closed to Open, and Closed to Needs approval: the closed cards stay.
+    expect(shown(loaded("closed"), "open", "closed")).toEqual(["o2", "d2"]);
+    expect(shown(loaded("closed"), "approval", "closed")).toEqual(["o2", "d2"]);
+    // Loaded: the view's own cards, and the approval queue shows every kind.
+    expect(listFilter(asked("approval", "drafts"), "approval")).toMatchObject({ view: "approval", kind: "all" });
+    expect(listFilter(asked("open", "drafts"), "open")).toMatchObject({ view: "open", kind: "drafts" });
+    expect(shown(list, "approval", "open")).toEqual(["o1", "d1"]);
+  });
+
+  it("loads from the render the address changes in, and tells a view that did not load from one still loading", () => {
+    expect(viewLoadState("closed", "open", null)).toBe("loading");
+    expect(viewLoadState("closed", "open", "all")).toBe("loading");
+    expect(viewLoadState("closed", "open", "closed")).toBe("failed");
+    expect(viewLoadState("open", "open", null)).toBe("ready");
+    // A failed refresh of the loaded view keeps its cards.
+    expect(viewLoadState("open", "open", "open")).toBe("ready");
   });
 });
 

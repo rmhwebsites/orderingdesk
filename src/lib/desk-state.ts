@@ -370,6 +370,32 @@ export function crossesClosed(meta: unknown, closedKeys: ReadonlySet<string>): b
   return move !== null && closedKeys.has(move.from) !== closedKeys.has(move.to);
 }
 
+// The filter the list applies (src/components/desk/desk.tsx). The view in
+// the address changes at once, but the desk holds the loaded view's cards
+// until the asked-for view lands, so the list filters by the loaded view:
+// it keeps showing those cards, dimmed, instead of emptying into the new
+// view's empty state. The approval queue shows every kind.
+export function listFilter(filter: DeskFilter, loadedView: DeskView): DeskFilter {
+  return { ...filter, view: loadedView, kind: loadedView === "approval" ? "all" : filter.kind };
+}
+
+// Where the list stands against the view in the address: ready (it holds
+// that view's cards), loading (the view changed and its cards have not
+// landed; true from the render the address changes in, so nothing flashes
+// before the load starts), or failed (the asked-for view's load failed;
+// failedView is the last view whose load failed, cleared by a load that
+// lands).
+export function viewLoadState(
+  askedView: DeskView,
+  loadedView: DeskView,
+  failedView: DeskView | null,
+): "ready" | "loading" | "failed" {
+  if (askedView === loadedView) {
+    return "ready";
+  }
+  return failedView === askedView ? "failed" : "loading";
+}
+
 // The statuses the status filter offers in a view.
 export function chipsForView(chips: StatusChip[], view: DeskView, closedKeys: ReadonlySet<string>): StatusChip[] {
   if (view === "all") {

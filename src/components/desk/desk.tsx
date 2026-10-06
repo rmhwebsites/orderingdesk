@@ -12,6 +12,7 @@ import {
   crossesClosed,
   deskKindCounts,
   dropsDeletedFilter,
+  listFilter,
   nextWaitingRequest,
   optimisticStatus,
   rollbackStatus,
@@ -20,6 +21,7 @@ import {
   statusChips,
   totalOrders,
   touchesPurchaseOrders,
+  viewLoadState,
   viewMatches,
   withPurchaseOrder,
   type DeskFilter,
@@ -158,8 +160,13 @@ export function Desk() {
   const view: DeskView = deskQuery.view;
   const [viewCounts, setViewCounts] = useState<ViewCounts>({ open: 0, approval: 0, all: 0, closed: 0 });
   const [queue, setQueue] = useState<QueueSettingsView>(DEFAULT_QUEUE_SETTINGS);
-  // A different view is loading; the list stays while it does.
-  const [switching, setSwitching] = useState(false);
+  // The view whose cards the desk holds, and the last view whose load
+  // failed. While the address asks for another view the list keeps the
+  // loaded view's cards, dimmed, until the new ones land.
+  const [loadedView, setLoadedView] = useState<DeskView>(view);
+  const [failedView, setFailedView] = useState<DeskView | null>(null);
+  const viewState = viewLoadState(view, loadedView, failedView);
+  const switching = viewState === "loading";
   const viewRef = useRef<DeskView>(view);
   const closedRef = useRef<ReadonlySet<string>>(new Set());
   const [drafts, setDrafts] = useState<DraftsState>({ draftCount: 0, deletedDraftCount: 0, enabled: false, missingScopes: [] });
@@ -243,7 +250,8 @@ export function Desk() {
       setStatuses(payload.statuses);
       setViewCounts(payload.viewCounts);
       setQueue(payload.queue);
-      setSwitching(false);
+      setLoadedView(payload.view ?? requested);
+      setFailedView(null);
       setHasMore(payload.hasMore);
       setDrafts({
         draftCount: payload.draftCount ?? 0,
@@ -273,7 +281,7 @@ export function Desk() {
       const message = e instanceof Error ? e.message : "Check your connection and try again.";
       // A failed refresh keeps what is on screen; only a first load fails.
       setLoad((current) => (current.status === "ready" ? current : { status: "error", message }));
-      setSwitching(false);
+      setFailedView(requested);
     }
   }, [workspace.id, commit, flash, toast]);
 
@@ -314,7 +322,6 @@ export function Desk() {
       return;
     }
     viewRef.current = view;
-    setSwitching(true);
     void reload();
   }, [view, reload]);
 
@@ -725,15 +732,20 @@ export function Desk() {
   const showBanner =
     role === "platform" && !drafts.enabled && drafts.missingScopes.length > 0 && !bannerHidden && load.status === "ready";
   const chips = useMemo(() => statusChips(statuses, desk.statusCounts), [statuses, desk.statusCounts]);
+  // The list filters by the loaded view (src/lib/desk-state.ts listFilter):
+  // the toolbar follows the address, the cards follow what has landed.
   const visible = useMemo(
-    () => selectOrders(desk.orders, view === "approval" ? { ...filter, kind: "all" } : filter, closedKeys),
-    [desk.orders, filter, view, closedKeys],
+    () => selectOrders(desk.orders, listFilter(filter, loadedView), closedKeys),
+    [desk.orders, filter, loadedView, closedKeys],
   );
   const viewChips = useMemo(() => chipsForView(chips, view, closedKeys), [chips, view, closedKeys]);
-  // Drafts and Deleted counts for what this view holds.
+  // Drafts and Deleted counts for what the loaded view holds.
   const kindCounts = useMemo(
-    () => deskKindCounts(desk.orders.filter((row) => viewMatches(row, view === "approval" ? "open" : view, closedKeys))),
-    [desk.orders, view, closedKeys],
+    () =>
+      deskKindCounts(
+        desk.orders.filter((row) => viewMatches(row, loadedView === "approval" ? "open" : loadedView, closedKeys)),
+      ),
+    [desk.orders, loadedView, closedKeys],
   );
   const total = totalOrders(desk.statusCounts);
   const drawerSummary = drawerOrderId ? desk.orders.find((order) => order.id === drawerOrderId) : undefined;
@@ -812,20 +824,41 @@ export function Desk() {
           <EmptyDesk basePath={workspace.basePath} canConnect={roleAtLeast(role, "platform")} />
         ) : (
           <>
-            {visible.length === 0 ? (
-              <NoMatches
-                view={view}
-                query={filter.query}
-                kind={filter.kind ?? "all"}
-                statusLabel={
-                  filter.statusKey === null
-                    ? null
-                    : (chips.find((chip) => chip.key === filter.statusKey)?.label ?? "this status")
+            {viewState === "failed" ? (
+              <InlineMessage
+                tone="warn"
+                action={
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFailedView(null);
+                      void reload();
+                    }}
+                    className={ui.buttonSecondary}
+                  >
+                    Try again
+                  </button>
                 }
-                onClear={() => updateDeskQuery({ q: "", status: null, kind: "all" })}
-              />
-            ) : (
-              <div aria-busy={switching || undefined} className={switching ? "opacity-60 transition-opacity" : undefined}>
+              >
+                This view did not load. The cards below are from the view you had before.
+              </InlineMessage>
+            ) : null}
+            {/* The loaded view's list or empty state, dimmed while another
+                view loads. */}
+            <div aria-busy={switching || undefined} className={switching ? "opacity-60 transition-opacity" : undefined}>
+              {visible.length === 0 ? (
+                <NoMatches
+                  view={loadedView}
+                  query={filter.query}
+                  kind={filter.kind ?? "all"}
+                  statusLabel={
+                    filter.statusKey === null
+                      ? null
+                      : (chips.find((chip) => chip.key === filter.statusKey)?.label ?? "this status")
+                  }
+                  onClear={() => updateDeskQuery({ q: "", status: null, kind: "all" })}
+                />
+              ) : (
                 <OrderList
                   layout={isDesk ? "table" : "cards"}
                   orders={visible}
@@ -840,8 +873,8 @@ export function Desk() {
                   ageRule={{ amberDays: queue.ageAmberDays, redDays: queue.ageRedDays }}
                   closedKeys={closedKeys}
                 />
-              </div>
-            )}
+              )}
+            </div>
             {hasMore ? (
               <p className="text-xs text-ink-2">
                 Showing the newest 1,000 orders. Older orders are still in Shopify, and the counts above include them.
