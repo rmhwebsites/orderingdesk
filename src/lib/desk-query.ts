@@ -79,3 +79,16 @@ export function deskSearch(query: DeskQuery, order: string | null = null): strin
   const text = params.toString();
   return text.length > 0 ? `?${text}` : "";
 }
+
+// The address's query string after a filter change: the current query with
+// patch applied, the open order kept. A sort left at its view's default
+// follows the view (the approval queue waits longest first).
+export function mergeDeskSearch(currentSearch: string, patch: Partial<DeskQuery>): string {
+  const params = new URLSearchParams(currentSearch);
+  const current = parseDeskQuery(params);
+  const next: DeskQuery = { ...current, ...patch };
+  if (patch.view !== undefined && patch.sort === undefined && current.sort === defaultSort(current.view)) {
+    next.sort = defaultSort(patch.view);
+  }
+  return deskSearch(next, params.get("order"));
+}

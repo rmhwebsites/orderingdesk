@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { XIcon } from "@phosphor-icons/react/X";
-import { defaultSort, parseDeskQuery, type DeskView, type ViewCounts } from "@/lib/desk-query";
+import type { DeskView, ViewCounts } from "@/lib/desk-query";
 import {
   applyLiveEvent,
   approvalNotice,
@@ -48,6 +48,7 @@ import {
 import { OrderList } from "./order-list";
 import { PoModal } from "./po-modal";
 import { Toolbar } from "./toolbar";
+import { useDeskFilter } from "./use-desk-filter";
 import { ui } from "@/components/ui";
 import { InlineMessage } from "@/components/kit";
 
@@ -147,13 +148,13 @@ export function Desk() {
   const [hasMore, setHasMore] = useState(false);
   const [desk, setDesk] = useState<DeskState>({ orders: [], statusCounts: {}, timeline: null });
   const deskRef = useRef(desk);
-  // The view and filters start from the address (src/lib/desk-query.ts);
-  // Task 15 makes the address their only home.
-  const [filter, setFilter] = useState<DeskFilter>(() => {
-    const initial = parseDeskQuery(searchParams);
-    return { query: initial.q, statusKey: initial.status, sort: initial.sort, kind: initial.kind, view: initial.view };
-  });
-  const view: DeskView = filter.view ?? "open";
+  // The view and filters live in the address (use-desk-filter.ts).
+  const [deskQuery, updateDeskQuery] = useDeskFilter();
+  const filter = useMemo<DeskFilter>(
+    () => ({ query: deskQuery.q, statusKey: deskQuery.status, sort: deskQuery.sort, kind: deskQuery.kind, view: deskQuery.view }),
+    [deskQuery],
+  );
+  const view: DeskView = deskQuery.view;
   const [viewCounts, setViewCounts] = useState<ViewCounts>({ open: 0, approval: 0, all: 0, closed: 0 });
   const [queue, setQueue] = useState<QueueSettingsView>(DEFAULT_QUEUE_SETTINGS);
   // A different view is loading; the list stays while it does.
@@ -712,10 +713,10 @@ export function Desk() {
 
   // The Deleted filter goes away with the last deleted request.
   useEffect(() => {
-    if (filter.kind === "deleted" && drafts.deletedDraftCount === 0) {
-      setFilter((current) => ({ ...current, kind: "all" }));
+    if (deskQuery.kind === "deleted" && drafts.deletedDraftCount === 0) {
+      updateDeskQuery({ kind: "all" });
     }
-  }, [filter.kind, drafts.deletedDraftCount]);
+  }, [deskQuery.kind, drafts.deletedDraftCount, updateDeskQuery]);
 
   const showKindFilter = drafts.enabled || drafts.draftCount > 0 || drafts.deletedDraftCount > 0;
   const showBanner =
@@ -756,28 +757,21 @@ export function Desk() {
           <Toolbar
             layout={isDesk ? "row" : "phone"}
             view={view}
-            onView={(next) =>
-              setFilter((current) => ({
-                ...current,
-                view: next,
-                statusKey: null,
-                sort: current.sort === defaultSort(current.view ?? "open") ? defaultSort(next) : current.sort,
-              }))
-            }
+            onView={(next) => updateDeskQuery({ view: next, status: null })}
             viewCounts={viewCounts}
             showApproval={roleAtLeast(role, "manager")}
             statusKey={filter.statusKey}
-            onStatus={(statusKey) => setFilter((current) => ({ ...current, statusKey }))}
+            onStatus={(statusKey) => updateDeskQuery({ status: statusKey })}
             statusChips={viewChips}
             query={filter.query}
-            onQuery={(query) => setFilter((current) => ({ ...current, query }))}
+            onQuery={(query) => updateDeskQuery({ q: query })}
             sort={filter.sort}
-            onSort={(sort) => setFilter((current) => ({ ...current, sort }))}
+            onSort={(sort) => updateDeskQuery({ sort })}
             kindFilter={
               showKindFilter && view !== "approval"
                 ? {
                     kind: filter.kind ?? "all",
-                    onKind: (kind: DeskKind) => setFilter((current) => ({ ...current, kind })),
+                    onKind: (kind: DeskKind) => updateDeskQuery({ kind }),
                     draftCount: kindCounts.drafts,
                     deletedCount: kindCounts.deleted,
                   }
@@ -825,7 +819,7 @@ export function Desk() {
                     ? null
                     : (chips.find((chip) => chip.key === filter.statusKey)?.label ?? "this status")
                 }
-                onClear={() => setFilter((current) => ({ ...current, query: "", statusKey: null, kind: "all" }))}
+                onClear={() => updateDeskQuery({ q: "", status: null, kind: "all" })}
               />
             ) : (
               <div aria-busy={switching || undefined} className={switching ? "opacity-60 transition-opacity" : undefined}>

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { deskSearch, parseDeskQuery } from "./desk-query";
+import { deskSearch, mergeDeskSearch, parseDeskQuery } from "./desk-query";
 
 describe("parseDeskQuery", () => {
   it("opens on Open, newest first, with nothing else filtered", () => {
@@ -41,5 +41,18 @@ describe("deskSearch", () => {
     expect(deskSearch({ view: "open", status: "new", kind: "drafts", q: "hard hat", sort: "oldest" })).toBe(
       "?status=new&kind=drafts&q=hard+hat&sort=oldest",
     );
+  });
+});
+
+describe("mergeDeskSearch", () => {
+  it("applies a change and keeps everything else, the open order included", () => {
+    expect(mergeDeskSearch("?status=new&order=d12", { q: "vest" })).toBe("?status=new&q=vest&order=d12");
+    expect(mergeDeskSearch("?q=vest", { q: "" })).toBe("");
+  });
+
+  it("moves a default sort along with the view, and keeps a chosen one", () => {
+    expect(mergeDeskSearch("", { view: "approval", status: null })).toBe("?view=approval");
+    expect(mergeDeskSearch("?view=approval", { view: "open" })).toBe("");
+    expect(mergeDeskSearch("?sort=oldest", { view: "approval" })).toBe("?view=approval&sort=oldest");
   });
 });
