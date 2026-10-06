@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { deskSearch, mergeDeskSearch, parseDeskQuery } from "./desk-query";
+import { deskSearch, mergeDeskSearch, parseDeskQuery, searchBoxText } from "./desk-query";
 
 describe("parseDeskQuery", () => {
   it("opens on Open, newest first, with nothing else filtered", () => {
@@ -54,5 +54,23 @@ describe("mergeDeskSearch", () => {
     expect(mergeDeskSearch("", { view: "approval", status: null })).toBe("?view=approval");
     expect(mergeDeskSearch("?view=approval", { view: "open" })).toBe("");
     expect(mergeDeskSearch("?sort=oldest", { view: "approval" })).toBe("?view=approval&sort=oldest");
+  });
+});
+
+describe("searchBoxText", () => {
+  it("keeps what the box typed while the address holds it, whatever React was last handed", () => {
+    // Typing "ab" fast: useSearchParams may still say q=a, the address
+    // already says ab, so the box keeps ab.
+    expect(searchBoxText("ab", "?q=ab&order=d12")).toBe("ab");
+    // The address drops a blank search, so a leading space stays typed.
+    expect(searchBoxText(" ", "")).toBe(" ");
+    expect(searchBoxText(" v", "?q=+v")).toBe(" v");
+    // The address reads back 200 characters at most.
+    expect(searchBoxText("a".repeat(250), `?q=${"a".repeat(250)}`)).toBe("a".repeat(250));
+  });
+
+  it("takes the address's search when it changed outside the box (Back, a link, Clear filters)", () => {
+    expect(searchBoxText("vest", "?view=closed")).toBe("");
+    expect(searchBoxText("vest", "?q=hard+hat&order=d12")).toBe("hard hat");
   });
 });

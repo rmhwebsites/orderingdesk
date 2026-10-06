@@ -92,3 +92,15 @@ export function mergeDeskSearch(currentSearch: string, patch: Partial<DeskQuery>
   }
   return deskSearch(next, params.get("order"));
 }
+
+// The search box's text after the address's q changes. The box keeps its
+// own text (an input controlled by the router's transition drops typed keys
+// and moves the cursor), so it keeps that text while the address still
+// holds it as it reads back (a blank search is none, cut at 200), whatever
+// useSearchParams last said, and takes the address's q otherwise: Back, a
+// link, Clear filters.
+export function searchBoxText(boxText: string, addressSearch: string): string {
+  const addressQ = parseDeskQuery(new URLSearchParams(addressSearch)).q;
+  const boxQ = boxText.trim().length > 0 ? boxText.slice(0, DESK_QUERY_MAX) : "";
+  return boxQ === addressQ ? boxText : addressQ;
+}

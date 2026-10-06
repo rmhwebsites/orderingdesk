@@ -150,7 +150,7 @@ export function Desk() {
   const [desk, setDesk] = useState<DeskState>({ orders: [], statusCounts: {}, timeline: null });
   const deskRef = useRef(desk);
   // The view and filters live in the address (use-desk-filter.ts).
-  const [deskQuery, updateDeskQuery] = useDeskFilter();
+  const [deskQuery, updateDeskQuery, searchText] = useDeskFilter();
   const filter = useMemo<DeskFilter>(
     () => ({ query: deskQuery.q, statusKey: deskQuery.status, sort: deskQuery.sort, kind: deskQuery.kind, view: deskQuery.view }),
     [deskQuery],
@@ -766,7 +766,7 @@ export function Desk() {
             statusKey={filter.statusKey}
             onStatus={(statusKey) => updateDeskQuery({ status: statusKey })}
             statusChips={viewChips}
-            query={filter.query}
+            query={searchText}
             onQuery={(query) => updateDeskQuery({ q: query })}
             sort={filter.sort}
             onSort={(sort) => updateDeskQuery({ sort })}
