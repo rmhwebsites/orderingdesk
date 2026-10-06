@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import { sqliteTable, text, integer, uniqueIndex, index, check } from "drizzle-orm/sqlite-core";
 import type { WorkspaceBranding } from "../lib/branding";
+import { PRICE_DISPLAY_VALUES } from "../lib/queue-settings";
 import { user } from "./auth-schema";
 
 export * from "./auth-schema";
@@ -144,6 +145,10 @@ export const statuses = sqliteTable("statuses", {
   // when its draft is completed in Shopify. draft_rejected: where Reject
   // puts a request. Plain text column (no CHECK since 0004).
   shopifyLink: text("shopify_link", { enum: SHOPIFY_LINK_VALUES }),
+  // Closed statuses are finished work: their cards leave the Open view and
+  // show their age without a warning color (comprehensive desk design
+  // section 1). Delivered and Rejected start closed (migration 0011).
+  closed: integer("closed", { mode: "boolean" }).notNull().default(false),
 }, (t) => [uniqueIndex("status_key_unique").on(t.workspaceId, t.key)]);
 
 // One row per request (draft orders spec section 2): a draft card is a row
@@ -299,6 +304,12 @@ export const workspaceSettings = sqliteTable("workspace_settings", {
   poPrefix: text("po_prefix").notNull().default("PO"),
   replyTo: text("reply_to"),
   fromName: text("from_name"),
+  // An open card's age turns amber, then red, after this many days in its
+  // status (migration 0011).
+  ageAmberDays: integer("age_amber_days").notNull().default(2),
+  ageRedDays: integer("age_red_days").notNull().default(4),
+  // Totals and the Paid chip on the desk (src/lib/queue-settings.ts).
+  priceDisplay: text("price_display", { enum: PRICE_DISPLAY_VALUES }).notNull().default("auto"),
 });
 
 export const notificationPrefs = sqliteTable("notification_prefs", {

@@ -435,6 +435,15 @@ describe("platform migration of existing rows", () => {
     ]);
   });
 
+  // 0011 (work queue) closes Delivered and Rejected.
+  it("closes the delivered and rejected statuses", () => {
+    expect(db.prepare("SELECT workspace_id, key FROM statuses WHERE closed = 1 ORDER BY workspace_id, key").all()).toEqual([
+      { workspace_id: "ws_custom", key: "rejected" },
+      { workspace_id: "ws_impact", key: "delivered" },
+      { workspace_id: "ws_impact", key: "rejected" },
+    ]);
+  });
+
   it("keeps the workspace settings as they were", () => {
     expect(db.prepare("SELECT * FROM workspace_settings").all()).toEqual([
       {
@@ -443,6 +452,9 @@ describe("platform migration of existing rows", () => {
         po_prefix: "IMP",
         reply_to: "ops@example.com",
         from_name: "IMPACT Rentals",
+        age_amber_days: 2,
+        age_red_days: 4,
+        price_display: "auto",
       },
     ]);
   });
