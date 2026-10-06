@@ -121,6 +121,17 @@ describe("createWorkspace", () => {
     expect(second).toMatchObject({ kind: "created", workspace: { slug: "impact-2" } });
   });
 
+  it("starts every new workspace with Delivered and Rejected closed", async () => {
+    const { db } = openTestDb();
+    const result = await createWorkspace(db, "user_admin", { name: "Closed Check" });
+    if (result.kind !== "created") throw new Error(result.kind);
+    const rows = await db
+      .select({ key: schema.statuses.key, closed: schema.statuses.closed })
+      .from(schema.statuses)
+      .where(eq(schema.statuses.workspaceId, result.workspace.id));
+    expect(rows.filter((row) => row.closed).map((row) => row.key).sort()).toEqual(["delivered", "rejected"]);
+  });
+
   it("refuses a missing, blank or overlong name", async () => {
     const { db } = openTestDb();
     for (const body of [null, {}, { name: "   " }, { name: 7 }, { name: "x".repeat(81) }]) {

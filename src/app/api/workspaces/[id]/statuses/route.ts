@@ -5,9 +5,11 @@ import { guardResponse, requireMember } from "@/server/guard";
 type RouteContext = { params: Promise<{ id: string }> };
 
 // Managers and platform admins. Body: the full ordered list [{key?, label,
-// color, triggersPo, shopifyLink?: fulfilled | delivered | null}] (an
-// existing status without shopifyLink keeps its link; at most one status
-// per Shopify state). 200 {statuses}; 400 {error}; 409 {error, inUse:
+// color, triggersPo, shopifyLink?: fulfilled | delivered | null, closed?}]
+// (an existing status without shopifyLink keeps its link; at most one
+// status per Shopify state; an existing status without closed keeps its
+// flag; a new one is closed when it follows delivered or draft rejected).
+// 200 {statuses}; 400 {error}; 409 {error, inUse:
 // [{key, label, count}]} when a removed status still has orders (nothing
 // changes). The first status in the list is the default for newly synced
 // orders.

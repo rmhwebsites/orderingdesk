@@ -13,6 +13,8 @@ export type StatusView = {
   // or the draft order outcome it receives (draft orders spec section 8),
   // or null.
   shopifyLink: ShopifyLinkValue | null;
+  // Finished work: cards in it leave the Open view (migration 0011).
+  closed: boolean;
 };
 
 export type EventView = {
@@ -58,6 +60,7 @@ export function statusView(row: typeof statuses.$inferSelect): StatusView {
     sort: row.sort,
     triggersPo: row.triggersPo,
     shopifyLink: row.shopifyLink ?? null,
+    closed: row.closed,
   };
 }
 

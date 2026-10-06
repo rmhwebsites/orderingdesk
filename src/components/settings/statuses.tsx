@@ -30,6 +30,7 @@ type Row = {
   color: string;
   triggersPo: boolean;
   shopifyLink: StatusView["shopifyLink"];
+  closed: boolean;
 };
 
 type InUse = { key: string; label: string; count: number };
@@ -44,6 +45,7 @@ function rowsOf(statuses: StatusView[]): Row[] {
     color: status.color,
     triggersPo: status.triggersPo,
     shopifyLink: status.shopifyLink,
+    closed: status.closed,
   }));
 }
 
@@ -54,6 +56,7 @@ function payload(rows: Row[]) {
     color: row.color,
     triggersPo: row.triggersPo,
     shopifyLink: row.shopifyLink,
+    closed: row.closed,
   }));
 }
 
@@ -106,7 +109,7 @@ export function StatusesSection({ workspaceId, initial }: { workspaceId: string;
 
   function add() {
     const uid = `new-${nextId.current++}`;
-    setRows((current) => [...current, { uid, key: null, label: "", color: "blue", triggersPo: false, shopifyLink: null }]);
+    setRows((current) => [...current, { uid, key: null, label: "", color: "blue", triggersPo: false, shopifyLink: null, closed: false }]);
     setDone(null);
     requestAnimationFrame(() => document.getElementById(`status-${uid}-label`)?.focus());
   }
@@ -150,6 +153,10 @@ export function StatusesSection({ workspaceId, initial }: { workspaceId: string;
           For draft orders: Approve moves a request into the status linked to Draft approved and creates the order in
           Shopify; completing the draft in Shopify does the same. Reject moves it into the status linked to Draft
           rejected.
+        </p>
+        <p className="text-sm text-ink-2">
+          Closed statuses are finished work: their cards leave the Open view and their age stops turning amber or red.
+          Delivered and Rejected start closed.
         </p>
         <p className="sr-only" aria-live="polite">
           {announcement}
@@ -258,12 +265,18 @@ export function StatusesSection({ workspaceId, initial }: { workspaceId: string;
                       ))}
                     </Select>
                   </div>
-                  <div className="md:col-span-2 xl:col-span-1">
+                  <div className="flex flex-wrap gap-x-6 gap-y-2 md:col-span-2 xl:col-span-1">
                     <Switch
                       id={`${id}-po`}
                       checked={row.triggersPo}
                       onChange={(checked) => update(row.uid, { triggersPo: checked })}
                       label="Starts a purchase order"
+                    />
+                    <Switch
+                      id={`${id}-closed`}
+                      checked={row.closed}
+                      onChange={(checked) => update(row.uid, { closed: checked })}
+                      label="Closed (leaves the Open view)"
                     />
                   </div>
                 </div>

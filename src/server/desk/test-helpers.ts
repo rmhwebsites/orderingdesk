@@ -59,10 +59,10 @@ export function withBatch(db: Db, record: unknown[][]): Db {
 }
 
 export const TEST_STATUSES = [
-  { key: "new", label: "New", color: "lime", triggersPo: false, shopifyLink: null },
-  { key: "processing", label: "Processing", color: "blue", triggersPo: false, shopifyLink: null },
-  { key: "approved", label: "Approved", color: "green", triggersPo: true, shopifyLink: null },
-  { key: "shipped", label: "Shipped", color: "violet", triggersPo: false, shopifyLink: "fulfilled" as const },
+  { key: "new", label: "New", color: "lime", triggersPo: false, shopifyLink: null, closed: false },
+  { key: "processing", label: "Processing", color: "blue", triggersPo: false, shopifyLink: null, closed: false },
+  { key: "approved", label: "Approved", color: "green", triggersPo: true, shopifyLink: null, closed: false },
+  { key: "shipped", label: "Shipped", color: "violet", triggersPo: false, shopifyLink: "fulfilled" as const, closed: false },
 ];
 
 // A better-auth user row (emails are stored lowercased, as better-auth does).
@@ -245,6 +245,7 @@ export async function seedDraftStatuses(db: Db, workspaceId: string) {
       color: "pink",
       sort: 5,
       shopifyLink: "draft_rejected",
+      closed: true,
     },
   ]);
 }

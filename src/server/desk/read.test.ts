@@ -64,6 +64,7 @@ describe("loadDesk", () => {
       sort: 2,
       triggersPo: true,
       shopifyLink: null,
+      closed: false,
     });
     expect(desk?.settings).toEqual({
       notificationEmails: ["desk@example.com"],

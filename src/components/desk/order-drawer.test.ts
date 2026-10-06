@@ -12,9 +12,9 @@ const SELF = "u_self";
 const ADMIN = "u_ryan";
 
 const STATUSES: StatusView[] = [
-  { key: "new", label: "New", color: "lime", sort: 0, triggersPo: false, shopifyLink: null },
-  { key: "approved", label: "Approved", color: "green", sort: 1, triggersPo: false, shopifyLink: "draft_completed" },
-  { key: "rejected", label: "Rejected", color: "pink", sort: 2, triggersPo: false, shopifyLink: "draft_rejected" },
+  { key: "new", label: "New", color: "lime", sort: 0, triggersPo: false, shopifyLink: null, closed: false },
+  { key: "approved", label: "Approved", color: "green", sort: 1, triggersPo: false, shopifyLink: "draft_completed", closed: false },
+  { key: "rejected", label: "Rejected", color: "pink", sort: 2, triggersPo: false, shopifyLink: "draft_rejected", closed: true },
 ];
 
 function draftCard(overrides: Partial<DrawerOrder> = {}): DrawerOrder {

@@ -69,9 +69,9 @@ describe("replaceStatuses", () => {
     expect(result).toEqual({
       kind: "ok",
       statuses: [
-        { key: "approved", label: "Approved for PO", color: "teal", sort: 0, triggersPo: false, shopifyLink: null },
-        { key: "new", label: "Fresh", color: "pink", sort: 1, triggersPo: true, shopifyLink: null },
-        { key: "waiting_on_parts", label: "Waiting on Parts", color: "amber", sort: 2, triggersPo: false, shopifyLink: null },
+        { key: "approved", label: "Approved for PO", color: "teal", sort: 0, triggersPo: false, shopifyLink: null, closed: false },
+        { key: "new", label: "Fresh", color: "pink", sort: 1, triggersPo: true, shopifyLink: null, closed: false },
+        { key: "waiting_on_parts", label: "Waiting on Parts", color: "amber", sort: 2, triggersPo: false, shopifyLink: null, closed: false },
       ],
     });
     const after = await statusRows(db);
@@ -385,5 +385,45 @@ describe("replaceStatuses", () => {
       error: "Status 1: the label must be 1 to 25 characters (Shopify tags hold 40, and \"Ordering Desk: \" takes 15)",
     });
     expect(await statusRows(db)).toEqual(before);
+  });
+
+  // Comprehensive desk design section 1: closed statuses leave the Open view.
+  it("keeps each status's closed flag unless the list sets it, and closes a new Delivered or Rejected status", async () => {
+    const { db } = await setup();
+    const first = await replaceStatuses(db, WS, [
+      { key: "new", label: "New", color: "lime", triggersPo: false },
+      { key: "shipped", label: "Shipped", color: "violet", triggersPo: false, closed: true },
+      entry("Delivered", { shopifyLink: "delivered" }),
+      entry("On Hold"),
+    ]);
+    if (first.kind !== "ok") throw new Error(first.kind);
+    expect(first.statuses.map((s) => [s.key, s.closed])).toEqual([
+      ["new", false],
+      ["shipped", true],
+      ["delivered", true],
+      ["on_hold", false],
+    ]);
+
+    const second = await replaceStatuses(db, WS, [
+      { key: "new", label: "New", color: "lime", triggersPo: false },
+      { key: "shipped", label: "Shipped", color: "violet", triggersPo: false },
+      { key: "delivered", label: "Delivered", color: "slate", triggersPo: false, closed: false },
+      { key: "on_hold", label: "On Hold", color: "amber", triggersPo: false },
+    ]);
+    if (second.kind !== "ok") throw new Error(second.kind);
+    expect(second.statuses.map((s) => [s.key, s.closed])).toEqual([
+      ["new", false],
+      ["shipped", true],
+      ["delivered", false],
+      ["on_hold", false],
+    ]);
+  });
+
+  it("refuses a closed flag that is not true or false", async () => {
+    const { db } = await setup();
+    expect(await replaceStatuses(db, WS, [entry("New", { closed: "yes" })])).toEqual({
+      kind: "invalid",
+      error: "Status 1: closed must be true or false",
+    });
   });
 });

@@ -13,6 +13,7 @@ const status = (key: string, sort: number, shopifyLink: StatusView["shopifyLink"
   sort,
   triggersPo: false,
   shopifyLink,
+  closed: false,
 });
 
 const STATUSES = [

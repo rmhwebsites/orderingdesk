@@ -43,6 +43,14 @@ const LINK_NAMES: Record<ShopifyLink, string> = {
   draft_rejected: "Draft rejected",
 };
 
+// Statuses whose cards are finished when they are new: a delivered order
+// and a rejected request. Wave 1b adds "cancelled" here.
+const CLOSED_LINKS: readonly string[] = ["delivered", "draft_rejected"];
+
+export function closedByDefault(link: string | null): boolean {
+  return link !== null && CLOSED_LINKS.includes(link);
+}
+
 export type InUseStatus = { key: string; label: string; count: number };
 
 export type ReplaceStatusesResult =
@@ -51,13 +59,15 @@ export type ReplaceStatusesResult =
   | { kind: "ok"; statuses: StatusView[] };
 
 // shopifyLink undefined: an existing status keeps its stored link, a new
-// one gets none.
+// one gets none. closed undefined: an existing status keeps its flag, a new
+// one takes closedByDefault.
 type Entry = {
   key: string | null;
   label: string;
   color: string;
   triggersPo: boolean;
   shopifyLink: ShopifyLink | null | undefined;
+  closed: boolean | undefined;
 };
 
 function parseEntries(body: unknown): Entry[] | string {
@@ -100,7 +110,14 @@ function parseEntries(body: unknown): Entry[] | string {
     } else {
       return `${position}: the Shopify link must be fulfilled, delivered, draft completed, draft rejected or none`;
     }
-    entries.push({ key, label, color, triggersPo: raw.triggersPo, shopifyLink });
+    let closed: boolean | undefined;
+    if (raw.closed !== undefined && raw.closed !== null) {
+      if (typeof raw.closed !== "boolean") {
+        return `${position}: closed must be true or false`;
+      }
+      closed = raw.closed;
+    }
+    entries.push({ key, label, color, triggersPo: raw.triggersPo, shopifyLink, closed });
   }
   return entries;
 }
@@ -208,6 +225,7 @@ export async function replaceStatuses(
   // removed in this same save, so no statement below can trip the
   // (workspace, key) unique index whatever happens to the delete.
   const taken = new Set(existingKeys);
+  const storedClosed = new Map(existing.map((row) => [row.key, row.closed]));
   const statements: PromiseLike<unknown>[] = [];
   if (removedKeys.length > 0) {
     // Guarded in SQL as well: a status that some order uses at the moment
@@ -253,12 +271,19 @@ export async function replaceStatuses(
     );
   }
   entries.forEach((entry, sort) => {
+    const closed =
+      entry.closed !== undefined
+        ? entry.closed
+        : entry.key !== null
+          ? (storedClosed.get(entry.key) ?? false)
+          : closedByDefault(links[sort]);
     const fields = {
       label: entry.label,
       color: entry.color,
       sort,
       triggersPo: entry.triggersPo,
       shopifyLink: links[sort],
+      closed,
     };
     if (entry.key !== null) {
       statements.push(
@@ -268,8 +293,8 @@ export async function replaceStatuses(
           .where(and(eq(statuses.workspaceId, workspaceId), eq(statuses.key, entry.key))),
       );
     } else {
-      // One row per statement: a 20 row insert would bind 140 parameters,
-      // over D1's limit of 100 per statement.
+      // One row per statement: a 20 row insert would bind 180 parameters,
+      // over D1's limit of 100 per statement (one row binds 9, an update 8).
       statements.push(
         db.insert(statuses).values({
           id: crypto.randomUUID(),
