@@ -1,6 +1,8 @@
 // Loading placeholders shaped like Settings: the back link and title, the
-// section list, then two panels. The loading.tsx files show it while a
-// Settings page renders on the server.
+// section list, then two panels. The hub's Settings loading.tsx shows it,
+// inside the workspace layout's shell, while the page renders on the
+// server. A client host has none: its page draws the shell itself, so a
+// loading.tsx there would replace the top bar and the workspace's theme.
 
 function Bar({ className }: { className: string }) {
   return <span aria-hidden className={`od-skeleton block ${className}`} />;
