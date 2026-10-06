@@ -31,6 +31,8 @@ import {
 } from "@/lib/desk-state";
 import { DEFAULT_QUEUE_SETTINGS, type QueueSettingsView } from "@/lib/queue-settings";
 import { roleAtLeast } from "@/lib/roles";
+import { selectAll, toggleSelection, type Selection } from "@/lib/selection";
+import { BULK_STATUS_MAX, type BulkCard } from "@/lib/status-rules";
 import { DESK_MEDIA, useMediaQuery } from "@/lib/use-media-query";
 import { useNow } from "@/lib/use-now";
 import type { LiveEvent, LiveOrderStatus } from "@/lib/live-events";
@@ -39,6 +41,7 @@ import type { EventView, StatusView } from "@/server/desk/shapes";
 import type { PoView } from "@/server/po/service";
 import { useWorkspace } from "@/components/shell/workspace-provider";
 import { useToast } from "@/components/toasts";
+import { BulkBar, type BulkResult } from "./bulk-bar";
 import { DeskSkeleton } from "./desk-skeleton";
 import { DeskLoadError, EmptyDesk, NoMatches } from "./empty-states";
 import {
@@ -191,6 +194,22 @@ export function Desk() {
   const canManagePos = roleAtLeast(role, "manager");
   const [poModal, setPoModal] = useState<{ orderId: string; po: PoView | null } | null>(null);
   const [poRefresh, setPoRefresh] = useState(0);
+
+  // Bulk selection (comprehensive desk design section 1).
+  const [selection, setSelection] = useState<Selection>({ selected: new Set(), anchor: null });
+  const selectionRef = useRef(selection);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkResult, setBulkResult] = useState<BulkResult | null>(null);
+
+  const replaceSelection = useCallback((next: Selection) => {
+    selectionRef.current = next;
+    setSelection(next);
+  }, []);
+
+  // A different filter shows different cards: start the selection over.
+  useEffect(() => {
+    replaceSelection({ selected: new Set(), anchor: null });
+  }, [deskQuery.view, deskQuery.status, deskQuery.kind, deskQuery.q, replaceSelection]);
 
   // Status changes still waiting for the server, re-applied over any reload
   // that lands meanwhile so the row does not flick back.
@@ -738,6 +757,99 @@ export function Desk() {
     () => selectOrders(desk.orders, listFilter(filter, loadedView), closedKeys),
     [desk.orders, filter, loadedView, closedKeys],
   );
+  const visibleIds = useMemo(() => visible.map((row) => row.id), [visible]);
+  const selectedCards: BulkCard[] = useMemo(
+    () =>
+      visible
+        .filter((row) => selection.selected.has(row.id))
+        .map((row) => ({ id: row.id, name: row.name, customerName: row.customerName, kind: row.kind, statusKey: row.statusKey })),
+    [visible, selection],
+  );
+
+  const capNotice = useCallback(() => {
+    toast({ title: `Up to ${BULK_STATUS_MAX} cards at a time`, body: "Move these, then pick the rest.", tone: "info" });
+  }, [toast]);
+
+  const toggleCard = useCallback(
+    (orderId: string, range: boolean) => {
+      const next = toggleSelection(selectionRef.current, visibleIds, orderId, { range, max: BULK_STATUS_MAX });
+      replaceSelection({ selected: next.selected, anchor: next.anchor });
+      if (next.capped) {
+        capNotice();
+      }
+    },
+    [visibleIds, replaceSelection, capNotice],
+  );
+
+  const toggleAll = useCallback(() => {
+    const everyShown = visibleIds.length > 0 && visibleIds.every((id) => selectionRef.current.selected.has(id));
+    if (everyShown) {
+      replaceSelection({ selected: new Set(), anchor: null });
+      return;
+    }
+    const next = selectAll(visibleIds, BULK_STATUS_MAX);
+    replaceSelection({ selected: next.selected, anchor: null });
+    if (next.capped) {
+      capNotice();
+    }
+  }, [visibleIds, replaceSelection, capNotice]);
+
+  const moveSelected = useCallback(
+    async (statusKey: string) => {
+      const ids = visibleIds.filter((id) => selectionRef.current.selected.has(id));
+      setBulkBusy(true);
+      setBulkResult(null);
+      try {
+        const response = await fetch(`/api/workspaces/${encodeURIComponent(workspace.id)}/orders/status`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ orderIds: ids, statusKey }),
+        });
+        const body = (await response.json().catch(() => null)) as {
+          error?: string;
+          statusLabel?: string;
+          results?: { orderId: string; name: string | null; outcome: string; error?: string }[];
+          changed?: { event: EventView; order: LiveOrderStatus }[];
+          triggersPo?: boolean;
+        } | null;
+        if (!response.ok || !body?.results || !body.changed) {
+          setBulkResult({ tone: "warn", text: body?.error ?? "Nothing moved. Try again.", refusals: [] });
+          return;
+        }
+        for (const change of body.changed) {
+          applyEvent({ kind: "order.status", event: change.event, order: change.order });
+        }
+        const moved = body.results.filter((row) => row.outcome === "changed").length;
+        const refusals = body.results
+          .filter((row) => row.outcome === "refused" || row.outcome === "not-found")
+          .map((row) => ({ name: row.name ?? "A card", error: row.error ?? "It is no longer in this workspace." }));
+        setBulkResult({
+          tone: refusals.length > 0 ? "warn" : "good",
+          text: `Moved ${moved} ${moved === 1 ? "card" : "cards"} to ${body.statusLabel ?? "the status"}.`,
+          refusals,
+        });
+        replaceSelection({ selected: new Set(), anchor: null });
+        if (body.triggersPo) {
+          toast({
+            title: `${body.statusLabel ?? "This status"} usually needs a purchase order`,
+            body: canManagePos ? "Create one from each order." : "A manager creates them from each order.",
+            tone: "info",
+          });
+        }
+        refreshQueue();
+      } catch {
+        setBulkResult({
+          tone: "warn",
+          text: "Could not reach the server, so it is not known what moved. Check the cards; moving them again is safe.",
+          refusals: [],
+        });
+      } finally {
+        setBulkBusy(false);
+      }
+    },
+    [visibleIds, workspace.id, applyEvent, replaceSelection, toast, canManagePos, refreshQueue],
+  );
+
   const viewChips = useMemo(() => chipsForView(chips, view, closedKeys), [chips, view, closedKeys]);
   // Drafts and Deleted counts for what the loaded view holds.
   const kindCounts = useMemo(
@@ -756,7 +868,11 @@ export function Desk() {
   const showToolbar = load.status === "ready" && !(total === 0 && desk.orders.length === 0);
 
   return (
-    <main className="mx-auto flex w-full max-w-[1400px] flex-col gap-3 px-4 py-4 sm:px-6 sm:py-5">
+    <main
+      className={`mx-auto flex w-full max-w-[1400px] flex-col gap-3 px-4 py-4 sm:px-6 sm:py-5 ${
+        selectedCards.length > 0 || bulkResult ? "pb-40 sm:pb-40" : ""
+      }`}
+    >
       {/* Phones: one sticky bar under the 56px top bar (z-20, below the
           top bar's z-30 and the drawer's z-40), on the page background so
           cards scroll under it. From 880px it is an ordinary row. */}
@@ -875,6 +991,7 @@ export function Desk() {
                   onChangeStatus={changeStatus}
                   ageRule={{ amberDays: queue.ageAmberDays, redDays: queue.ageRedDays }}
                   closedKeys={closedKeys}
+                  selection={{ selected: selection.selected, onToggle: toggleCard, onToggleAll: toggleAll }}
                 />
               )}
             </div>
@@ -886,6 +1003,17 @@ export function Desk() {
           </>
         )
       ) : null}
+
+      <BulkBar
+        cards={selectedCards}
+        statuses={statuses}
+        role={role}
+        busy={bulkBusy}
+        result={bulkResult}
+        onMove={moveSelected}
+        onClear={() => replaceSelection({ selected: new Set(), anchor: null })}
+        onDismissResult={() => setBulkResult(null)}
+      />
 
       <DrawerShell open={openOrderId !== null} onClose={closeOrder} labelledBy={DRAWER_TITLE_ID}>
         {drawerOrderId ? (

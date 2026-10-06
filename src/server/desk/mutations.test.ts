@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { eq } from "drizzle-orm";
 import type { Db } from "@/db";
 import * as schema from "@/db/schema";
-import { NOTE_MAX, addOrderNote, changeOrderStatus } from "./mutations";
+import { NOTE_MAX, addOrderNote, changeOrderStatus, changeOrderStatuses } from "./mutations";
 import {
   openTestDb,
   seedDraft,
@@ -338,5 +338,91 @@ describe("addOrderNote", () => {
     const result = await addOrderNote(db, ctx("x1"), { text: "hello" });
     expect(result).toEqual({ kind: "not-found" });
     expect(await eventsOf(db, OTHER)).toEqual([]);
+  });
+});
+
+describe("changeOrderStatuses (bulk)", () => {
+  const bulk = (role: "staff" | "manager" = "staff") => ({ workspaceId: WS, userId: USER, role, now: NOW });
+
+  it("moves every card it may in one batch, each with its own status entry", async () => {
+    const db = await setup();
+    await seedOrder(db, WS, { id: "o2", name: "#1002", statusKey: "processing" });
+    const record: unknown[][] = [];
+    const result = await changeOrderStatuses(withBatch(db, record), bulk(), { orderIds: ["o1", "o2"], statusKey: "shipped" });
+    if (result.kind !== "ok") throw new Error(result.kind);
+    expect(result.results).toEqual([
+      { orderId: "o1", name: "#1001", outcome: "changed" },
+      { orderId: "o2", name: "#1002", outcome: "changed" },
+    ]);
+    expect(record).toHaveLength(1);
+    expect(record[0]).toHaveLength(4);
+    expect((await orderRow(db, "o2")).statusKey).toBe("shipped");
+    expect((await orderRow(db, "o2")).statusSetBy).toBe(USER);
+    const entries = (await eventsOf(db)).map((entry) => [entry.orderId, entry.text, entry.meta]);
+    expect(entries).toEqual(
+      expect.arrayContaining([
+        ["o1", "Status set to Shipped", { from: "new", to: "shipped", bulk: true }],
+        ["o2", "Status set to Shipped", { from: "processing", to: "shipped", bulk: true }],
+      ]),
+    );
+    expect(result.changed.map((change) => change.order.id)).toEqual(["o1", "o2"]);
+    expect(result.statusLabel).toBe("Shipped");
+  });
+
+  it("re-checks every card: no request into a fulfilled status or Approved, no staff reopening a rejected one", async () => {
+    const db = await setup();
+    await seedDraftStatuses(db, WS);
+    await seedDraft(db, WS, { id: "d1" });
+    await seedDraft(db, WS, { id: "d2", statusKey: "rejected" });
+    const shipped = await changeOrderStatuses(db, bulk(), { orderIds: ["o1", "d1"], statusKey: "shipped" });
+    if (shipped.kind !== "ok") throw new Error(shipped.kind);
+    expect(shipped.results.map((row) => [row.orderId, row.outcome, row.error ?? null])).toEqual([
+      ["o1", "changed", null],
+      ["d1", "refused", "A draft cannot be marked Shipped until it is approved and becomes an order."],
+    ]);
+    const approved = await changeOrderStatuses(db, bulk("manager"), { orderIds: ["d1"], statusKey: "approved" });
+    if (approved.kind !== "ok") throw new Error(approved.kind);
+    expect(approved.results[0]).toMatchObject({ outcome: "refused", error: "Use Approve to approve this request. It creates the order in Shopify." });
+    const reopen = await changeOrderStatuses(db, bulk("staff"), { orderIds: ["d2"], statusKey: "processing" });
+    if (reopen.kind !== "ok") throw new Error(reopen.kind);
+    expect(reopen.results[0]).toMatchObject({ outcome: "refused", error: "Only a manager can reopen a rejected request." });
+    expect((await orderRow(db, "d1")).statusKey).toBe("new");
+    expect((await orderRow(db, "d2")).statusKey).toBe("rejected");
+  });
+
+  it("says which cards were already there or are not in this workspace", async () => {
+    const db = await setup();
+    const result = await changeOrderStatuses(db, bulk(), { orderIds: ["o1", "x1", "nope"], statusKey: "new" });
+    if (result.kind !== "ok") throw new Error(result.kind);
+    expect(result.results).toEqual([
+      { orderId: "o1", name: "#1001", outcome: "unchanged" },
+      { orderId: "x1", name: null, outcome: "not-found" },
+      { orderId: "nope", name: null, outcome: "not-found" },
+    ]);
+    expect(result.changed).toEqual([]);
+  });
+
+  it("refuses an empty list, more than 25 cards and an unknown status, changing nothing", async () => {
+    const db = await setup();
+    expect(await changeOrderStatuses(db, bulk(), { orderIds: [], statusKey: "shipped" })).toEqual({
+      kind: "invalid",
+      error: "Pick at least one card",
+    });
+    const many = Array.from({ length: 26 }, (_, i) => `o${i}`);
+    expect(await changeOrderStatuses(db, bulk(), { orderIds: many, statusKey: "shipped" })).toEqual({
+      kind: "invalid",
+      error: "Move up to 25 cards at a time",
+    });
+    expect(await changeOrderStatuses(db, bulk(), { orderIds: ["o1"], statusKey: "gone" })).toEqual({
+      kind: "invalid",
+      error: "Unknown status for this workspace",
+    });
+    expect((await orderRow(db, "o1")).statusKey).toBe("new");
+  });
+
+  it("asks for a purchase order only when an order moved into a status that starts one", async () => {
+    const db = await setup();
+    const result = await changeOrderStatuses(db, bulk(), { orderIds: ["o1"], statusKey: "approved" });
+    expect(result).toMatchObject({ kind: "ok", triggersPo: true });
   });
 });

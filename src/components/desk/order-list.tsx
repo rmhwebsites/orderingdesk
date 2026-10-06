@@ -8,7 +8,7 @@ import type { Role } from "@/lib/roles";
 import { statusOptionsFor } from "@/lib/status-options";
 import type { OrderSummary } from "@/server/desk/read";
 import type { StatusView } from "@/server/desk/shapes";
-import { Chip } from "@/components/kit";
+import { Chip, SelectBox } from "@/components/kit";
 import { StatusSelect } from "./status-select";
 
 // The desk list (comprehensive desk design section 1): a table of one-line
@@ -33,6 +33,12 @@ export type ListProps = {
   ageRule: { amberDays: number; redDays: number };
   // Status keys whose cards are finished (no warning color on their age).
   closedKeys: ReadonlySet<string>;
+  // Bulk selection (null: no selection boxes).
+  selection: {
+    selected: ReadonlySet<string>;
+    onToggle: (orderId: string, range: boolean) => void;
+    onToggleAll: () => void;
+  } | null;
 };
 
 function itemsLine(order: OrderSummary): string {
@@ -205,11 +211,13 @@ export function OrderTable({
   onChangeStatus,
   ageRule,
   closedKeys,
+  selection,
 }: ListProps) {
   return (
     <div className="overflow-hidden rounded-panel border border-line bg-surface shadow-panel">
       <table className="w-full table-fixed border-collapse text-left">
         <colgroup>
+          <col className="w-14" />
           <col className="w-[10rem]" />
           <col className="w-[6.5rem]" />
           <col className="w-[24%]" />
@@ -220,7 +228,19 @@ export function OrderTable({
         </colgroup>
         <thead>
           <tr className="h-9 text-xs font-semibold text-ink-2">
-            <th scope="col" className="px-4 font-semibold">Order</th>
+            <th scope="col" className="pl-2.5">
+              {selection ? (
+                <SelectBox
+                  label="Select every card shown"
+                  checked={orders.length > 0 && orders.every((order) => selection.selected.has(order.id))}
+                  indeterminate={orders.some((order) => selection.selected.has(order.id))}
+                  onToggle={() => selection.onToggleAll()}
+                />
+              ) : (
+                <span className="sr-only">Select</span>
+              )}
+            </th>
+            <th scope="col" className="px-2 font-semibold">Order</th>
             <th scope="col" className="px-3 font-semibold">Date</th>
             <th scope="col" className="px-3 font-semibold">Customer</th>
             <th scope="col" className="px-3 font-semibold">Items</th>
@@ -238,7 +258,16 @@ export function OrderTable({
                 onClick={() => onOpen(order.id)}
                 className="h-11 cursor-pointer border-t border-line transition-colors hover:bg-surface-2/70"
               >
-                <td className={`px-4 ${flash}`}>
+                <td className={`pl-2.5 ${flash}`}>
+                  {selection ? (
+                    <SelectBox
+                      label={`Select ${order.name}`}
+                      checked={selection.selected.has(order.id)}
+                      onToggle={(range) => selection.onToggle(order.id, range)}
+                    />
+                  ) : null}
+                </td>
+                <td className={`px-2 ${flash}`}>
                   <span className="flex min-w-0 items-center gap-2">
                     <button
                       type="button"
@@ -302,6 +331,7 @@ export function OrderCards({
   onChangeStatus,
   ageRule,
   closedKeys,
+  selection,
 }: ListProps) {
   return (
     <ul className="flex flex-col gap-2">
@@ -313,6 +343,15 @@ export function OrderCards({
           }`}
         >
           <div className="flex items-center gap-2">
+            {selection ? (
+              <span className="relative z-10 -my-2 -ml-2.5">
+                <SelectBox
+                  label={`Select ${order.name}`}
+                  checked={selection.selected.has(order.id)}
+                  onToggle={(range) => selection.onToggle(order.id, range)}
+                />
+              </span>
+            ) : null}
             <button
               type="button"
               onClick={() => onOpen(order.id)}

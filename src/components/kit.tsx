@@ -242,3 +242,38 @@ export function Monogram({ text, size = "md" }: { text: string; size?: keyof typ
 export function Spinner({ size = 16 }: { size?: number }) {
   return <CircleNotchIcon size={size} aria-hidden className="od-spin shrink-0" />;
 }
+
+// A list row's selection box: a native checkbox drawn at 16px with a 40px
+// hit area. onToggle says whether shift was held (a range). Clicks stop
+// here, so the row under it does not open.
+export function SelectBox({
+  label,
+  checked,
+  indeterminate = false,
+  onToggle,
+}: {
+  label: string;
+  checked: boolean;
+  indeterminate?: boolean;
+  onToggle: (range: boolean) => void;
+}) {
+  return (
+    <label
+      onClick={(event) => event.stopPropagation()}
+      className="inline-grid size-10 shrink-0 cursor-pointer place-items-center rounded-control hover:bg-surface-2"
+    >
+      <input
+        type="checkbox"
+        aria-label={label}
+        checked={checked}
+        ref={(element) => {
+          if (element) {
+            element.indeterminate = indeterminate && !checked;
+          }
+        }}
+        onChange={(event) => onToggle((event.nativeEvent as MouseEvent).shiftKey === true)}
+        className="size-4 cursor-pointer accent-[var(--primary-strong)]"
+      />
+    </label>
+  );
+}

@@ -59,6 +59,7 @@ const base: ListProps = {
   onChangeStatus: () => {},
   ageRule: { amberDays: 2, redDays: 4 },
   closedKeys: new Set(),
+  selection: null,
 };
 
 const render = (layout: "table" | "cards", overrides: Partial<ListProps> = {}) =>
@@ -132,5 +133,16 @@ describe("OrderList purchase order hint", () => {
     for (const layout of ["table", "cards"] as const) {
       expect(render(layout, { orders, statuses }).match(/>PO not created</g)).toHaveLength(1);
     }
+  });
+});
+
+describe("OrderList selection", () => {
+  it("puts a selection box on every row and card, and select-all in the table head", () => {
+    const selection = { selected: new Set(["1001"]), onToggle: () => {}, onToggleAll: () => {} };
+    const table = render("table", { selection });
+    expect(table).toContain('aria-label="Select every card shown"');
+    expect(table.match(/aria-label="Select #/g)).toHaveLength(3);
+    expect(table).toMatch(/<input type="checkbox" aria-label="Select #1001"[^>]*checked=""/);
+    expect(render("cards", { selection }).match(/aria-label="Select #/g)).toHaveLength(3);
   });
 });

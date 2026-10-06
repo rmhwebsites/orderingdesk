@@ -3,12 +3,13 @@
 // Callers authorize first (requireMemberByOrder); every query here is still
 // scoped to the workspace it is given.
 
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "@/db";
 import { applyBatch, rowsAffected } from "@/db/batch";
 import { events, orders, statuses } from "@/db/schema";
 import { NOTE_MAX } from "@/lib/limits";
-import { roleAtLeast, type Role } from "@/lib/roles";
+import type { Role } from "@/lib/roles";
+import { BULK_STATUS_MAX, checkStatusMove } from "@/lib/status-rules";
 import { eventView, isRecord, type EventView } from "./shapes";
 
 // Shared with the note composer (src/lib/limits.ts).
@@ -51,22 +52,50 @@ async function findOrder(db: Db, ctx: MutationContext) {
   return rows[0];
 }
 
+type StatusEvent = {
+  id: string;
+  workspaceId: string;
+  orderId: string;
+  type: "status";
+  text: string;
+  actorId: string;
+  meta: Record<string, unknown>;
+  createdAt: number;
+  source: "app";
+};
+
+// The two statements of one status change: the order update and its status
+// entry. The status was read before, but replaceStatuses may remove it
+// before this write lands, so both re-check in SQL that it still exists:
+// the update only matches while it does, and the entry is an insert-select
+// that yields its one row only while it does. On D1 a batch is one
+// transaction, so the two agree; the update's rows-affected tells which way
+// it went.
+function statusWrites(db: Db, event: StatusEvent, statusKey: string) {
+  const statusStillExists = sql`exists (select 1 from ${statuses} where ${statuses.workspaceId} = ${event.workspaceId} and ${statuses.key} = ${statusKey})`;
+  return [
+    db
+      .update(orders)
+      .set({ statusKey, statusSetBy: event.actorId, statusSetAt: event.createdAt })
+      .where(and(eq(orders.id, event.orderId), eq(orders.workspaceId, event.workspaceId), statusStillExists)),
+    // Values in the events table's column order (schema.ts declares the
+    // columns in that order; drizzle names them all in the insert).
+    db
+      .insert(events)
+      .select(
+        sql`select ${event.id}, ${event.workspaceId}, ${event.orderId}, ${event.type}, ${event.text}, ${event.actorId}, ${JSON.stringify(event.meta)}, ${event.createdAt}, ${event.source} where ${statusStillExists}`,
+      ),
+  ];
+}
+
 // Sets an order's status. The order update and its "status" event go out in
 // one batch, so on D1 neither lands without the other. Only the team's own
 // columns change (statusKey, statusSetBy, statusSetAt): the Shopify snapshot
 // and synced_at belong to the sync engine. Concurrent changes resolve last
-// writer wins; each one still leaves its own event.
-//
-// Draft cards (draft orders spec section 8.2 and section 18 item 5; a card
-// is a draft while it has no Shopify order id):
-// - a request moves freely between statuses with no Shopify link, staff
-//   included;
-// - never into a status linked to fulfilled or delivered (it is not an
-//   order yet), nor to draft_completed or draft_rejected (Approve and
-//   Reject do that, with their own checks and the reason);
-// - out of the draft_rejected status only for a manager or platform admin;
-// - an order never moves into the draft_rejected status;
-// - triggersPo only for an order (a purchase order needs the Shopify order).
+// writer wins; each one still leaves its own event. The rules for which
+// status a card may take (a card is a draft while it has no Shopify order
+// id) live in src/lib/status-rules.ts; triggersPo only for an order (a
+// purchase order needs the Shopify order).
 export async function changeOrderStatus(
   db: Db,
   ctx: MutationContext,
@@ -100,63 +129,29 @@ export async function changeOrderStatus(
     return { kind: "unchanged" };
   }
   const isDraft = order.shopifyOrderId === null;
-  if (isDraft) {
-    const current = statusRows.find((row) => row.key === order.statusKey);
-    if (current?.shopifyLink === "draft_rejected" && !roleAtLeast(ctx.role, "manager")) {
-      return { kind: "forbidden", error: "Only a manager can reopen a rejected request." };
-    }
-    switch (status.shopifyLink) {
-      case "fulfilled":
-      case "delivered":
-        return {
-          kind: "invalid",
-          error: `A draft cannot be marked ${status.label} until it is approved and becomes an order.`,
-        };
-      case "draft_completed":
-        return { kind: "invalid", error: "Use Approve to approve this request. It creates the order in Shopify." };
-      case "draft_rejected":
-        return { kind: "invalid", error: "Use Reject to reject this request. It asks for a reason." };
-      default:
-        break;
-    }
-  } else if (status.shopifyLink === "draft_rejected") {
-    return { kind: "invalid", error: "Rejected is for requests that are still drafts." };
+  const check = checkStatusMove({
+    isDraft,
+    role: ctx.role,
+    current: statusRows.find((row) => row.key === order.statusKey),
+    target: status,
+  });
+  if (!check.ok) {
+    return check.forbidden ? { kind: "forbidden", error: check.error } : { kind: "invalid", error: check.error };
   }
 
   const now = ctx.now ?? Date.now();
-  const event = {
+  const event: StatusEvent = {
     id: crypto.randomUUID(),
     workspaceId: ctx.workspaceId,
     orderId: order.id,
-    type: "status" as const,
+    type: "status",
     text: `Status set to ${status.label}`,
     actorId: ctx.userId,
     meta: { from: order.statusKey, to: statusKey },
     createdAt: now,
-    source: "app" as const,
+    source: "app",
   };
-  // The status was read above, but replaceStatuses may remove it before
-  // this write lands. Both statements therefore re-check in SQL that it
-  // still exists: the update only matches while it does, and the event is
-  // an insert-select that yields its one row only while it does. On D1 the
-  // batch is one transaction, so the two agree; rows-affected of the update
-  // tells which way it went.
-  const statusStillExists = sql`exists (select 1 from ${statuses} where ${statuses.workspaceId} = ${ctx.workspaceId} and ${statuses.key} = ${statusKey})`;
-  const [updateResult] = await applyBatch(db, [
-    db
-      .update(orders)
-      .set({ statusKey, statusSetBy: ctx.userId, statusSetAt: now })
-      .where(
-        and(eq(orders.id, order.id), eq(orders.workspaceId, ctx.workspaceId), statusStillExists),
-      ),
-    // Values in the events table's column order (schema.ts declares the
-    // columns in that order; drizzle names them all in the insert).
-    db
-      .insert(events)
-      .select(
-        sql`select ${event.id}, ${event.workspaceId}, ${event.orderId}, ${event.type}, ${event.text}, ${event.actorId}, ${JSON.stringify(event.meta)}, ${event.createdAt}, ${event.source} where ${statusStillExists}`,
-      ),
-  ]);
+  const [updateResult] = await applyBatch(db, statusWrites(db, event, statusKey));
   if (rowsAffected(updateResult, "desk") === 0) {
     return { kind: "invalid", error: "Unknown status for this workspace" };
   }
@@ -200,4 +195,142 @@ export async function addOrderNote(
   };
   await db.insert(events).values(event);
   return { kind: "added", event: eventView(event) };
+}
+
+export type BulkContext = { workspaceId: string; userId: string; role: Role; now?: number };
+
+export type BulkOutcome = {
+  orderId: string;
+  // The card's name, or null when it is not in this workspace.
+  name: string | null;
+  outcome: "changed" | "unchanged" | "refused" | "not-found";
+  error?: string;
+};
+
+export type BulkStatusResult =
+  | { kind: "invalid"; error: string }
+  | {
+      kind: "ok";
+      statusLabel: string;
+      results: BulkOutcome[];
+      changed: Array<{
+        event: EventView;
+        order: { id: string; statusKey: string; statusSetBy: string; statusSetAt: number };
+      }>;
+      // An order moved into a status that starts a purchase order.
+      triggersPo: boolean;
+    };
+
+function parseBulk(body: unknown): { orderIds: string[]; statusKey: string } | string {
+  if (!isRecord(body)) {
+    return "Send orderIds and statusKey";
+  }
+  const { orderIds, statusKey } = body;
+  if (typeof statusKey !== "string" || statusKey.length === 0) {
+    return "statusKey is required";
+  }
+  if (!Array.isArray(orderIds) || orderIds.length === 0) {
+    return "Pick at least one card";
+  }
+  if (orderIds.length > BULK_STATUS_MAX) {
+    return `Move up to ${BULK_STATUS_MAX} cards at a time`;
+  }
+  const ids: string[] = [];
+  for (const id of orderIds) {
+    if (typeof id !== "string" || id.length === 0 || id.length > 64) {
+      return "orderIds must be card ids";
+    }
+    if (!ids.includes(id)) {
+      ids.push(id);
+    }
+  }
+  return { orderIds: ids, statusKey };
+}
+
+// Bulk status change (comprehensive desk design section 1): every card
+// checked with the same rules as one change (src/lib/status-rules.ts),
+// then every allowed change written in one batch (two statements each, at
+// most 50; each statement binds 11 parameters or fewer). Cards outside the
+// workspace answer not-found, like an unknown id.
+export async function changeOrderStatuses(db: Db, ctx: BulkContext, body: unknown): Promise<BulkStatusResult> {
+  const parsed = parseBulk(body);
+  if (typeof parsed === "string") {
+    return { kind: "invalid", error: parsed };
+  }
+  const [orderRows, statusRows] = await Promise.all([
+    db
+      .select({ id: orders.id, name: orders.name, statusKey: orders.statusKey, shopifyOrderId: orders.shopifyOrderId })
+      .from(orders)
+      .where(and(eq(orders.workspaceId, ctx.workspaceId), inArray(orders.id, parsed.orderIds))),
+    db
+      .select({ key: statuses.key, label: statuses.label, triggersPo: statuses.triggersPo, shopifyLink: statuses.shopifyLink })
+      .from(statuses)
+      .where(eq(statuses.workspaceId, ctx.workspaceId)),
+  ]);
+  const target = statusRows.find((row) => row.key === parsed.statusKey);
+  if (!target) {
+    return { kind: "invalid", error: "Unknown status for this workspace" };
+  }
+  const now = ctx.now ?? Date.now();
+  const results: BulkOutcome[] = [];
+  const planned: Array<{ order: (typeof orderRows)[number]; event: StatusEvent }> = [];
+  for (const id of parsed.orderIds) {
+    const order = orderRows.find((row) => row.id === id);
+    if (!order) {
+      results.push({ orderId: id, name: null, outcome: "not-found" });
+      continue;
+    }
+    if (order.statusKey === target.key) {
+      results.push({ orderId: id, name: order.name, outcome: "unchanged" });
+      continue;
+    }
+    const check = checkStatusMove({
+      isDraft: order.shopifyOrderId === null,
+      role: ctx.role,
+      current: statusRows.find((row) => row.key === order.statusKey),
+      target,
+    });
+    if (!check.ok) {
+      results.push({ orderId: id, name: order.name, outcome: "refused", error: check.error });
+      continue;
+    }
+    planned.push({
+      order,
+      event: {
+        id: crypto.randomUUID(),
+        workspaceId: ctx.workspaceId,
+        orderId: order.id,
+        type: "status",
+        text: `Status set to ${target.label}`,
+        actorId: ctx.userId,
+        meta: { from: order.statusKey, to: target.key, bulk: true },
+        createdAt: now,
+        source: "app",
+      },
+    });
+    results.push({ orderId: id, name: order.name, outcome: "changed" });
+  }
+
+  const writes = await applyBatch(
+    db,
+    planned.flatMap(({ event }) => statusWrites(db, event, target.key)),
+  );
+  const changed: Extract<BulkStatusResult, { kind: "ok" }>["changed"] = [];
+  let triggersPo = false;
+  planned.forEach(({ order, event }, index) => {
+    if (rowsAffected(writes[index * 2], "desk") === 0) {
+      const result = results.find((entry) => entry.orderId === order.id);
+      if (result) {
+        result.outcome = "refused";
+        result.error = "Unknown status for this workspace";
+      }
+      return;
+    }
+    changed.push({
+      event: eventView(event),
+      order: { id: order.id, statusKey: target.key, statusSetBy: ctx.userId, statusSetAt: now },
+    });
+    triggersPo ||= target.triggersPo && order.shopifyOrderId !== null;
+  });
+  return { kind: "ok", statusLabel: target.label, results, changed, triggersPo };
 }

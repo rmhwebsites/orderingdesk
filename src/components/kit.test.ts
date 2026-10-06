@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Chip, DetailRow, InlineMessage, Monogram, RadioCard, Section, Segmented, Spinner } from "./kit";
+import { Chip, DetailRow, InlineMessage, Monogram, RadioCard, Section, Segmented, SelectBox, Spinner } from "./kit";
 
 // The <input> tag rendered for one value (React orders the attributes its
 // own way, so tests check the tag's attributes, not their order).
@@ -150,5 +150,13 @@ describe("Monogram and Spinner", () => {
     const spinner = renderToStaticMarkup(createElement(Spinner));
     expect(spinner).toContain("od-spin");
     expect(spinner).toContain('aria-hidden="true"');
+  });
+});
+
+describe("SelectBox", () => {
+  it("is a labeled native checkbox with a 40px hit area", () => {
+    const html = renderToStaticMarkup(createElement(SelectBox, { label: "Select #1001", checked: true, onToggle: () => {} }));
+    expect(html).toMatch(/<input type="checkbox" aria-label="Select #1001"[^>]*checked=""/);
+    expect(html).toContain("size-10");
   });
 });

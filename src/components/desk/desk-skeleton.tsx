@@ -25,8 +25,11 @@ export function DeskSkeleton() {
           ))}
         </div>
         {ROWS.map((row) => (
-          <div key={row} className="grid h-11 grid-cols-[10rem_6.5rem_24%_1fr_5.5rem_7rem_11rem] items-center border-t border-line">
-            <div className="px-4">
+          <div key={row} className="grid h-11 grid-cols-[3.5rem_10rem_6.5rem_24%_1fr_5.5rem_7rem_11rem] items-center border-t border-line">
+            <div className="pl-4">
+              <Bar className="size-4" />
+            </div>
+            <div className="px-2">
               <Bar className="h-4 w-20" />
             </div>
             <div className="px-3">
