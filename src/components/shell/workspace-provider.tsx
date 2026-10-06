@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { LiveEvent } from "@/lib/live-events";
-import type { SyncLoadState } from "@/lib/sync-status";
+import { startSyncRechecks, syncAfterFailedCheck, type SyncLoadState } from "@/lib/sync-status";
 import { useLive, type LiveStatus } from "@/lib/use-live";
 import type { SyncConnectionView } from "@/server/desk/sync";
 import type { Role } from "@/lib/roles";
@@ -101,18 +101,21 @@ export function WorkspaceProvider({
         throw new Error(`HTTP ${response.status}`);
       }
       const body = (await response.json()) as { connection: SyncConnectionView | null };
-      setSync({ status: "ready", connection: body.connection });
+      setSync({ status: "ready", connection: body.connection, checkedAt: Date.now() });
     } catch (e) {
-      setSync((current) =>
-        // Keep showing the last good answer through a blip.
-        current.status === "ready" ? current : { status: "error", message: e instanceof Error ? e.message : "failed" },
-      );
+      const message = e instanceof Error ? e.message : "failed";
+      setSync((current) => syncAfterFailedCheck(current, message, Date.now()));
     }
   }, [workspace.id]);
 
   useEffect(() => {
     void reloadSync();
   }, [reloadSync]);
+
+  // A quiet store's cron runs are not broadcast, so re-read the status on a
+  // timer while the page is visible, and when it comes back into view
+  // (src/lib/sync-status.ts SYNC_RECHECK_MS).
+  useEffect(() => startSyncRechecks(() => void reloadSync(), document), [reloadSync]);
 
   const liveStatus = useLive({
     workspaceId: workspace.id,

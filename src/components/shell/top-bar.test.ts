@@ -76,11 +76,24 @@ describe("TopBar sync chip on phones", () => {
           lastError: null,
           catchingUp: false,
         },
+        checkedAt: Date.now(),
       },
     };
     const html = render();
     const chip = classOf(html, /<span data-tone="red" title="([^"]+)"/);
     expect(chip).toContain("check the store connection");
     expect(classOf(html, /<span data-tone="red" title="[^"]+" class="([^"]*)"/).split(" ")[0]).toBe("inline-flex");
+  });
+
+  it("stays quiet while a copy too old to vouch for is re-read (a phone resumed after hours)", () => {
+    const sync = state.value.sync as { connection: Record<string, unknown> };
+    state.value = {
+      ...state.value,
+      sync: { status: "ready", connection: sync.connection, checkedAt: Date.now() - 5 * 3600000 },
+    };
+    const html = render();
+    expect(html).not.toContain('data-tone="red"');
+    expect(html).toContain("Checking sync");
+    expect(classOf(html, /<span data-tone="slate" title="[^"]+" class="([^"]*)"/).split(" ")[0]).toBe("hidden");
   });
 });

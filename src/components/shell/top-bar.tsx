@@ -32,6 +32,9 @@ function chipIcon(tone: ChipTone, label: string) {
   if (label === "Sync paused") {
     return <PauseIcon size={14} aria-hidden />;
   }
+  if (label === "Checking sync") {
+    return <ArrowsClockwiseIcon size={14} aria-hidden />;
+  }
   switch (tone) {
     case "good":
       return <CheckCircleIcon size={14} aria-hidden />;
