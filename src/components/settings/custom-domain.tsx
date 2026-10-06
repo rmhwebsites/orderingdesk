@@ -4,7 +4,7 @@ import { useRef, useState } from "react";
 import { GlobeIcon } from "@phosphor-icons/react/Globe";
 import type { DomainView } from "@/server/domains";
 import { ui } from "@/components/ui";
-import { Chip } from "@/components/kit";
+import { Chip, Spinner } from "@/components/kit";
 import { ConfirmStep, describedBy, Field, focusSoon, InlineMessage, Panel, requestJson, SettingsSection } from "./kit";
 
 const STATUS: Record<NonNullable<DomainView["status"]>, { tone: string; label: string }> = {
@@ -143,14 +143,23 @@ export function CustomDomainSection({ workspaceId, initial }: { workspaceId: str
           <button
             type="submit"
             disabled={busy !== null || input.trim().length === 0 || input.trim().toLowerCase() === view.domain}
+            aria-busy={busy === "save" || undefined}
             className={ui.buttonSecondary}
           >
+            {busy === "save" ? <Spinner /> : null}
             {busy === "save" ? "Saving" : "Save domain"}
           </button>
         </form>
         {view.domain ? (
           <div className="flex flex-wrap items-center gap-3">
-            <button type="button" onClick={check} disabled={busy !== null} className={ui.buttonPrimary}>
+            <button
+              type="button"
+              onClick={check}
+              disabled={busy !== null}
+              aria-busy={busy === "check" || undefined}
+              className={ui.buttonPrimary}
+            >
+              {busy === "check" ? <Spinner /> : null}
               {busy === "check" ? "Checking" : "Check"}
             </button>
             <button

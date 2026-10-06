@@ -8,6 +8,7 @@
 import { useEffect, useId, useRef } from "react";
 import { CaretDownIcon } from "@phosphor-icons/react/CaretDown";
 import { CheckCircleIcon } from "@phosphor-icons/react/CheckCircle";
+import { Spinner } from "@/components/kit";
 import { ui } from "@/components/ui";
 
 export type RequestResult<T> =
@@ -250,9 +251,11 @@ export function ConfirmStep({
           type="button"
           onClick={onConfirm}
           disabled={busy}
+          aria-busy={busy || undefined}
           aria-describedby={messageId}
           className={ui.buttonDanger}
         >
+          {busy ? <Spinner /> : null}
           {busy ? busyLabel : confirmLabel}
         </button>
       </div>

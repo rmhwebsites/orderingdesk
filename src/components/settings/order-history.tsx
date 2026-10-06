@@ -14,7 +14,7 @@ import {
 import { useNow } from "@/lib/use-now";
 import type { BackfillView } from "@/server/sync/backfill";
 import { ui } from "@/components/ui";
-import { Chip, RadioCard } from "@/components/kit";
+import { Chip, RadioCard, Spinner } from "@/components/kit";
 import { ConfirmStep, describedBy, Field, focusSoon, InlineMessage, Panel, requestJson } from "./kit";
 
 // Settings > Store connection > Order history (platform admins): start an
@@ -216,10 +216,11 @@ function StartForm({
         <button
           type="submit"
           disabled={busy || blockedByScope}
+          aria-busy={busy || undefined}
           aria-describedby={blockedByScope ? "history-scope-hint" : undefined}
           className={ui.buttonPrimary}
         >
-          <DownloadSimpleIcon size={16} aria-hidden />
+          {busy ? <Spinner /> : <DownloadSimpleIcon size={16} aria-hidden />}
           {busy ? "Starting" : "Start import"}
         </button>
         <p className="text-sm text-ink-2">Runs in the background, about 100 orders every 10 minutes.</p>

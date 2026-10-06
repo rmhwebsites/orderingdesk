@@ -42,12 +42,14 @@
   --color-primary: var(--primary);
   --color-primary-ink: var(--primary-ink);
   --color-primary-strong: var(--primary-strong);
+  --color-primary-hover: var(--primary-hover);
   --color-focus: var(--focus);
   --color-good: var(--good);
   --color-warn: var(--warn);
   --color-bad: var(--bad);
   --color-tone-fill: var(--tone-fill);
   --color-tone-text: var(--tone-text);
+  --color-tone-fill-hover: var(--tone-fill-hover);
   --color-scrim: var(--scrim);
 
   /* One radius system: rounded-control for every interactive control,
@@ -92,6 +94,8 @@
   --primary-ink-dark: #101820;
   --primary-strong-light: #4a6d12;
   --primary-strong-dark: #91d500;
+  --primary-hover-light: #82be04;
+  --primary-hover-dark: #82be04;
 
   /* Fonts (next/font variables live on <html>, src/app/layout.tsx) and
      the radius scale. */
@@ -221,6 +225,7 @@
   --primary: var(--primary-light);
   --primary-ink: var(--primary-ink-light);
   --primary-strong: var(--primary-strong-light);
+  --primary-hover: var(--primary-hover-light);
   --focus: var(--primary-strong);
 }
 
@@ -229,6 +234,7 @@
   --primary: var(--primary-dark);
   --primary-ink: var(--primary-ink-dark);
   --primary-strong: var(--primary-strong-dark);
+  --primary-hover: var(--primary-hover-dark);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -237,6 +243,7 @@
     --primary: var(--primary-dark);
     --primary-ink: var(--primary-ink-dark);
     --primary-strong: var(--primary-strong-dark);
+    --primary-hover: var(--primary-hover-dark);
   }
 }
 
@@ -294,6 +301,7 @@
   --primary: var(--primary-light);
   --primary-ink: var(--primary-ink-light);
   --primary-strong: var(--primary-strong-light);
+  --primary-hover: var(--primary-hover-light);
   --bg: var(--brand-bg-light);
   --surface: var(--brand-surface-light);
   --surface-2: var(--brand-surface-2-light);
@@ -309,6 +317,7 @@
   --primary: var(--primary-dark);
   --primary-ink: var(--primary-ink-dark);
   --primary-strong: var(--primary-strong-dark);
+  --primary-hover: var(--primary-hover-dark);
   --bg: var(--brand-bg-dark);
   --surface: var(--brand-surface-dark);
   --surface-2: var(--brand-surface-2-dark);
@@ -357,6 +366,10 @@
 [data-tone] {
   --tone-fill: var(--st-slate-fill);
   --tone-text: var(--st-slate-text);
+  /* A danger or tone button under the pointer: the fill moved toward its
+     text, which shows in light and dark alike. Declared here so it follows
+     each element's own tone. */
+  --tone-fill-hover: color-mix(in srgb, var(--tone-fill) 82%, var(--tone-text));
 }
 [data-tone="lime"] {
   --tone-fill: var(--st-lime-fill);

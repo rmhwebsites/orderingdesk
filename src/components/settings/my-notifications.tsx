@@ -12,7 +12,7 @@ import {
 import type { NotificationPrefsView } from "@/server/notification-prefs";
 import { IphoneInstallSteps } from "@/components/shell/app-install";
 import { ui } from "@/components/ui";
-import { Chip } from "@/components/kit";
+import { Chip, Spinner } from "@/components/kit";
 import { focusSoon, InlineMessage, Panel, requestJson, SaveStatus, SettingsSection, Switch } from "./kit";
 
 // Settings > Your notifications, for every member: push on this device
@@ -164,8 +164,15 @@ function DevicePanel() {
             Get new orders, requests and sent purchase orders as notifications on this device, even when Ordering Desk is closed.
           </p>
           <div>
-            <button id={DEVICE_TOGGLE_ID} type="button" onClick={enable} disabled={busy} className={ui.buttonPrimary}>
-              <BellRingingIcon size={16} aria-hidden />
+            <button
+              id={DEVICE_TOGGLE_ID}
+              type="button"
+              onClick={enable}
+              disabled={busy}
+              aria-busy={busy || undefined}
+              className={ui.buttonPrimary}
+            >
+              {busy ? <Spinner /> : <BellRingingIcon size={16} aria-hidden />}
               {busy ? "Turning on push" : "Enable push on this device"}
             </button>
           </div>
@@ -178,7 +185,15 @@ function DevicePanel() {
             This device gets push notifications for the choices below, in every workspace you belong to.
           </p>
           <div>
-            <button id={DEVICE_TOGGLE_ID} type="button" onClick={disable} disabled={busy} className={ui.buttonSecondary}>
+            <button
+              id={DEVICE_TOGGLE_ID}
+              type="button"
+              onClick={disable}
+              disabled={busy}
+              aria-busy={busy || undefined}
+              className={ui.buttonSecondary}
+            >
+              {busy ? <Spinner /> : null}
               {busy ? "Turning off push" : "Turn off on this device"}
             </button>
           </div>

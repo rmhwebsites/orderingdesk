@@ -24,6 +24,9 @@ describe("StatusSelect", () => {
     const html = render(true);
     expect(html).toContain('aria-busy="true"');
     expect(html).not.toContain("disabled=");
+    // Full opacity with a spinner in place of the caret.
+    expect(html).toContain("od-spin");
+    expect(html).not.toContain("opacity-70");
   });
 
   it("is not busy otherwise, and shows no unsaved hint before any choice", () => {

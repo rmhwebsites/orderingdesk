@@ -79,6 +79,7 @@ function SyncButton() {
       type="button"
       onClick={runManualSync}
       disabled={manual.running || coolingDown}
+      aria-busy={manual.running || undefined}
       aria-label={coolingDown ? `Sync available in ${waitSeconds} seconds` : "Sync orders from Shopify now"}
       className={`${ui.buttonPrimary} h-9 min-w-[6.5rem] tabular-nums`}
     >

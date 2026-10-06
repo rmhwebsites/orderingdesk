@@ -8,6 +8,7 @@ import { TrashIcon } from "@phosphor-icons/react/Trash";
 import { STATUS_LABEL_MAX } from "@/lib/status-label";
 import type { StatusView } from "@/server/desk/shapes";
 import { ui } from "@/components/ui";
+import { Spinner } from "@/components/kit";
 import { focusSoon, InlineMessage, Panel, requestJson, SaveStatus, Select, SettingsSection, Switch } from "./kit";
 
 // The nine status colors (STATUS_COLORS in src/server/desk/statuses.ts),
@@ -291,7 +292,8 @@ export function StatusesSection({ workspaceId, initial }: { workspaceId: string;
           </InlineMessage>
         ) : null}
         <div className="flex flex-wrap items-center gap-3 border-t border-line pt-4">
-          <button type="button" onClick={save} disabled={busy || !dirty} className={ui.buttonPrimary}>
+          <button type="button" onClick={save} disabled={busy || !dirty} aria-busy={busy || undefined} className={ui.buttonPrimary}>
+            {busy ? <Spinner /> : null}
             {busy ? "Saving" : "Save statuses"}
           </button>
           {dirty ? (

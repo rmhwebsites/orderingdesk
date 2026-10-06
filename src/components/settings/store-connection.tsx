@@ -8,7 +8,7 @@ import { formatDateTime, relativeTime } from "@/lib/format";
 import { useNow } from "@/lib/use-now";
 import type { ConnectionSettingsView } from "@/server/desk/connection-view";
 import { ui } from "@/components/ui";
-import { Chip, RadioCard } from "@/components/kit";
+import { Chip, RadioCard, Spinner } from "@/components/kit";
 import {
   ConfirmStep,
   describedBy,
@@ -278,8 +278,8 @@ function ConnectForm({
       )}
       {error ? <InlineMessage tone="bad">{error}</InlineMessage> : null}
       <div className="flex flex-wrap items-center gap-3">
-        <button type="submit" disabled={busy} className={ui.buttonPrimary}>
-          <PlugsIcon size={16} aria-hidden />
+        <button type="submit" disabled={busy} aria-busy={busy || undefined} className={ui.buttonPrimary}>
+          {busy ? <Spinner /> : <PlugsIcon size={16} aria-hidden />}
           {busy ? "Checking with Shopify" : existing && existing.status !== "disabled" ? "Connect again" : "Connect store"}
         </button>
         <p className="text-sm text-ink-2">Shopify checks the credentials before anything is saved.</p>
@@ -438,10 +438,11 @@ export function StoreConnectionSection({
                     type="button"
                     onClick={() => void refresh()}
                     disabled={refreshing}
+                    aria-busy={refreshing || undefined}
                     aria-describedby="store-refresh-help"
                     className={ui.buttonSecondary}
                   >
-                    <ArrowsClockwiseIcon size={16} aria-hidden />
+                    {refreshing ? <Spinner /> : <ArrowsClockwiseIcon size={16} aria-hidden />}
                     {refreshing ? "Refreshing" : "Refresh connection"}
                   </button>
                 </div>

@@ -19,6 +19,7 @@ import {
   fontFamilyCss,
   googleFontsHref,
   nearestPassingShade,
+  primaryHover,
   surfacesOf,
   type Palette,
 } from "./brand-theme";
@@ -279,5 +280,36 @@ describe("brandTokens and brandStyle", () => {
     const tokens = brandTokens({ colors: IMPACT, darkColors: { primary: "#b6f03c" } }, "#91d500");
     expect(tokens.primary.dark.fill).toBe("#b6f03c");
     expect(tokens.primary.light.fill).toBe("#91d500");
+  });
+});
+
+// Comprehensive desk design section 1: a primary hover per theme. The fill
+// moves toward its own text (darker under dark text, lighter under light
+// text), or away from it when that would cost the text AA.
+describe("primaryHover", () => {
+  it("is visible on light and dark fills and keeps the button text at AA", () => {
+    expect(primaryHover("#91d500", "#101820")).toBe("#82be04");
+    for (const [fill, ink] of [
+      ["#91d500", "#101820"],
+      ["#1b2a4a", "#ffffff"],
+      ["#0057ff", "#ffffff"],
+      ["#757575", "#000000"],
+    ]) {
+      const hover = primaryHover(fill, ink);
+      expect(hover, fill).not.toBe(fill);
+      expect(contrastRatio(ink, hover), fill).toBeGreaterThanOrEqual(TEXT_MIN);
+    }
+  });
+
+  it("is set for both themes in the brand style, and the defaults match globals.css", () => {
+    const { style } = brandStyle(null, "#91d500");
+    expect(style["--primary-hover-light"]).toBe("#82be04");
+    expect(style["--primary-hover-dark"]).toBe("#82be04");
+    expect(brandStyle(null, "#1b2a4a").style["--primary-hover-dark"]).not.toBe("#1b2a4a");
+    const css = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8");
+    expect(css).toContain("--primary-hover-light: #82be04;");
+    expect(css).toContain("--primary-hover-dark: #82be04;");
+    expect(css).toContain("--color-primary-hover: var(--primary-hover);");
+    expect(css).toContain("--color-tone-fill-hover: var(--tone-fill-hover);");
   });
 });

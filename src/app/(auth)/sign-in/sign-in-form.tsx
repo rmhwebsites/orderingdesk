@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { authClient } from "@/lib/auth-client";
 import { ui } from "@/components/ui";
+import { Spinner } from "@/components/kit";
 
 // The email form. The magic link comes back to this same host (better-auth
 // runs per host), so a client host keeps its own session.
@@ -56,14 +57,15 @@ export function SignInForm() {
         aria-describedby={phase === "error" ? "sign-in-error" : undefined}
         className={ui.input}
       />
-      <button type="submit" disabled={phase === "sending"} className={`${ui.buttonPrimary} mt-2`}>
-        {phase === "sending" ? "Sending" : "Send sign-in link"}
-      </button>
       {phase === "error" ? (
         <p id="sign-in-error" className={ui.errorText}>
           {errorMessage}
         </p>
       ) : null}
+      <button type="submit" disabled={phase === "sending"} aria-busy={phase === "sending" || undefined} className={`${ui.buttonPrimary} mt-2`}>
+        {phase === "sending" ? <Spinner /> : null}
+        {phase === "sending" ? "Sending" : "Send sign-in link"}
+      </button>
     </form>
   );
 }

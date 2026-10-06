@@ -27,6 +27,7 @@ import {
 } from "@/lib/branding-draft";
 import type { BrandAssetView, BrandingView } from "@/server/branding/assets";
 import { ui } from "@/components/ui";
+import { Spinner } from "@/components/kit";
 import { BrandImages } from "./brand-images";
 import { EmailPreview, LivePreview } from "./brand-preview";
 import {
@@ -446,8 +447,10 @@ export function BrandingSection({
                 type="button"
                 onClick={() => body && void put(body, "save")}
                 disabled={busy !== null || body === null || blocked}
+                aria-busy={busy === "save" || undefined}
                 className={ui.buttonPrimary}
               >
+                {busy === "save" ? <Spinner /> : null}
                 {busy === "save" ? "Saving" : "Save branding"}
               </button>
               {body ? (

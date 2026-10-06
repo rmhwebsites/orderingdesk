@@ -37,7 +37,7 @@ import { StatusSelect } from "./status-select";
 import { APP_NAME } from "@/lib/brand";
 import type { PoView } from "@/server/po/service";
 import { PurchaseOrders } from "./po-history";
-import { Chip } from "@/components/kit";
+import { Chip, Spinner } from "@/components/kit";
 import { CopyButton, Section } from "./drawer-kit";
 import { ItemsSection, RequestSection, ShipToSection } from "./request-parts";
 import { ReviewPanel } from "./review-panel";
@@ -417,8 +417,13 @@ function NoteComposer({ onSubmit }: { onSubmit: (text: string) => Promise<string
               {remaining.toLocaleString("en-US")} characters left
             </p>
           ) : null}
-          <button type="submit" disabled={sending || text.trim().length === 0} className={`${ui.buttonPrimary} h-9`}>
-            <PaperPlaneRightIcon size={16} aria-hidden />
+          <button
+            type="submit"
+            disabled={sending || text.trim().length === 0}
+            aria-busy={sending || undefined}
+            className={`${ui.buttonPrimary} h-9`}
+          >
+            {sending ? <Spinner /> : <PaperPlaneRightIcon size={16} aria-hidden />}
             {sending ? "Sending" : "Send"}
           </button>
         </div>

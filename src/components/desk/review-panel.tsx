@@ -20,7 +20,7 @@ import { CheckCircleIcon } from "@phosphor-icons/react/CheckCircle";
 import { XCircleIcon } from "@phosphor-icons/react/XCircle";
 import { NOTE_MAX } from "@/lib/limits";
 import { ui } from "@/components/ui";
-import { InlineMessage } from "@/components/kit";
+import { InlineMessage, Spinner } from "@/components/kit";
 import { focusSoon } from "@/components/settings/kit";
 import { confirmArmed } from "./po-send-confirm";
 import { ShopifyLink } from "./request-parts";
@@ -97,11 +97,12 @@ function ApproveConfirm({
           type="button"
           onClick={() => void confirm()}
           disabled={busy}
+          aria-busy={busy || undefined}
           aria-describedby={`${id}-question${error ? ` ${id}-error` : ""}`}
           className={ui.buttonPrimary}
         >
-          <CheckCircleIcon size={16} aria-hidden />
-          {busy ? "Approving..." : "Approve and create order"}
+          {busy ? <Spinner /> : <CheckCircleIcon size={16} aria-hidden />}
+          {busy ? "Approving" : "Approve and create order"}
         </button>
         <button type="button" onClick={onCancel} disabled={busy} className={ui.buttonSecondary}>
           Cancel
@@ -203,9 +204,9 @@ function RejectForm({
         </p>
       ) : null}
       <div className="flex flex-wrap gap-2" data-tone="red">
-        <button type="submit" disabled={busy} className={ui.buttonDanger}>
-          <XCircleIcon size={16} aria-hidden />
-          {busy ? "Rejecting..." : "Reject request"}
+        <button type="submit" disabled={busy} aria-busy={busy || undefined} className={ui.buttonDanger}>
+          {busy ? <Spinner /> : <XCircleIcon size={16} aria-hidden />}
+          {busy ? "Rejecting" : "Reject request"}
         </button>
         <button type="button" onClick={onCancel} disabled={busy} className={ui.buttonSecondary}>
           Cancel
@@ -306,7 +307,7 @@ export function ReviewPanel({
                 onClick={() => setMode("reject")}
                 disabled={rejectBlock !== null}
                 aria-describedby={rejectBlock ? rejectWhyId : undefined}
-                className={ui.buttonSecondary.replace("text-ink", "text-bad")}
+                className={ui.buttonDangerSecondary}
               >
                 <XCircleIcon size={16} aria-hidden />
                 Reject

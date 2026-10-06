@@ -169,17 +169,33 @@ export type PrimaryTokens = {
   // The fill pulled toward the theme's ink until it reads as text, focus
   // ring or thin rule on every surface of that theme.
   strong: string;
+  // The fill under the pointer: visible on light and dark fills alike.
+  hover: string;
 };
 
 function bestOn(fill: string, candidates: readonly string[]): string {
   return [...candidates].sort((a, b) => contrastRatio(b, fill) - contrastRatio(a, fill))[0];
 }
 
+// The fill moved 12% toward its text (darker under dark text, lighter under
+// light text), which shows on every fill; if that would bring the text
+// under AA, 12% away from it instead (more contrast, still visible).
+export function primaryHover(fill: string, ink: string): string {
+  const toward = mixHex(fill, ink, 0.12);
+  if (contrastRatio(ink, toward) >= TEXT_MIN) {
+    return toward;
+  }
+  const away = contrastRatio(ink, WHITE) >= contrastRatio(ink, BLACK) ? WHITE : BLACK;
+  return mixHex(fill, away, 0.12);
+}
+
 function primaryTokens(fill: string, palette: Palette, onFill: readonly string[]): PrimaryTokens {
+  const ink = bestOn(fill, onFill);
   return {
     fill,
-    ink: bestOn(fill, onFill),
+    ink,
     strong: strengthen(fill, palette.ink, surfacesOf(palette), TEXT_MIN),
+    hover: primaryHover(fill, ink),
   };
 }
 
@@ -455,6 +471,7 @@ export function brandStyle(
     style[`--primary-${mode}`] = primary.fill;
     style[`--primary-ink-${mode}`] = primary.ink;
     style[`--primary-strong-${mode}`] = primary.strong;
+    style[`--primary-hover-${mode}`] = primary.hover;
   }
   const palette = tokens.palette ?? (opts?.complete ? { light: DEFAULT_LIGHT_PALETTE, dark: DEFAULT_DARK_PALETTE } : null);
   if (palette) {

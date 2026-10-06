@@ -36,6 +36,7 @@ import type { VendorView } from "@/server/desk/vendors";
 import type { PoView } from "@/server/po/service";
 import { describedBy, Field, focusSoon, InlineMessage, SaveStatus, Select } from "@/components/settings/kit";
 import { ui } from "@/components/ui";
+import { Spinner } from "@/components/kit";
 import { SendConfirm, useSendFlow } from "./po-send-confirm";
 
 type Loaded =
@@ -198,7 +199,15 @@ export function DraftActions({
   return (
     <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-end">
       <SaveStatus text={saved} />
-      <button id="po-save-draft" type="button" onClick={onSaveDraft} disabled={locked} className={ui.buttonSecondary}>
+      <button
+        id="po-save-draft"
+        type="button"
+        onClick={onSaveDraft}
+        disabled={locked}
+        aria-busy={saving || undefined}
+        className={ui.buttonSecondary}
+      >
+        {saving ? <Spinner /> : null}
         {saving ? "Saving" : "Save draft"}
       </button>
       <button id="po-send" type="button" onClick={onReview} disabled={locked || sendBlocked} className={ui.buttonPrimary}>
@@ -320,7 +329,8 @@ function InlineVendorAdd({
       </Field>
       {error ? <InlineMessage tone="bad">{error}</InlineMessage> : null}
       <div className="flex flex-wrap gap-2">
-        <button type="button" onClick={() => void add()} disabled={busy} className={ui.buttonPrimary}>
+        <button type="button" onClick={() => void add()} disabled={busy} aria-busy={busy || undefined} className={ui.buttonPrimary}>
+          {busy ? <Spinner /> : null}
           {busy ? "Adding" : "Add vendor"}
         </button>
         <button type="button" onClick={onCancel} disabled={busy} className={ui.buttonQuiet}>
@@ -834,7 +844,14 @@ export function PoModal({
                   <InlineMessage tone="warn">
                     {linesProblem} Sending is blocked until the full list loads, so no item is left out by mistake.
                   </InlineMessage>
-                  <button type="button" onClick={() => void retryLines()} disabled={linesRetrying} className={ui.buttonSecondary}>
+                  <button
+                    type="button"
+                    onClick={() => void retryLines()}
+                    disabled={linesRetrying}
+                    aria-busy={linesRetrying || undefined}
+                    className={ui.buttonSecondary}
+                  >
+                    {linesRetrying ? <Spinner /> : null}
                     {linesRetrying ? "Loading" : "Load the full list again"}
                   </button>
                 </div>

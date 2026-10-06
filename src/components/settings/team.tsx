@@ -10,7 +10,7 @@ import type { RosterTags } from "@/db/schema";
 import type { MemberView, PendingInviteView } from "@/server/members";
 import type { RosterRequests, RosterRequestView } from "@/server/roster";
 import { ui } from "@/components/ui";
-import { Chip } from "@/components/kit";
+import { Chip, Spinner } from "@/components/kit";
 import {
   ConfirmStep,
   describedBy,
@@ -198,10 +198,12 @@ function RequestRow({
             <button
               type="button"
               disabled={busy !== null}
+              aria-busy={busy === "approve" || undefined}
               onClick={onApprove}
               className={ui.buttonSecondary}
               aria-label={`Approve ${request.email} as ${request.role}`}
             >
+              {busy === "approve" ? <Spinner /> : null}
               {busy === "approve" ? "Approving" : "Approve"}
             </button>
           )}
@@ -317,7 +319,8 @@ function RosterTagsEditor({
       </div>
       {error ? <InlineMessage tone="bad">{error}</InlineMessage> : null}
       <div className="flex flex-wrap items-center gap-3">
-        <button type="submit" disabled={busy} className={ui.buttonSecondary}>
+        <button type="submit" disabled={busy} aria-busy={busy || undefined} className={ui.buttonSecondary}>
+          {busy ? <Spinner /> : null}
           {busy ? "Saving" : "Save tags"}
         </button>
         {isDefault ? null : (
@@ -613,8 +616,8 @@ export function TeamSection({
               <RoleOptions />
             </Select>
           </Field>
-          <button type="submit" disabled={inviting} className={`${ui.buttonPrimary} sm:self-end`}>
-            <EnvelopeSimpleIcon size={16} aria-hidden />
+          <button type="submit" disabled={inviting} aria-busy={inviting || undefined} className={`${ui.buttonPrimary} sm:self-end`}>
+            {inviting ? <Spinner /> : <EnvelopeSimpleIcon size={16} aria-hidden />}
             {inviting ? "Sending" : "Send invite"}
           </button>
         </form>

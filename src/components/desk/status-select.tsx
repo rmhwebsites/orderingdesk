@@ -4,6 +4,7 @@ import { useId, useRef, useState } from "react";
 import { CaretDownIcon } from "@phosphor-icons/react/CaretDown";
 import { IDLE_STATUS_INPUT, statusInput, type StatusInput } from "@/lib/status-commit";
 import type { StatusView } from "@/server/desk/shapes";
+import { Spinner } from "@/components/kit";
 
 // The inline status control: a native select (keyboard, screen reader and
 // phone pickers for free) dressed as the status chip, so it always shows
@@ -85,7 +86,7 @@ export function StatusSelect({
         onClick={(event) => event.stopPropagation()}
         className={`${height} max-w-full cursor-pointer appearance-none truncate rounded-control border bg-tone-fill font-semibold text-tone-text transition-colors hover:border-line-strong disabled:cursor-not-allowed disabled:opacity-60 ${
           staged !== null ? "border-dashed border-tone-text" : "border-transparent"
-        } ${busy ? "opacity-70" : ""}`}
+        }`}
       >
         {current ? null : (
           <option value={shown} disabled>
@@ -98,11 +99,17 @@ export function StatusSelect({
           </option>
         ))}
       </select>
-      <CaretDownIcon
-        size={12}
-        aria-hidden
-        className={`pointer-events-none absolute top-1/2 -translate-y-1/2 text-tone-text ${size === "md" ? "right-3.5" : "right-3"}`}
-      />
+      {busy ? (
+        <span className={`pointer-events-none absolute top-1/2 -translate-y-1/2 text-tone-text ${size === "md" ? "right-3.5" : "right-3"}`}>
+          <Spinner size={12} />
+        </span>
+      ) : (
+        <CaretDownIcon
+          size={12}
+          aria-hidden
+          className={`pointer-events-none absolute top-1/2 -translate-y-1/2 text-tone-text ${size === "md" ? "right-3.5" : "right-3"}`}
+        />
+      )}
       {hint ? (
         <span id={whyId} className="sr-only">
           {hint}

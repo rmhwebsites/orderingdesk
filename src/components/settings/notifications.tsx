@@ -7,7 +7,7 @@ import { useNow } from "@/lib/use-now";
 import type { SettingsView } from "@/server/desk/shapes";
 import type { SenderView } from "@/server/sender";
 import { ui } from "@/components/ui";
-import { Chip } from "@/components/kit";
+import { Chip, Spinner } from "@/components/kit";
 import { describedBy, Field, InlineMessage, Panel, requestJson, SaveStatus, SettingsSection } from "./kit";
 
 function splitEmails(text: string): string[] {
@@ -106,7 +106,8 @@ function EmailSettings({ workspaceId, initial }: { workspaceId: string; initial:
       </Field>
       {error ? <InlineMessage tone="bad">{error}</InlineMessage> : null}
       <div className="flex flex-wrap items-center gap-3">
-        <button type="submit" disabled={busy} className={ui.buttonPrimary}>
+        <button type="submit" disabled={busy} aria-busy={busy || undefined} className={ui.buttonPrimary}>
+          {busy ? <Spinner /> : null}
           {busy ? "Saving" : "Save"}
         </button>
         <SaveStatus text={done} />
@@ -223,11 +224,24 @@ function SenderSettings({
           />
         </Field>
         <div className="flex gap-2">
-          <button type="submit" disabled={busy !== null || override.trim().length === 0} className={ui.buttonSecondary}>
+          <button
+            type="submit"
+            disabled={busy !== null || override.trim().length === 0}
+            aria-busy={busy === "save" || undefined}
+            className={ui.buttonSecondary}
+          >
+            {busy === "save" ? <Spinner /> : null}
             {busy === "save" ? "Saving" : "Save address"}
           </button>
           {sender.override ? (
-            <button type="button" disabled={busy !== null} onClick={() => void saveOverride(null, "clear")} className={ui.buttonQuiet}>
+            <button
+              type="button"
+              disabled={busy !== null}
+              aria-busy={busy === "clear" || undefined}
+              onClick={() => void saveOverride(null, "clear")}
+              className={ui.buttonQuiet}
+            >
+              {busy === "clear" ? <Spinner /> : null}
               {busy === "clear" ? "Clearing" : "Clear"}
             </button>
           ) : null}
@@ -240,8 +254,14 @@ function SenderSettings({
             : "Verify sends a test email to you from the workspace address. Its domain must be onboarded in Cloudflare under Compute > Email Service > Email Sending first."}
         </p>
         <div>
-          <button type="button" onClick={verify} disabled={busy !== null || !sender.address} className={ui.buttonPrimary}>
-            <PaperPlaneTiltIcon size={16} aria-hidden />
+          <button
+            type="button"
+            onClick={verify}
+            disabled={busy !== null || !sender.address}
+            aria-busy={busy === "verify" || undefined}
+            className={ui.buttonPrimary}
+          >
+            {busy === "verify" ? <Spinner /> : <PaperPlaneTiltIcon size={16} aria-hidden />}
             {busy === "verify" ? "Sending a test email" : "Verify"}
           </button>
         </div>

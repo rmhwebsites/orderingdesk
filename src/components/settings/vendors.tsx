@@ -5,6 +5,7 @@ import { PlusIcon } from "@phosphor-icons/react/Plus";
 import { TruckIcon } from "@phosphor-icons/react/Truck";
 import type { VendorView } from "@/server/desk/vendors";
 import { ui } from "@/components/ui";
+import { Spinner } from "@/components/kit";
 import { ConfirmStep, describedBy, Field, focusSoon, InlineMessage, Panel, requestJson, sectionHeading, SettingsSection } from "./kit";
 
 type Draft = { name: string; email: string; cc: string; notes: string };
@@ -113,8 +114,13 @@ function VendorForm({
       </Field>
       {error ? <InlineMessage tone="bad">{error}</InlineMessage> : null}
       <div className="flex flex-wrap gap-2">
-        <button type="submit" disabled={busy} className={onCancel ? ui.buttonPrimary : ui.buttonSecondary}>
-          {onCancel ? null : <PlusIcon size={16} aria-hidden />}
+        <button
+          type="submit"
+          disabled={busy}
+          aria-busy={busy || undefined}
+          className={onCancel ? ui.buttonPrimary : ui.buttonSecondary}
+        >
+          {busy ? <Spinner /> : onCancel ? null : <PlusIcon size={16} aria-hidden />}
           {busy ? busyLabel : submitLabel}
         </button>
         {onCancel ? (

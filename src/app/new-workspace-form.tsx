@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ui } from "@/components/ui";
+import { Spinner } from "@/components/kit";
 
 export function NewWorkspaceForm() {
   const router = useRouter();
@@ -55,7 +56,8 @@ export function NewWorkspaceForm() {
           aria-describedby={errorMessage ? "new-workspace-error" : undefined}
           className={ui.input}
         />
-        <button type="submit" disabled={busy} className={ui.buttonPrimary}>
+        <button type="submit" disabled={busy} aria-busy={busy || undefined} className={ui.buttonPrimary}>
+          {busy ? <Spinner /> : null}
           {busy ? "Creating" : "Create"}
         </button>
       </div>

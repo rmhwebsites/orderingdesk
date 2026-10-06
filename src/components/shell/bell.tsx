@@ -18,6 +18,7 @@ import { useNow } from "@/lib/use-now";
 import type { ActivityFeed, ActivityItem } from "@/server/activity";
 import { useToast } from "@/components/toasts";
 import { ui } from "@/components/ui";
+import { Spinner } from "@/components/kit";
 import { useWorkspace } from "./workspace-provider";
 
 // The activity bell in the top bar: the unread count (events newer than
@@ -233,8 +234,14 @@ export function Bell() {
           <div className="flex min-h-12 items-center justify-between gap-3 border-b border-line px-4 py-2">
             <h2 className="font-display text-sm font-semibold text-ink">Activity</h2>
             {feed && feed.unread !== null && feed.unread > 0 ? (
-              <button type="button" onClick={markAllRead} disabled={marking} className={`${ui.buttonQuiet} -mr-2 h-8 text-xs`}>
-                <ChecksIcon size={16} aria-hidden />
+              <button
+                type="button"
+                onClick={markAllRead}
+                disabled={marking}
+                aria-busy={marking || undefined}
+                className={`${ui.buttonQuiet} -mr-2 h-8 text-xs`}
+              >
+                {marking ? <Spinner /> : <ChecksIcon size={16} aria-hidden />}
                 {marking ? "Marking" : "Mark all read"}
               </button>
             ) : null}

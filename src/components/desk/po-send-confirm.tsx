@@ -24,6 +24,7 @@ import { newRequestId, recipientSummary, sendPo } from "@/lib/po-client";
 import type { PoView } from "@/server/po/service";
 import { InlineMessage } from "@/components/settings/kit";
 import { ui } from "@/components/ui";
+import { Spinner } from "@/components/kit";
 
 // What the step shows goes out, as the server last described the PO.
 export type PendingContent = Pick<PoView, "lines" | "shipTo" | "notes" | "currency" | "subtotal">;
@@ -271,10 +272,11 @@ export function SendConfirm({
             }
           }}
           disabled={busy || !sendable}
+          aria-busy={busy || undefined}
           aria-describedby={pending.message ? `${questionId} ${messageId}` : questionId}
           className={ui.buttonPrimary}
         >
-          <PaperPlaneTiltIcon size={16} aria-hidden />
+          {busy ? <Spinner /> : <PaperPlaneTiltIcon size={16} aria-hidden />}
           {busy ? "Sending" : pending.resend ? `Send again to ${pending.vendorName}` : "Send to vendor"}
         </button>
       </div>

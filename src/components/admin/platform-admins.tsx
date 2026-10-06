@@ -5,7 +5,7 @@ import { UserPlusIcon } from "@phosphor-icons/react/UserPlus";
 import { formatDate } from "@/lib/format";
 import { useNow } from "@/lib/use-now";
 import type { PlatformAdminView, PlatformInviteView } from "@/server/platform-admins";
-import { Chip } from "@/components/kit";
+import { Chip, Spinner } from "@/components/kit";
 import {
   ConfirmStep,
   describedBy,
@@ -153,8 +153,8 @@ export function PlatformAdmins({ initial, viewerUserId }: { initial: AdminsData;
               className={ui.input}
             />
           </Field>
-          <button type="submit" disabled={busy !== null} className={ui.buttonPrimary}>
-            <UserPlusIcon size={16} aria-hidden />
+          <button type="submit" disabled={busy !== null} aria-busy={busy === "invite" || undefined} className={ui.buttonPrimary}>
+            {busy === "invite" ? <Spinner /> : <UserPlusIcon size={16} aria-hidden />}
             {busy === "invite" ? "Sending" : "Send invite"}
           </button>
         </form>

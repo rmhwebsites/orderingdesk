@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { authClient } from "@/lib/auth-client";
 import { disableDevicePush } from "@/lib/push-client";
 import { ui } from "@/components/ui";
+import { Spinner } from "@/components/kit";
 
 // How long signing out waits for this browser's push subscription to be
 // forgotten before it signs out anyway.
@@ -32,7 +33,8 @@ export function SignOutButton() {
   }
 
   return (
-    <button type="button" onClick={handleClick} disabled={busy} className={ui.buttonSecondary}>
+    <button type="button" onClick={handleClick} disabled={busy} aria-busy={busy || undefined} className={ui.buttonSecondary}>
+      {busy ? <Spinner /> : null}
       {busy ? "Signing out" : "Sign out"}
     </button>
   );
