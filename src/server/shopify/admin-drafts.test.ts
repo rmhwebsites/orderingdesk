@@ -15,7 +15,9 @@ import {
   fetchDraftForApprove,
   fetchDraftLinks,
   fetchDraftNode,
+  fetchRequesterIds,
   fetchStatusTags,
+  REQUESTER_CHUNK,
 } from "./admin";
 
 // The draft order operations (draft orders spec sections 3.3 to 3.6).
@@ -305,5 +307,48 @@ describe("companiesEnabled", () => {
     expect(companiesEnabled(["write_companies"])).toBe(true);
     expect(companiesEnabled(["read_orders", "read_customers"])).toBe(false);
     expect(companiesEnabled(null)).toBe(false);
+  });
+});
+
+describe("fetchRequesterIds", () => {
+  it("reads the customer and company contact of each order and draft by id, in chunks", async () => {
+    const ids = Array.from({ length: REQUESTER_CHUNK + 1 }, (_, i) => `gid://shopify/Order/${i + 1}`);
+    ids.push("gid://shopify/DraftOrder/12");
+    const shop = stub((call) => ({
+      data: {
+        nodes: (call.variables.ids as string[]).map((id) =>
+          id.endsWith("/Order/2")
+            ? { id, customer: null, purchasingEntity: null }
+            : id.includes("DraftOrder")
+              ? {
+                  id,
+                  customer: { id: "gid://shopify/Customer/78" },
+                  purchasingEntity: { __typename: "PurchasingCompany", contact: { id: "gid://shopify/CompanyContact/501" } },
+                }
+              : { id, customer: { id: "gid://shopify/Customer/77" }, purchasingEntity: null },
+        ),
+      },
+    }));
+    const result = await fetchRequesterIds(DOMAIN, TOKEN, ids, shop.impl);
+    expect(shop.calls).toHaveLength(2);
+    expect(shop.calls[0].query).toContain("nodes(ids: $ids)");
+    expect((shop.calls[0].variables.ids as string[]).length).toBe(REQUESTER_CHUNK);
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") {
+      expect(result.ids.get("gid://shopify/Order/1")).toEqual({ customerId: "77", contactId: "" });
+      expect(result.ids.has("gid://shopify/Order/2")).toBe(false);
+      expect(result.ids.get("gid://shopify/DraftOrder/12")).toEqual({ customerId: "78", contactId: "501" });
+    }
+  });
+
+  it("reports a failed chunk as the AdminFailure kinds, and a gone card as no entry", async () => {
+    const busy = stub(() => new Response("busy", { status: 503 }));
+    expect((await fetchRequesterIds(DOMAIN, TOKEN, ["gid://shopify/Order/1"], busy.impl)).kind).toBe("transient");
+    const gone = stub(() => ({ data: { nodes: [null] } }));
+    const result = await fetchRequesterIds(DOMAIN, TOKEN, ["gid://shopify/Order/1"], gone.impl);
+    expect(result).toEqual({ kind: "ok", ids: new Map() });
+    const none = stub(() => ({ data: { nodes: [] } }));
+    expect(await fetchRequesterIds(DOMAIN, TOKEN, [], none.impl)).toEqual({ kind: "ok", ids: new Map() });
+    expect(none.calls).toHaveLength(0);
   });
 });

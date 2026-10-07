@@ -26,6 +26,8 @@ import {
   EDIT_DRAFT_MUTATION,
   ORDER_CANCEL_STATE_QUERY,
   ORDER_LINE_ITEMS_QUERY,
+  REQUESTER_CHUNK,
+  REQUESTER_IDS_QUERY,
   STATUS_TAGS_QUERY,
 } from "./admin";
 import { COMPANY_LOCATION_QUERY, COMPANY_LOCATIONS_QUERY } from "./locations";
@@ -924,6 +926,14 @@ describe("draft order documents", () => {
     expect(DRAFT_LINK_CHUNK).toBe(100);
     expect(DRAFT_LINK_CHUNK * perId + 1).toBeLessThanOrEqual(QUERY_COST_BUDGET);
     expect(DRAFT_LINKS_QUERY).toContain("nodes(ids: $ids)");
+  });
+
+  it("keeps a chunk of the requester id lookup under budget even if Shopify prices every id", () => {
+    // Per id: the node, its customer, its purchasing entity and the contact.
+    const perId = 1 + 1 + 1 + 1;
+    expect(REQUESTER_CHUNK).toBe(50);
+    expect(REQUESTER_CHUNK * perId + 1).toBeLessThanOrEqual(QUERY_COST_BUDGET);
+    expect(REQUESTER_IDS_QUERY).toContain("nodes(ids: $ids)");
   });
 
   it("keeps the edit read and the edit mutation under budget", () => {

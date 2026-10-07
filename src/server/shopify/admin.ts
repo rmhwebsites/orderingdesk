@@ -347,6 +347,65 @@ export async function fetchDraftLinks(
   return { kind: "ok", links };
 }
 
+// ---------------------------------------------------------------------------
+// Requester ids of cards stored before snapshots kept them (Wave 1c search
+// backfill): the Shopify customer and, for a B2B purchase, the company
+// contact, read live by id.
+
+export const REQUESTER_IDS_QUERY = `query RequesterIds($ids: [ID!]!) {
+  nodes(ids: $ids) {
+    ... on Order { id customer { id } purchasingEntity { __typename ... on PurchasingCompany { contact { id } } } }
+    ... on DraftOrder { id customer { id } purchasingEntity { __typename ... on PurchasingCompany { contact { id } } } }
+  }
+}`;
+export const REQUESTER_CHUNK = 50;
+
+export type RequesterIds = { customerId: string; contactId: string };
+
+function requesterIdsOf(node: unknown): RequesterIds | null {
+  if (!isRecord(node)) {
+    return null;
+  }
+  const customer = isRecord(node.customer) && typeof node.customer.id === "string" ? legacyIdOf(node.customer.id) : "";
+  if (customer.length === 0) {
+    return null;
+  }
+  const entity = isRecord(node.purchasingEntity) ? node.purchasingEntity : null;
+  const contact = entity && isRecord(entity.contact) && typeof entity.contact.id === "string" ? legacyIdOf(entity.contact.id) : "";
+  return { customerId: customer, contactId: contact };
+}
+
+// By order or draft gid, REQUESTER_CHUNK ids per request. A card with no
+// customer (or one Shopify no longer has) is left out of the map. Any
+// failed chunk fails the whole lookup.
+export async function fetchRequesterIds(
+  shopDomain: string,
+  token: string,
+  gids: readonly string[],
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ kind: "ok"; ids: Map<string, RequesterIds> } | AdminFailure> {
+  const ids = new Map<string, RequesterIds>();
+  const unique = [...new Set(gids)];
+  for (let i = 0; i < unique.length; i += REQUESTER_CHUNK) {
+    const chunk = unique.slice(i, i + REQUESTER_CHUNK);
+    const result = await shopifyGraphql(shopDomain, token, REQUESTER_IDS_QUERY, { ids: chunk }, fetchImpl);
+    if (result.kind !== "ok") {
+      return failed(result);
+    }
+    const nodes = result.data.nodes;
+    if (!Array.isArray(nodes) || nodes.length !== chunk.length) {
+      return { kind: "transient", detail: "unexpected response shape" };
+    }
+    chunk.forEach((gid, index) => {
+      const found = requesterIdsOf(nodes[index]);
+      if (found) {
+        ids.set(gid, found);
+      }
+    });
+  }
+  return { kind: "ok", ids };
+}
+
 // Read fresh right before an approval: the status, whether Shopify has
 // finished calculating the draft (ready), the order it became, the total.
 export const DRAFT_BEFORE_APPROVE_QUERY = `query DraftBeforeApprove($id: ID!) {
