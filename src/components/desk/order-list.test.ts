@@ -97,6 +97,33 @@ describe("OrderList", () => {
     expect(html).toContain(">Draft</span>");
     expect(html).toContain('Deleted<span class="sr-only"> in Shopify</span>');
   });
+
+  // Final verification (Wave 1b): "Cancelled in Shopify" in full is wider
+  // than the 10rem Order column and ran over the Date column, more so beside
+  // a price. The mark reads Cancelled, like Deleted, and says the rest to
+  // screen readers and on hover; the Order cell never paints past its edge.
+  it("marks an order Shopify cancelled outside the cancelled status in a chip that fits the Order column", () => {
+    const statuses: StatusView[] = [
+      ...STATUSES,
+      { key: "cancelled", label: "Cancelled", color: "slate", sort: 1, triggersPo: false, shopifyLink: "cancelled", closed: true },
+    ];
+    const orders = [
+      card("1006", { cancelled: true, total: "2348.50", currency: "CAD" }),
+      card("1007", { cancelled: true, statusKey: "cancelled" }),
+    ];
+    for (const layout of ["table", "cards"] as const) {
+      const html = render(layout, { orders, statuses });
+      expect(html.match(/Cancelled<span class="sr-only"> in Shopify<\/span>/g), layout).toHaveLength(1);
+      expect(html, layout).toContain('title="Cancelled in Shopify"');
+      expect(html, layout).not.toContain(">Cancelled in Shopify<");
+    }
+    const table = render("table", { orders, statuses });
+    const orderCells = [...table.matchAll(/<td class="([^"]*)"><span class="flex min-w-0 items-center gap-2"><button/g)];
+    expect(orderCells).toHaveLength(2);
+    for (const cell of orderCells) {
+      expect(cell[1].split(" ")).toContain("overflow-hidden");
+    }
+  });
 });
 
 const DAY = 86400000;

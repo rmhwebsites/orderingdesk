@@ -99,7 +99,8 @@ function KindMark({ order, cancelledKey }: { order: OrderSummary; cancelledKey: 
     );
   }
   // An order Shopify cancelled while its card sits outside the cancelled
-  // status (none exists, or a manager moved it) says so.
+  // status (none exists, or a manager moved it) says so. Short, like
+  // Deleted, so it fits the table's Order column; the drawer spells it out.
   const cancelled = order.cancelled && order.statusKey !== cancelledKey;
   if (!order.draftName && !cancelled) {
     return null;
@@ -108,8 +109,8 @@ function KindMark({ order, cancelledKey }: { order: OrderSummary; cancelledKey: 
     <>
       {order.draftName ? <span className="shrink-0 truncate text-xs text-ink-2">{`from ${order.draftName}`}</span> : null}
       {cancelled ? (
-        <Chip tone="slate" size="sm">
-          Cancelled in Shopify
+        <Chip tone="slate" size="sm" title="Cancelled in Shopify">
+          Cancelled<span className="sr-only"> in Shopify</span>
         </Chip>
       ) : null}
     </>
@@ -320,7 +321,9 @@ export function OrderTable({
                     />
                   ) : null}
                 </td>
-                <td className={`px-2 ${flash}`}>
+                {/* overflow-hidden: the name and its marks never run over
+                    the Date column (the padding keeps the focus ring). */}
+                <td className={`overflow-hidden px-2 ${flash}`}>
                   <span className="flex min-w-0 items-center gap-2">
                     <button
                       type="button"
