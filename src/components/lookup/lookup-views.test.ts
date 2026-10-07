@@ -5,6 +5,7 @@ import type { OrderSummary } from "@/server/desk/read";
 import type { StatusView } from "@/server/desk/shapes";
 import type { LocationPage } from "@/server/lookup/locations";
 import type { PersonPage } from "@/server/lookup/people";
+import { CardList } from "./card-list";
 import { LocationView } from "./location-view";
 import { PeopleListView } from "./people-list-view";
 import { PersonView } from "./person-view";
@@ -69,6 +70,31 @@ describe("LocationView", () => {
     expect(html).toContain('href="/people/p1"');
     expect(html).toContain('href="/?location=loc_north&amp;view=all"');
     expect(html).toContain("Safety Vest");
+  });
+});
+
+describe("CardList", () => {
+  const withCancelled = [
+    { key: "shipped", label: "Shipped", color: "green", sort: 1, triggersPo: false, shopifyLink: null },
+    { key: "cancelled", label: "Cancelled", color: "slate", sort: 2, triggersPo: false, shopifyLink: "cancelled" },
+  ] as StatusView[];
+  const render = (cards: OrderSummary[], list: StatusView[]) =>
+    renderToStaticMarkup(createElement(CardList, { cards, statuses: list, basePath: "", timeZone: "America/New_York", empty: "None" }));
+
+  it("says Cancelled in Shopify on an order Shopify cancelled outside the Cancelled status, as the desk does", () => {
+    const html = render([card({ statusKey: "shipped", cancelled: true })], withCancelled);
+    expect(html).toContain("Shipped");
+    expect(html).toContain('title="Cancelled in Shopify"');
+    expect(html).toContain('<span class="sr-only"> in Shopify</span>');
+  });
+
+  it("says it too when the workspace has no Cancelled status", () => {
+    expect(render([card({ cancelled: true })], statuses)).toContain('title="Cancelled in Shopify"');
+  });
+
+  it("adds nothing to a card in the Cancelled status or one Shopify did not cancel", () => {
+    const html = render([card({ id: "o1", statusKey: "cancelled", cancelled: true }), card({ id: "o2", statusKey: "shipped", cancelled: false })], withCancelled);
+    expect(html).not.toContain("in Shopify");
   });
 });
 

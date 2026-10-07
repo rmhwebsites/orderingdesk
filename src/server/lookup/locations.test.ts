@@ -3,6 +3,7 @@ import { indexOrders } from "@/server/search/index-orders";
 import { getLocationPage, listLocationSummaries } from "./locations";
 import {
   openTestDb,
+  seedCancelledStatus,
   seedDraft,
   seedLocation,
   seedOrder,
@@ -60,6 +61,33 @@ describe("getLocationPage", () => {
       { title: "Business cards", variant: "", quantity: 1 },
     ]);
     expect(page?.people.map((person) => [person.name, person.cards])).toEqual([["Riley Oakes", 2]]);
+  });
+
+  it("leaves out the items of an order Shopify cancelled, inside the Cancelled status or not", async () => {
+    const db = await setup();
+    await seedCancelledStatus(db, WS);
+    await seedOrder(db, WS, {
+      id: "o_shop_cancelled",
+      statusKey: "shipped",
+      createdAt: NOW - 3 * DAY,
+      shopify: snapshotOf({ customerId: "77", customerName: "Riley Oakes", items: [vest(8)], cancelledAt: NOW - 2 * DAY }),
+    });
+    await seedOrder(db, WS, {
+      id: "o_in_cancelled",
+      statusKey: "cancelled",
+      createdAt: NOW - 4 * DAY,
+      shopify: snapshotOf({ customerId: "77", customerName: "Riley Oakes", items: [vest(6)], cancelledAt: NOW - 3 * DAY }),
+    });
+    for (const id of ["o_shop_cancelled", "o_in_cancelled"]) {
+      await setOrderLocation(db, id, "loc_north");
+    }
+    await indexOrders(db, WS, ["o_shop_cancelled", "o_in_cancelled"]);
+    const page = await getLocationPage(db, WS, "loc_north", NOW);
+    expect(page?.topItems).toEqual([
+      { title: "Safety Vest", variant: "L", quantity: 5 },
+      { title: "Business cards", variant: "", quantity: 1 },
+    ]);
+    expect(page?.orders.find((card) => card.id === "o_shop_cancelled")).toMatchObject({ statusKey: "shipped", cancelled: true });
   });
 
   it("is null for a location of another workspace or none at all", async () => {

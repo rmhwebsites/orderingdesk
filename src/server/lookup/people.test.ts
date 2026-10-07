@@ -7,6 +7,7 @@ import { getPersonPage, listPeople, PEOPLE_LIST_MAX } from "./people";
 import {
   draftSnapshotOf,
   openTestDb,
+  seedCancelledStatus,
   seedDraft,
   seedDraftStatuses,
   seedLocation,
@@ -115,6 +116,32 @@ describe("getPersonPage", () => {
     expect(page?.items).toEqual([{ title: "Hard Hat", variant: "White", quantity: 3 }]);
     expect(page?.cards.map((card) => card.id)).toEqual(["o_open", "d_rejected", "o_done", "o_old"]);
     expect(page?.timeZone).toBe("America/New_York");
+  });
+
+  // Migration 0012 never moved orders Shopify had already cancelled, a
+  // workspace with 20 statuses got no Cancelled status, and a manager may
+  // move a card out of it: Shopify's cancelledAt counts as cancelled too.
+  it("counts an order Shopify cancelled outside the Cancelled status as cancelled and leaves its items out", async () => {
+    const db = await setup();
+    await seedCancelledStatus(db, WS);
+    const riley = (extra: Record<string, unknown>) => snapshotOf({ customerId: "77", customerName: "Riley Oakes", email: "riley@example.com", ...extra });
+    await seedOrder(db, WS, {
+      id: "o_shop_cancelled",
+      statusKey: "shipped",
+      createdAt: NOW - 3 * DAY,
+      shopify: riley({ items: [hat("Orange", 8)], cancelledAt: NOW - 2 * DAY }),
+    });
+    await seedOrder(db, WS, {
+      id: "o_in_cancelled",
+      statusKey: "cancelled",
+      createdAt: NOW - 4 * DAY,
+      shopify: riley({ items: [hat("Red", 5)], cancelledAt: NOW - 3 * DAY }),
+    });
+    await indexOrders(db, WS, ["o_shop_cancelled", "o_in_cancelled"]);
+    const page = await getPersonPage(db, WS, await personId(db, WS, "77"), NOW);
+    expect(page?.counts).toEqual({ open: 1, approved: 3, rejected: 1, cancelled: 2, cards: 6 });
+    expect(page?.items).toEqual([{ title: "Hard Hat", variant: "White", quantity: 3 }]);
+    expect(page?.cards.find((card) => card.id === "o_shop_cancelled")).toMatchObject({ statusKey: "shipped", cancelled: true });
   });
 
   it("is null for an unknown person or another workspace's person", async () => {

@@ -23,6 +23,8 @@ export const LOCATION_PEOPLE_MAX = 20;
 
 const closedNow = sql`coalesce(${statuses.closed}, 0)`;
 const linkNow = sql`coalesce(${statuses.shopifyLink}, '')`;
+// Shopify reports the order cancelled, wherever its card sits (see people.ts).
+const shopifyCancelled = sql`coalesce(json_type(${orders.shopify}, '$.cancelledAt') in ('integer', 'real') and json_extract(${orders.shopify}, '$.cancelledAt') > 0, 0)`;
 const notDeletedDraft = sql`not (${orders.shopifyOrderId} is null and ${orders.draftDeletedAt} is not null)`;
 const statusJoin = and(eq(statuses.workspaceId, orders.workspaceId), eq(statuses.key, orders.statusKey));
 
@@ -93,7 +95,7 @@ export async function getLocationPage(db: Db, workspaceId: string, shopifyLocati
       .select({ shopify: orders.shopify })
       .from(orders)
       .leftJoin(statuses, statusJoin)
-      .where(and(here, gte(orders.createdAt, now - ITEMS_WINDOW_MS), notDeletedDraft, sql`${linkNow} not in ('draft_rejected', 'cancelled')`)),
+      .where(and(here, gte(orders.createdAt, now - ITEMS_WINDOW_MS), notDeletedDraft, sql`${linkNow} not in ('draft_rejected', 'cancelled') and not ${shopifyCancelled}`)),
     db
       .select({ id: people.id, name: people.name, email: people.email, cards: count() })
       .from(orders)

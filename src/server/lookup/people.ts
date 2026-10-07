@@ -21,6 +21,11 @@ export const PERSON_ITEMS_MAX = 50;
 
 const closedNow = sql`coalesce(${statuses.closed}, 0)`;
 const linkNow = sql`coalesce(${statuses.shopifyLink}, '')`;
+// Shopify reports the order cancelled (cancelledAt on the snapshot, the
+// summary's cancelled flag), wherever its card sits: migration 0012 left
+// orders cancelled before it in their old status, a workspace that had 20
+// statuses got no Cancelled status, and a manager may move a card out of it.
+const shopifyCancelled = sql`coalesce(json_type(${orders.shopify}, '$.cancelledAt') in ('integer', 'real') and json_extract(${orders.shopify}, '$.cancelledAt') > 0, 0)`;
 const notDeletedDraft = sql`not (${orders.shopifyOrderId} is null and ${orders.draftDeletedAt} is not null)`;
 const statusJoin = and(eq(statuses.workspaceId, orders.workspaceId), eq(statuses.key, orders.statusKey));
 // people.location_id holds a Shopify location id, like orders.location_id.
@@ -128,9 +133,9 @@ export async function getPersonPage(db: Db, workspaceId: string, personId: strin
     db
       .select({
         open: sql<number>`sum(case when ${closedNow} = 0 and ${notDeletedDraft} then 1 else 0 end)`,
-        approved: sql<number>`sum(case when ${orders.shopifyOrderId} is not null and ${linkNow} <> 'cancelled' then 1 else 0 end)`,
+        approved: sql<number>`sum(case when ${orders.shopifyOrderId} is not null and ${linkNow} <> 'cancelled' and not ${shopifyCancelled} then 1 else 0 end)`,
         rejected: sql<number>`sum(case when ${linkNow} = 'draft_rejected' then 1 else 0 end)`,
-        cancelled: sql<number>`sum(case when ${linkNow} = 'cancelled' then 1 else 0 end)`,
+        cancelled: sql<number>`sum(case when ${linkNow} = 'cancelled' or ${shopifyCancelled} then 1 else 0 end)`,
       })
       .from(orderSearch)
       .innerJoin(orders, eq(orders.id, orderSearch.orderId))
@@ -142,7 +147,7 @@ export async function getPersonPage(db: Db, workspaceId: string, personId: strin
       .from(orderSearch)
       .innerJoin(orders, eq(orders.id, orderSearch.orderId))
       .leftJoin(statuses, statusJoin)
-      .where(and(mine, gte(orders.createdAt, now - ITEMS_WINDOW_MS), notDeletedDraft, sql`${linkNow} not in ('draft_rejected', 'cancelled')`)),
+      .where(and(mine, gte(orders.createdAt, now - ITEMS_WINDOW_MS), notDeletedDraft, sql`${linkNow} not in ('draft_rejected', 'cancelled') and not ${shopifyCancelled}`)),
     db.select().from(statuses).where(eq(statuses.workspaceId, workspaceId)).orderBy(asc(statuses.sort), asc(statuses.key)),
   ]);
   const counted = countRows[0];

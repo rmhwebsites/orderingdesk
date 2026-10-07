@@ -52,10 +52,14 @@ export function CardList({
     return <p className="text-sm text-ink-2">{empty}</p>;
   }
   const byKey = new Map(statuses.map((status) => [status.key, status]));
+  const cancelledKey = statuses.find((status) => status.shopifyLink === "cancelled")?.key;
   return (
     <ul className="divide-y divide-line overflow-hidden rounded-panel border border-line bg-surface">
       {cards.map((card) => {
         const status = byKey.get(card.statusKey);
+        // An order Shopify cancelled while its card sits outside the
+        // cancelled status says so, with the desk's chip (order-list.tsx).
+        const cancelledInShopify = card.cancelled && card.statusKey !== cancelledKey;
         return (
           <li key={card.id}>
             <Link
@@ -67,6 +71,11 @@ export function CardList({
                 {card.kind === "draft" ? (
                   <Chip tone="slate" size="sm">
                     {card.draftDeleted ? "Deleted in Shopify" : "Request"}
+                  </Chip>
+                ) : null}
+                {cancelledInShopify ? (
+                  <Chip tone="slate" size="sm" title="Cancelled in Shopify">
+                    Cancelled<span className="sr-only"> in Shopify</span>
                   </Chip>
                 ) : null}
               </span>
