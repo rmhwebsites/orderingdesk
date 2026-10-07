@@ -51,7 +51,7 @@ Repo: `/Users/ryboss/Documents/RMH LLC/Clients/Impact Rentals/order-desk`, branc
 10. **Via AI:** `events.source` gains `"ai"` (a TypeScript-only enum; the column has no CHECK, no migration), and `meta.ai.client` holds one of `claude`, `claude-code`, `chatgpt`, `other`, picked on the server from the verified client domain or redirect host, never from a client's self-chosen name. The timeline and the bell show "Casey Lin via Claude".
 11. **Prepared actions:** `ai_actions` rows are single use (a conditional UPDATE claims them), expire after 10 minutes, are bound to the grant, user, workspace, tool and target, and carry a content hash of the payload plus the target's state at preview time; confirm recomputes it and refuses a card that changed. Each confirm repeats the order number plus the tool's key field (status, note text, reason, or the person and location for a new request, and for a new request with personalized items also `details_confirmed: true` and every personalization detail, Decision 12); a wrong echo is refused without using the confirmation up. A request whose `draftOrderCreate` timed out becomes `unknown`; the same confirmation then only looks it up by its marker tag for 30 minutes and never sends again.
 12. **Personalization is confirmed by the person before a request is sent** (owner decision 4 of Oct 7; there is no "Proof needed" tag, chip, notification line or Approve warning anywhere in this wave). `prepare_place_request` returns `confirm_details`: the instruction "Ask the person to confirm these details are correct." and every personalization detail (`{ line, label, value }` for every name, title, phone, email and address field) exactly as it will be sent to Shopify, taken from the draft input it prepared. `confirm_place_request` must then carry `details_confirmed: true` and the same details in the same order; the payload stores the details and their SHA-256 (`detailsHash`), the payload is covered by the action's content hash, and the confirm compares the hash of the repeated details with it. A missing confirmation or a different detail is refused as `mismatch` without using the confirmation up. A request without personalization needs neither field. The shared helpers live in `src/mcp/details.ts` (Task 30) so Wave 3's employee requests reuse them.
-13. **Tool output** is JSON in a text block plus the same object as `structuredContent`; no markdown. Text people typed (notes, reasons, request fields, personalization, timeline entries) is wrapped as `{ "untrusted": "..." }`; every string loses control and hidden characters (every Unicode category C character except tab and line feed, which covers the tags block of "ASCII smuggling", bidi controls and isolates and zero-width characters; every default-ignorable code point, which covers variation selectors, the soft hyphen and the Hangul fillers; and the line and paragraph separators), HTML tags, markdown images and links (inline or by reference, and the reference definitions behind them), and every link that is not a `https://cdn.shopify.com/` file (schemes match even right after a letter or `_`, since GFM links a URL after `_`); confirm echoes compare text with hidden characters dropped the same way, so they match what the person saw. Requester emails and location phone numbers are never returned, and personalization or request fields labelled phone, mobile, cell, fax or email show as "[hidden here: see Ordering Desk]" in every read. The one exception is `prepare_place_request`'s `confirm_details` (Decision 12): it returns the details the caller just sent, verbatim, so the person can check them; those values were checked at prepare (no links, no control or hidden characters, no leading underscore in labels) and are what Shopify will print. Errors are `{ "error": { "code", "message", "retryable" } }` with `isError: true`.
+13. **Tool output** is JSON in a text block plus the same object as `structuredContent`; no markdown. Text people typed (notes, reasons, request fields, personalization, timeline entries) is wrapped as `{ "untrusted": "..." }`; every string loses control and hidden characters (every Unicode category C character except tab and line feed, which covers the tags block of "ASCII smuggling", bidi controls and isolates and zero-width characters; every default-ignorable code point, which covers variation selectors, the soft hyphen and the Hangul fillers; and the line and paragraph separators), HTML tags, markdown images and links (inline or by reference, and the reference definitions behind them), and every link that is not a `https://cdn.shopify.com/` file (schemes match even right after a letter or `_`, since GFM links a URL after `_`); confirm echoes compare text with hidden characters dropped the same way, so they match what the person saw. Requester emails and location phone numbers are never returned (nor a team member's email): every person's name a tool returns goes through `personLabel` (`src/mcp/output.ts`), which reads the stored name (`people.name`, never a display name with the email fallback) and is null for an empty value, one with an `@` or one that reads as a phone number, because Shopify's `displayName` falls back to the email, then the phone, for a customer with no first or last name; `find_people` matches that name only, so a typed email finds nobody; `get_order` shows a nameless team member as "a team member" and keeps the name in "New request #D12 from ..." only when it is a name. Personalization or request fields labelled phone, mobile, cell, fax or email show as "[hidden here: see Ordering Desk]" in every read. The one exception is `prepare_place_request`'s `confirm_details` (Decision 12): it returns the details the caller just sent, verbatim, so the person can check them; those values were checked at prepare (no links, no control or hidden characters, no leading underscore in labels) and are what Shopify will print. Errors are `{ "error": { "code", "message", "retryable" } }` with `isError: true`.
 14. **Audit:** one `audit_log` row per tool call (workspace, actor, grant, client, tool, target kind and id, outcome code), never arguments or payloads; kept 400 days by the cron. The workspace is null only for an every-workspace connection's `list_workspaces` call and for a call naming a workspace that does not exist. A new connection also emails the person ("Not you? Revoke it").
 15. **Placing a request (managers only):** for a person from the `people` table (Wave 1c) at any active company location of the workspace's company (Wave 1b `locations`); the company contact comes from `people.company_contact_id` or Shopify's `customer.companyContactProfiles`; the draft gets the purchasing entity (company, contact, location), the location's address, IMPACT's cart attributes ("For Employee Name", "Ship to Branch", "Reason for Request"), the tags `via AI` and a marker `od-ai-<16 hex>` (no other tag), personalization confirmed by the person as Decision 12 sets out; `draftOrderCalculate` must report exactly $0 first; the new draft is written through `upsertFetchedDraft` and announced like any new request.
 16. **Tools (23):** read tools `get_my_access`, `search_orders`, `get_order`, `list_statuses`, `find_people`, `get_person`, `list_locations`, `get_location` (staff and up), `find_products` (managers); write pairs `prepare_/confirm_status_change` and `prepare_/confirm_add_note` (staff and up), `prepare_/confirm_approve`, `prepare_/confirm_reject`, `prepare_/confirm_cancel`, `prepare_/confirm_edit_request`, `prepare_/confirm_place_request` (managers and platform admins). An every-workspace connection (Decision 4) lists all 23 as its scopes allow, each with a required `workspace` argument added, plus `list_workspaces` (no arguments: the workspaces with AI on, by id and name), which is not part of the 23-tool catalog and exists on that connection only.
@@ -1352,7 +1352,7 @@ git commit -m "refactor: the workspace role rule in a database-only module (the 
 
 ```ts
 import { describe, it, expect } from "vitest";
-import { errorResult, okResult, plainText, untrusted } from "./output";
+import { errorResult, okResult, personLabel, plainText, untrusted } from "./output";
 
 // Prompt injection defenses for text returned to a chat app (design section
 // 4): no links, images, HTML or invisible characters, length caps, and
@@ -1433,6 +1433,41 @@ describe("plainText", () => {
     expect(plainText("a\u{2028}b\u{2029}c")).toBe("abc");
     expect(plainText("one\rtwo")).toBe("one\ntwo");
     expect(plainText("Caf\u00e9 \u4e2d\u6587, Jos\u00e9")).toBe("Caf\u00e9 \u4e2d\u6587, Jos\u00e9");
+  });
+});
+
+// Decision 13: requester and team member emails are never returned.
+// Shopify's displayName falls back to the email, then the phone, for a
+// customer with no first or last name, and the desk's display names fall
+// back to the email, so a name that is one of those is no name.
+describe("personLabel", () => {
+  it("keeps a name, cleaned like any text", () => {
+    expect(personLabel("Jordan Vale")).toBe("Jordan Vale");
+    expect(personLabel("  Jos\u00e9 \u00c1vila\u200b ")).toBe("Jos\u00e9 \u00c1vila");
+    expect(personLabel("Unit 7 Crew")).toBe("Unit 7 Crew");
+    expect(personLabel("Jordan Vale 2nd shift 555")).toBe("Jordan Vale 2nd shift 555");
+  });
+
+  it("is null for an empty value, an email or a phone number", () => {
+    for (const value of [null, undefined, 42, "", "   ", "\u200b"]) {
+      expect(personLabel(value), String(value)).toBeNull();
+    }
+    for (const value of [
+      "noname@example.com",
+      "NoName@Example.com",
+      "noname\uff20example.com",
+      "noname\ufe6bexample.com",
+      "Jordan Vale <jordan@example.com>",
+      "mailto:jordan@example.com",
+      "+15555550142",
+      "+1 555-555-0142",
+      "(555) 555-0142",
+      "555.555.0142",
+      "Tel: +1 555 555 0142",
+      "\uff0b\uff11\uff15\uff15\uff15\uff15\uff15\uff15\uff10\uff11\uff14\uff12",
+    ]) {
+      expect(personLabel(value), value).toBeNull();
+    }
   });
 });
 
@@ -1547,6 +1582,31 @@ export function plainText(value: unknown, max = TEXT_MAX): string {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
   return text.length > max ? text.slice(0, max - 3).trimEnd() + "..." : text;
+}
+
+// A phone number written any way: at least this many digits, and digits
+// make up at least half of what is not a space.
+const PHONE_DIGITS_MIN = 7;
+
+// A person's name as every tool returns it (Decision 13: requester and team
+// member emails are never returned). Shopify's displayName falls back to
+// the customer's email, then phone, when the customer has no first or last
+// name, the sync stores that as the card's customer name and as people.name,
+// and the desk's display names fall back to the email. So a value with an @
+// (in any width) or one that reads as a phone number is no name: null, and
+// the tool says "a team member" where it needs words. Callers pass the
+// stored name (people.name), not a display name with the email fallback.
+export function personLabel(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const visible = withoutHidden(value).replace(/\s+/g, "");
+  const digits = visible.match(/\p{Nd}/gu)?.length ?? 0;
+  if (visible.includes("@") || (digits >= PHONE_DIGITS_MIN && digits * 2 >= visible.length)) {
+    return null;
+  }
+  const text = plainText(value, NAME_MAX);
+  return text.length > 0 ? text : null;
 }
 
 export type Untrusted = { untrusted: string };
@@ -5205,7 +5265,7 @@ import * as z from "zod";
 import { roleLabel } from "../../lib/roles";
 import { aiClientLabel } from "../../lib/via";
 import { SCOPE_WRITE } from "../constants";
-import { iso, NAME_MAX, plainText } from "../output";
+import { iso, NAME_MAX, personLabel, plainText } from "../output";
 import { mcpUsageToday } from "../usage";
 import { READ, defineTool, ok } from "./define";
 
@@ -5224,7 +5284,8 @@ export const getMyAccess = defineTool({
     const used = await mcpUsageToday(deps.db, p, deps.now());
     return ok({
       workspace: plainText(p.workspaceName, NAME_MAX),
-      you: plainText(p.personName, NAME_MAX),
+      // The principal goes by the email when the account has no name.
+      you: personLabel(p.personName),
       role: roleLabel(p.role),
       access: p.scopes.includes(SCOPE_WRITE) ? "look up and change (each change previewed, then confirmed)" : "look up only",
       app: aiClientLabel(p.client),
@@ -5630,7 +5691,7 @@ git commit -m "feat: MCP and OAuth routes in the custom worker after the host ga
 **Files:**
 - Create: `src/mcp/tools/cards.ts` (find a card, one card as a line, what the caller may do), `src/mcp/tools/orders.ts` (`search_orders`, `get_order`, `list_statuses`)
 - Modify: `src/mcp/tools/index.ts`, `src/mcp/test-helpers.ts` (`toolDeps`, `call`)
-- Test: `src/mcp/tools/orders.test.ts` (create)
+- Test: `src/mcp/tools/orders.test.ts`, `src/mcp/tools/access.test.ts` (create both; the second covers Task 21's `get_my_access`, which needs `toolDeps` and `call` from this task)
 
 **Step 1: Write the failing test.** Append to `src/mcp/test-helpers.ts`:
 
@@ -5670,7 +5731,7 @@ import { eq } from "drizzle-orm";
 import * as schema from "@/db/schema";
 import { draftSnapshotOf } from "@/server/desk/test-helpers";
 import { indexOrders } from "@/server/search/index-orders";
-import { NOW, WS, call, principalFor, setupMcp, toolDeps } from "../test-helpers";
+import { MANAGER, NOW, WS, call, principalFor, setupMcp, toolDeps } from "../test-helpers";
 import { getOrder, listStatuses, searchOrders } from "./orders";
 
 async function setup() {
@@ -5784,6 +5845,65 @@ describe("get_order", () => {
   });
 });
 
+// Decision 13: requester and team member emails are never returned.
+// Shopify's displayName falls back to the customer's email, then phone,
+// when the customer has no first or last name; the sync then writes it as
+// the card's customer name and into "New request #D12 from ...", and a team
+// member with no name goes by their email in the desk's timeline.
+describe("names that are an email or a phone number", () => {
+  async function nameless(customerName: string) {
+    const db = await setup();
+    const card = (await db.select().from(schema.orders).where(eq(schema.orders.id, "d1")))[0]!;
+    await db
+      .update(schema.orders)
+      .set({ shopify: { ...(card.shopify as Record<string, unknown>), customerName, email: "noname@example.com" } })
+      .where(eq(schema.orders.id, "d1"));
+    await indexOrders(db, WS, ["d1"]);
+    await db.insert(schema.user).values({ id: "u_nameless", email: "nameless.member@example.com", name: "", emailVerified: true });
+    await db.insert(schema.events).values([
+      { id: "e_new", workspaceId: WS, orderId: "d1", type: "order_new", text: `New request #D12 from ${customerName}`, createdAt: NOW - 3 * 86400000, source: "shopify" },
+      { id: "e_note", workspaceId: WS, orderId: "d1", type: "note", text: "Checked sizes", actorId: "u_nameless", createdAt: NOW - 86400000, source: "app" },
+      { id: "e_mine", workspaceId: WS, orderId: "d1", type: "note", text: "On it", actorId: MANAGER, createdAt: NOW - 1000, source: "app" },
+    ]);
+    return db;
+  }
+
+  it("never returns the requester's email as their name", async () => {
+    const db = await nameless("noname@example.com");
+    const search = await call(searchOrders, {}, toolDeps(db));
+    expect(search.data.cards.find((card: { number: string }) => card.number === "#D12")).toMatchObject({ requester: null });
+    const { data } = await call(getOrder, { order: "#D12" }, toolDeps(db));
+    expect(data.requester).toBeNull();
+    expect(data.timeline.map((entry: { who: string; text: unknown }) => [entry.who, entry.text])).toEqual([
+      ["you", { untrusted: "On it" }],
+      ["a team member", { untrusted: "Checked sizes" }],
+      ["Shopify", { untrusted: "New request #D12" }],
+    ]);
+    for (const leak of ["noname@example.com", "nameless.member@example.com"]) {
+      expect(JSON.stringify(search.data), leak).not.toContain(leak);
+      expect(JSON.stringify(data), leak).not.toContain(leak);
+    }
+  });
+
+  it("never returns a phone number as the requester's name", async () => {
+    const db = await nameless("+15555550142");
+    const search = await call(searchOrders, {}, toolDeps(db));
+    expect(search.data.cards.find((card: { number: string }) => card.number === "#D12")).toMatchObject({ requester: null });
+    const { data } = await call(getOrder, { order: "#D12" }, toolDeps(db));
+    expect(data.requester).toBeNull();
+    expect(data.timeline.at(-1)).toMatchObject({ who: "Shopify", text: { untrusted: "New request #D12" } });
+    expect(JSON.stringify(search.data)).not.toContain("5555550142");
+    expect(JSON.stringify(data)).not.toContain("5555550142");
+  });
+
+  it("keeps a real name in the arrival entry", async () => {
+    const db = await nameless("Jordan Vale");
+    const { data } = await call(getOrder, { order: "#D12" }, toolDeps(db));
+    expect(data.requester).toBe("Jordan Vale");
+    expect(data.timeline.at(-1)).toMatchObject({ who: "Shopify", text: { untrusted: "New request #D12 from Jordan Vale" } });
+  });
+});
+
 describe("list_statuses", () => {
   it("names each status, whether it is closed, what sets it, and where cards may move", async () => {
     const db = await setup();
@@ -5796,9 +5916,28 @@ describe("list_statuses", () => {
 });
 ```
 
+Create `src/mcp/tools/access.test.ts` (Task 21's `get_my_access`: a nameless account goes by its email in the principal, never in the answer):
+
+```ts
+import { describe, it, expect } from "vitest";
+import { call, principalFor, setupMcp, toolDeps } from "../test-helpers";
+import { getMyAccess } from "./access";
+
+describe("get_my_access", () => {
+  it("names the person, and never by their email when they have no name", async () => {
+    const db = await setupMcp();
+    expect((await call(getMyAccess, {}, toolDeps(db))).data.you).toBe("Casey Lin");
+    // The principal goes by the email when the account has no name.
+    const nameless = await call(getMyAccess, {}, toolDeps(db, principalFor("manager", { personName: "casey.lin@example.com" })));
+    expect(nameless.data.you).toBeNull();
+    expect(JSON.stringify(nameless.data)).not.toContain("casey.lin@example.com");
+  });
+});
+```
+
 **Step 2: Run it and see it fail.**
 
-Run: `npx vitest run src/mcp/tools/orders.test.ts`
+Run: `npx vitest run src/mcp/tools/orders.test.ts src/mcp/tools/access.test.ts`
 Expected: FAIL: `Failed to resolve import "./orders"`.
 
 **Step 3: Write the code.** Create `src/mcp/tools/cards.ts`:
@@ -5815,7 +5954,7 @@ import { orders, statuses } from "../../db/schema";
 import { normalizeOrderNumber } from "../../lib/desk-query";
 import { roleAtLeast } from "../../lib/roles";
 import type { OrderSummary } from "../../server/desk/read";
-import { iso, NAME_MAX, plainText } from "../output";
+import { iso, NAME_MAX, personLabel, plainText } from "../output";
 import type { Principal } from "../types";
 
 export type CardRow = typeof orders.$inferSelect;
@@ -5859,8 +5998,9 @@ export function cardLine(summary: OrderSummary, statusByKey: ReadonlyMap<string,
     closed: status?.closed ?? false,
     waiting_days: waitingDays(summary, now),
     placed: iso(summary.createdAt),
-    requester: plainText(summary.customerName, NAME_MAX) || null,
-    for_person: plainText(summary.requestFor, NAME_MAX) || null,
+    // Shopify's customer name can be the email or phone (personLabel).
+    requester: personLabel(summary.customerName),
+    for_person: personLabel(summary.requestFor),
     location: plainText(summary.locationName || summary.branch || summary.location, NAME_MAX) || null,
     items: summary.itemsPreview.map((title) => plainText(title, 120)),
     item_count: summary.itemCount,
@@ -5907,12 +6047,13 @@ import { AI_QUERY_MAX } from "../../lib/search-shortcut";
 import { checkStatusMove } from "../../lib/status-rules";
 import { viaLabel } from "../../lib/via";
 import { listEvents, orderSummaryOf } from "../../server/desk/read";
+import type { EventView } from "../../server/desk/shapes";
 import { aiSearch } from "../../server/search/ai-search";
 import { validateAiFilter, type SearchVocabulary } from "../../server/search/ai-filter";
 import { searchOrders as runSearch } from "../../server/search/query";
 import { loadVocabulary } from "../../server/search/vocabulary";
 import { SCOPE_WRITE } from "../constants";
-import { iso, NAME_MAX, plainText, untrusted } from "../output";
+import { iso, NAME_MAX, personLabel, plainText, untrusted, type Untrusted } from "../output";
 import { actionsFor, cardLine, findCard, HIDDEN_CONTACT, isContactLabel, statusRowsOf } from "./cards";
 import { READ, defineTool, fail, ok } from "./define";
 
@@ -6077,6 +6218,29 @@ function lineOf(raw: unknown, index: number): Record<string, unknown> {
   };
 }
 
+// The sync's arrival entry, "New request #D12 from <customer name>" (or
+// "New order #1001 from ..."): Shopify's customer name can be the email or
+// the phone (personLabel), so the name part stays only when it is a name.
+const ARRIVAL = /^(New (?:request|order) \S+) from ([\s\S]+)$/;
+
+// Who made a timeline entry. The desk's actorName falls back to the
+// member's email when they have no name, hence personLabel.
+function whoOf(event: EventView, userId: string): string {
+  if (event.actorId) {
+    return event.actorId === userId ? "you" : (personLabel(event.actorName) ?? "a team member");
+  }
+  return event.source === "shopify" ? "Shopify" : "Ordering Desk";
+}
+
+function timelineText(event: EventView): Untrusted | null {
+  const arrival = event.type === "order_new" ? event.text.match(ARRIVAL) : null;
+  if (arrival) {
+    const who = personLabel(arrival[2]);
+    return untrusted(who ? `${arrival[1]} from ${who}` : arrival[1], 1000);
+  }
+  return untrusted(event.text, 1000);
+}
+
 export const getOrder = defineTool({
   name: "get_order",
   title: "Get an order or request",
@@ -6136,16 +6300,10 @@ export const getOrder = defineTool({
         cancelled: Boolean((summary as { cancelled?: boolean }).cancelled),
         timeline: entries.map((event) => ({
           at: iso(event.createdAt),
-          who: event.actorId
-            ? event.actorId === p.userId
-              ? "you"
-              : plainText(event.actorName ?? "a team member", NAME_MAX)
-            : event.source === "shopify"
-              ? "Shopify"
-              : "Ordering Desk",
+          who: whoOf(event, p.userId),
           via: viaLabel(event),
           type: event.type,
-          text: untrusted(event.text, 1000),
+          text: timelineText(event),
         })),
         you_can: actionsFor(p, card, p.scopes.includes(SCOPE_WRITE)),
       },
@@ -6194,14 +6352,14 @@ Append the three tools to `src/mcp/tools/index.ts`: `import { getOrder, listStat
 
 **Step 4: Run it and see it pass.**
 
-Run: `npx vitest run src/mcp/tools/orders.test.ts src/mcp/worker-imports.test.ts`
+Run: `npx vitest run src/mcp/tools/orders.test.ts src/mcp/tools/access.test.ts src/mcp/worker-imports.test.ts`
 Expected: PASS (the import guard now walks the search and read modules too). Gates.
 
 **Step 5: Commit.**
 
 ```bash
-git add src/mcp/tools/cards.ts src/mcp/tools/orders.ts src/mcp/tools/orders.test.ts
-git commit -m "feat: MCP read tools search_orders (with AI search), get_order and list_statuses" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- src/mcp/tools/cards.ts src/mcp/tools/orders.ts src/mcp/tools/orders.test.ts src/mcp/tools/index.ts src/mcp/test-helpers.ts
+git add src/mcp/tools/cards.ts src/mcp/tools/orders.ts src/mcp/tools/orders.test.ts src/mcp/tools/access.test.ts
+git commit -m "feat: MCP read tools search_orders (with AI search), get_order and list_statuses" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- src/mcp/tools/cards.ts src/mcp/tools/orders.ts src/mcp/tools/orders.test.ts src/mcp/tools/access.test.ts src/mcp/tools/index.ts src/mcp/test-helpers.ts
 ```
 
 ---
@@ -6210,8 +6368,8 @@ git commit -m "feat: MCP read tools search_orders (with AI search), get_order an
 
 **Files:**
 - Create: `src/mcp/tools/lookup.ts` (`find_people`, `get_person`, `list_locations`, `get_location`)
-- Modify: `src/mcp/tools/index.ts`
-- Test: `src/mcp/tools/lookup.test.ts` (create)
+- Modify: `src/mcp/tools/index.ts`, `src/server/lookup/people.ts` and `src/server/lookup/locations.ts` (the stored name beside the display name, and the text a people search matches)
+- Test: `src/mcp/tools/lookup.test.ts` (create), `src/server/lookup/people.test.ts`, `src/server/lookup/locations.test.ts`, `src/components/lookup/lookup-views.test.ts` (its `PersonListRow` fixture gains `storedName`)
 
 **Step 1: Write the failing test.** Create `src/mcp/tools/lookup.test.ts`:
 
@@ -6276,6 +6434,30 @@ describe("people and location tools", () => {
     expect((await call(getPerson, { person_id: "p_nobody" }, toolDeps(db))).data.error).toMatchObject({ code: "not_found" });
   });
 
+  // Decision 13: requester emails are never returned. people.name is null
+  // when Shopify gave no name (the app's pages then show the email), and
+  // Shopify's displayName falls back to the email, then the phone, so a
+  // stored name can be one of those too.
+  it("never return a person's email or phone as their name, nor find them by it", async () => {
+    for (const stored of [null, "noname@example.com", "+15555550142"]) {
+      const db = await setup();
+      await db.update(schema.people).set({ name: stored, email: "noname@example.com" }).where(eq(schema.people.id, "p_jordan"));
+      const listed = await call(findPeople, {}, toolDeps(db));
+      expect(listed.data.people, String(stored)).toEqual([expect.objectContaining({ id: "p_jordan", name: null, home_location: "North Yard" })]);
+      for (const query of ["noname", "noname@example", "example.com", "5555550142"]) {
+        expect((await call(findPeople, { query }, toolDeps(db))).data, `${stored} ${query}`).toMatchObject({ total: 0, people: [] });
+      }
+      const person = await call(getPerson, { person_id: "p_jordan" }, toolDeps(db));
+      expect(person.data, String(stored)).toMatchObject({ id: "p_jordan", name: null });
+      const location = await call(getLocation, { location: "101" }, toolDeps(db));
+      expect(location.data.people, String(stored)).toEqual([{ id: "p_jordan", name: null, cards: 1 }]);
+      for (const data of [listed.data, person.data, location.data]) {
+        expect(JSON.stringify(data), String(stored)).not.toContain("noname@example.com");
+        expect(JSON.stringify(data), String(stored)).not.toContain("5555550142");
+      }
+    }
+  });
+
   it("list locations and show one by id or name, with its address and open cards", async () => {
     const db = await setup();
     const list = await call(listLocations, {}, toolDeps(db));
@@ -6297,12 +6479,26 @@ describe("people and location tools", () => {
 Run: `npx vitest run src/mcp/tools/lookup.test.ts`
 Expected: FAIL: `Failed to resolve import "./lookup"`.
 
-**Step 3: Write the code.** Create `src/mcp/tools/lookup.ts`:
+**Step 3: Write the code.** Before the tools, give Wave 1c's read models the stored name (their `name` is the display name, which falls back to the email for the app's own pages) and let a caller pick the text a people search matches. In `src/server/lookup/people.ts`: `PersonListRow` and `PersonPage.person` gain `storedName: string | null` (`people.name` as stored), set beside `name: displayName(...)`; add
+
+```ts
+// The text a people search matches, from the stored row (see listPeople).
+export type PersonMatchText = (person: { name: string | null; email: string | null }) => string;
+
+const NAME_AND_EMAIL: PersonMatchText = (person) => `${person.name ?? ""} ${person.email ?? ""}`;
+```
+
+and give `listPeople` the option `{ q?: string; matchOn?: PersonMatchText }`, filtering on `normalizeSearchText((opts.matchOn ?? NAME_AND_EMAIL)(row))` (the app's search is unchanged). In `src/server/lookup/locations.ts`, `LocationPage.people` entries gain `storedName: entry.name`. Tests: `people.test.ts` "keeps the stored name beside the display name, and matches the text a caller picks" and `locations.test.ts` "keeps each person's stored name beside the display name" (a person with a null name: `name` is the email, `storedName` null; matching on the name finds nobody by email).
+
+Create `src/mcp/tools/lookup.ts`:
 
 ```ts
 // Read tools for people and company locations (comprehensive desk design
 // section 4), on Wave 1c's people and location read models. Emails and
-// phone numbers are never returned. Relative imports only.
+// phone numbers are never returned: a person's name is the stored
+// people.name through personLabel (never the display name, which falls back
+// to the email), and find_people matches that name only, so a typed email
+// or phone finds nobody. Relative imports only.
 
 import { and, eq, or, sql } from "drizzle-orm";
 import * as z from "zod";
@@ -6310,7 +6506,7 @@ import { locations } from "../../db/schema";
 import { locationAddressLines } from "../../lib/address";
 import { getLocationPage, listLocationSummaries } from "../../server/lookup/locations";
 import { getPersonPage, listPeople } from "../../server/lookup/people";
-import { iso, NAME_MAX, plainText } from "../output";
+import { iso, NAME_MAX, personLabel, plainText } from "../output";
 import { cardLine } from "./cards";
 import { READ, defineTool, fail, ok } from "./define";
 
@@ -6327,12 +6523,12 @@ export const findPeople = defineTool({
   annotations: READ,
   input: z.object({ query: z.string().max(60).optional().describe("Part of a name; empty lists the most recent people") }).strict(),
   async run(args, deps) {
-    const found = await listPeople(deps.db, deps.principal.workspaceId, { q: args.query ?? "" });
+    const found = await listPeople(deps.db, deps.principal.workspaceId, { q: args.query ?? "", matchOn: (person) => personLabel(person.name) ?? "" });
     return ok({
       total: found.total,
       people: found.people.slice(0, LIST_MAX).map((person) => ({
         id: person.id,
-        name: plainText(person.name, NAME_MAX),
+        name: personLabel(person.storedName),
         home_location: plainText(person.locationName, NAME_MAX) || null,
         open_cards: person.openCount,
         cards: person.cardCount,
@@ -6361,7 +6557,7 @@ export const getPerson = defineTool({
     return ok(
       {
         id: page.person.id,
-        name: plainText(page.person.name, NAME_MAX),
+        name: personLabel(page.person.storedName),
         home_location: page.person.homeLocation ? { id: page.person.homeLocation.id, name: plainText(page.person.homeLocation.name, NAME_MAX) } : null,
         first_seen: iso(page.person.firstSeenAt),
         last_seen: iso(page.person.lastSeenAt),
@@ -6424,7 +6620,7 @@ export const getLocation = defineTool({
         open_cards: page.openCards.slice(0, CARDS_MAX).map((summary) => cardLine(summary, statusByKey as never, now)),
         recent_orders: page.orders.slice(0, CARDS_MAX).map((summary) => cardLine(summary, statusByKey as never, now)),
         top_items: page.topItems.slice(0, 20).map((item) => ({ title: plainText(item.title, 160), size: plainText(item.variant, 80) || null, quantity: item.quantity })),
-        people: page.people.slice(0, 20).map((person) => ({ id: person.id, name: plainText(person.name, NAME_MAX), cards: person.cards })),
+        people: page.people.slice(0, 20).map((person) => ({ id: person.id, name: personLabel(person.storedName), cards: person.cards })),
       },
       { kind: "location", id: page.location.id },
     );
@@ -6438,14 +6634,14 @@ Append `findPeople, getPerson, listLocations, getLocation` to `ALL_TOOLS` (impor
 
 **Step 4: Run it and see it pass.**
 
-Run: `npx vitest run src/mcp/tools/lookup.test.ts src/mcp/worker-imports.test.ts`
+Run: `npx vitest run src/mcp/tools/lookup.test.ts src/server/lookup src/components/lookup src/mcp/worker-imports.test.ts`
 Expected: PASS. Gates.
 
 **Step 5: Commit.**
 
 ```bash
 git add src/mcp/tools/lookup.ts src/mcp/tools/lookup.test.ts
-git commit -m "feat: MCP read tools for people and company locations" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- src/mcp/tools/lookup.ts src/mcp/tools/lookup.test.ts src/mcp/tools/index.ts
+git commit -m "feat: MCP read tools for people and company locations" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- src/mcp/tools/lookup.ts src/mcp/tools/lookup.test.ts src/mcp/tools/index.ts src/server/lookup/people.ts src/server/lookup/locations.ts src/server/lookup/people.test.ts src/server/lookup/locations.test.ts src/components/lookup/lookup-views.test.ts
 ```
 
 ---

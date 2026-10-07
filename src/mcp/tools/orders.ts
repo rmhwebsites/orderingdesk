@@ -13,12 +13,13 @@ import { AI_QUERY_MAX } from "../../lib/search-shortcut";
 import { checkStatusMove } from "../../lib/status-rules";
 import { viaLabel } from "../../lib/via";
 import { listEvents, orderSummaryOf } from "../../server/desk/read";
+import type { EventView } from "../../server/desk/shapes";
 import { aiSearch } from "../../server/search/ai-search";
 import { validateAiFilter, type SearchVocabulary } from "../../server/search/ai-filter";
 import { searchOrders as runSearch } from "../../server/search/query";
 import { loadVocabulary } from "../../server/search/vocabulary";
 import { SCOPE_WRITE } from "../constants";
-import { iso, NAME_MAX, plainText, untrusted } from "../output";
+import { iso, NAME_MAX, personLabel, plainText, untrusted, type Untrusted } from "../output";
 import { actionsFor, cardLine, findCard, HIDDEN_CONTACT, isContactLabel, statusRowsOf } from "./cards";
 import { READ, defineTool, fail, ok } from "./define";
 
@@ -183,6 +184,29 @@ function lineOf(raw: unknown, index: number): Record<string, unknown> {
   };
 }
 
+// The sync's arrival entry, "New request #D12 from <customer name>" (or
+// "New order #1001 from ..."): Shopify's customer name can be the email or
+// the phone (personLabel), so the name part stays only when it is a name.
+const ARRIVAL = /^(New (?:request|order) \S+) from ([\s\S]+)$/;
+
+// Who made a timeline entry. The desk's actorName falls back to the
+// member's email when they have no name, hence personLabel.
+function whoOf(event: EventView, userId: string): string {
+  if (event.actorId) {
+    return event.actorId === userId ? "you" : (personLabel(event.actorName) ?? "a team member");
+  }
+  return event.source === "shopify" ? "Shopify" : "Ordering Desk";
+}
+
+function timelineText(event: EventView): Untrusted | null {
+  const arrival = event.type === "order_new" ? event.text.match(ARRIVAL) : null;
+  if (arrival) {
+    const who = personLabel(arrival[2]);
+    return untrusted(who ? `${arrival[1]} from ${who}` : arrival[1], 1000);
+  }
+  return untrusted(event.text, 1000);
+}
+
 export const getOrder = defineTool({
   name: "get_order",
   title: "Get an order or request",
@@ -243,16 +267,10 @@ export const getOrder = defineTool({
         cancelled: summary.cancelled,
         timeline: entries.map((event) => ({
           at: iso(event.createdAt),
-          who: event.actorId
-            ? event.actorId === p.userId
-              ? "you"
-              : plainText(event.actorName ?? "a team member", NAME_MAX)
-            : event.source === "shopify"
-              ? "Shopify"
-              : "Ordering Desk",
+          who: whoOf(event, p.userId),
           via: viaLabel(event),
           type: event.type,
-          text: untrusted(event.text, 1000),
+          text: timelineText(event),
         })),
         you_can: actionsFor(p, card, p.scopes.includes(SCOPE_WRITE)),
       },

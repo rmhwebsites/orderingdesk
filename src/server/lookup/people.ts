@@ -47,7 +47,11 @@ export async function workspaceTimeZone(db: Db, workspaceId: string): Promise<st
 
 export type PersonListRow = {
   id: string;
+  // The display name: the stored name, else the email (the app's pages).
   name: string;
+  // people.name as stored, null when Shopify gave none. The MCP tools show
+  // only this one (src/mcp/tools/lookup.ts), never the email.
+  storedName: string | null;
   email: string | null;
   locationName: string | null;
   openCount: number;
@@ -55,11 +59,23 @@ export type PersonListRow = {
   lastSeenAt: number;
 };
 
+// The text a people search matches, from the stored row (see listPeople).
+export type PersonMatchText = (person: { name: string | null; email: string | null }) => string;
+
+const NAME_AND_EMAIL: PersonMatchText = (person) => `${person.name ?? ""} ${person.email ?? ""}`;
+
 // Case is folded in JS, on the stored name and email as on the typed words:
 // SQLite's lower() and LIKE fold ASCII letters only, so a stored "Óscar"
 // never matched a typed "óscar". A workspace has few people, so a search
-// reads them all, newest first, and filters here.
-export async function listPeople(db: Db, workspaceId: string, opts: { q?: string } = {}): Promise<{ people: PersonListRow[]; total: number }> {
+// reads them all, newest first, and filters here. matchOn picks the text the
+// words must be in: the name and the email by default; the MCP tools match
+// on the name only, so a typed email finds nobody there.
+export async function listPeople(
+  db: Db,
+  workspaceId: string,
+  opts: { q?: string; matchOn?: PersonMatchText } = {},
+): Promise<{ people: PersonListRow[]; total: number }> {
+  const matchOn = opts.matchOn ?? NAME_AND_EMAIL;
   const words = normalizeSearchText(opts.q ?? "").split(" ").filter((word) => word.length > 0).slice(0, 4);
   const [rows, counts] = await Promise.all([
     db
@@ -81,7 +97,7 @@ export async function listPeople(db: Db, workspaceId: string, opts: { q?: string
       .groupBy(orderSearch.requesterId),
   ]);
   const matches = rows.filter((row) => {
-    const text = normalizeSearchText(`${row.name ?? ""} ${row.email ?? ""}`);
+    const text = normalizeSearchText(matchOn(row));
     return words.every((word) => text.includes(word));
   });
   const byPerson = new Map(counts.map((row) => [row.requesterId, row]));
@@ -90,6 +106,7 @@ export async function listPeople(db: Db, workspaceId: string, opts: { q?: string
     people: matches.slice(0, PEOPLE_LIST_MAX).map((row) => ({
       id: row.id,
       name: displayName(row.name, row.email),
+      storedName: row.name,
       email: row.email,
       locationName: row.locationName ?? null,
       openCount: Number(byPerson.get(row.id)?.open ?? 0),
@@ -102,7 +119,9 @@ export async function listPeople(db: Db, workspaceId: string, opts: { q?: string
 export type PersonPage = {
   person: {
     id: string;
+    // The display name and the stored one, as on PersonListRow.
     name: string;
+    storedName: string | null;
     email: string | null;
     // Keyed by the Shopify location id, like the location pages.
     homeLocation: { id: string; name: string } | null;
@@ -155,6 +174,7 @@ export async function getPersonPage(db: Db, workspaceId: string, personId: strin
     person: {
       id: row.person.id,
       name: displayName(row.person.name, row.person.email),
+      storedName: row.person.name,
       email: row.person.email,
       homeLocation: row.person.locationId && row.locationName ? { id: row.person.locationId, name: row.locationName } : null,
       firstSeenAt: row.person.firstSeenAt,

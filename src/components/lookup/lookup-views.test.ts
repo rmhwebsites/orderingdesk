@@ -102,7 +102,7 @@ describe("PeopleListView", () => {
   it("lists people with links and a search form that keeps the words", () => {
     const html = renderToStaticMarkup(
       createElement(PeopleListView, {
-        data: { people: [{ id: "p1", name: "Riley Oakes", email: "riley@example.com", locationName: "North Yard", openCount: 1, cardCount: 4, lastSeenAt: 2 }], total: 1 },
+        data: { people: [{ id: "p1", name: "Riley Oakes", storedName: "Riley Oakes", email: "riley@example.com", locationName: "North Yard", openCount: 1, cardCount: 4, lastSeenAt: 2 }], total: 1 },
         query: "riley",
         basePath: "/w/ws_impact",
       }),

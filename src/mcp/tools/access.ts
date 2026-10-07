@@ -5,7 +5,7 @@ import * as z from "zod";
 import { roleLabel } from "../../lib/roles";
 import { aiClientLabel } from "../../lib/via";
 import { SCOPE_WRITE } from "../constants";
-import { iso, NAME_MAX, plainText } from "../output";
+import { iso, NAME_MAX, personLabel, plainText } from "../output";
 import { mcpUsageToday } from "../usage";
 import { READ, defineTool, ok } from "./define";
 
@@ -24,7 +24,8 @@ export const getMyAccess = defineTool({
     const used = await mcpUsageToday(deps.db, p, deps.now());
     return ok({
       workspace: plainText(p.workspaceName, NAME_MAX),
-      you: plainText(p.personName, NAME_MAX),
+      // The principal goes by the email when the account has no name.
+      you: personLabel(p.personName),
       role: roleLabel(p.role),
       access: p.scopes.includes(SCOPE_WRITE) ? "look up and change (each change previewed, then confirmed)" : "look up only",
       app: aiClientLabel(p.client),

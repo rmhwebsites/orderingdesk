@@ -1,7 +1,10 @@
 // Read tools for people and company locations (comprehensive desk design
 // section 4), on Wave 1c's people and location read models. Emails and
 // phone numbers are never returned (locationAddressLines leaves the phone
-// out). Relative imports only.
+// out): a person's name is the stored people.name through personLabel
+// (never the display name, which falls back to the email), and find_people
+// matches that name only, so a typed email or phone finds nobody.
+// Relative imports only.
 
 import { and, eq, or, sql } from "drizzle-orm";
 import * as z from "zod";
@@ -9,7 +12,7 @@ import { locations } from "../../db/schema";
 import { locationAddressLines } from "../../lib/address";
 import { getLocationPage, listLocationSummaries } from "../../server/lookup/locations";
 import { getPersonPage, listPeople } from "../../server/lookup/people";
-import { iso, NAME_MAX, plainText } from "../output";
+import { iso, NAME_MAX, personLabel, plainText } from "../output";
 import { cardLine } from "./cards";
 import { READ, defineTool, fail, ok } from "./define";
 
@@ -26,12 +29,12 @@ export const findPeople = defineTool({
   annotations: READ,
   input: z.object({ query: z.string().max(60).optional().describe("Part of a name; empty lists the most recent people") }).strict(),
   async run(args, deps) {
-    const found = await listPeople(deps.db, deps.principal.workspaceId, { q: args.query ?? "" });
+    const found = await listPeople(deps.db, deps.principal.workspaceId, { q: args.query ?? "", matchOn: (person) => personLabel(person.name) ?? "" });
     return ok({
       total: found.total,
       people: found.people.slice(0, LIST_MAX).map((person) => ({
         id: person.id,
-        name: plainText(person.name, NAME_MAX),
+        name: personLabel(person.storedName),
         home_location: plainText(person.locationName, NAME_MAX) || null,
         open_cards: person.openCount,
         cards: person.cardCount,
@@ -60,7 +63,7 @@ export const getPerson = defineTool({
     return ok(
       {
         id: page.person.id,
-        name: plainText(page.person.name, NAME_MAX),
+        name: personLabel(page.person.storedName),
         home_location: page.person.homeLocation ? { id: page.person.homeLocation.id, name: plainText(page.person.homeLocation.name, NAME_MAX) } : null,
         first_seen: iso(page.person.firstSeenAt),
         last_seen: iso(page.person.lastSeenAt),
@@ -123,7 +126,7 @@ export const getLocation = defineTool({
         open_cards: page.openCards.slice(0, CARDS_MAX).map((summary) => cardLine(summary, statusByKey, now)),
         recent_orders: page.orders.slice(0, CARDS_MAX).map((summary) => cardLine(summary, statusByKey, now)),
         top_items: page.topItems.slice(0, 20).map((item) => ({ title: plainText(item.title, 160), size: plainText(item.variant, 80) || null, quantity: item.quantity })),
-        people: page.people.slice(0, 20).map((person) => ({ id: person.id, name: plainText(person.name, NAME_MAX), cards: person.cards })),
+        people: page.people.slice(0, 20).map((person) => ({ id: person.id, name: personLabel(person.storedName), cards: person.cards })),
       },
       { kind: "location", id: page.location.id },
     );

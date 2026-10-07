@@ -70,7 +70,9 @@ export type LocationPage = {
   orders: OrderSummary[];
   ordersCount: number;
   topItems: ItemTotal[];
-  people: { id: string; name: string; cards: number }[];
+  // name is the display name; storedName is people.name as stored (see
+  // PersonListRow in ./people).
+  people: { id: string; name: string; storedName: string | null; cards: number }[];
   statuses: StatusView[];
   timeZone: string;
 };
@@ -115,7 +117,7 @@ export async function getLocationPage(db: Db, workspaceId: string, shopifyLocati
     orders: summaries(everyOrder),
     ordersCount: everyOrder.total,
     topItems: itemTotals(recent.map((entry) => entry.shopify), LOCATION_TOP_ITEMS),
-    people: who.map((entry) => ({ id: entry.id, name: displayName(entry.name, entry.email), cards: Number(entry.cards) })),
+    people: who.map((entry) => ({ id: entry.id, name: displayName(entry.name, entry.email), storedName: entry.name, cards: Number(entry.cards) })),
     statuses: statusRows.map(statusView),
     timeZone,
   };

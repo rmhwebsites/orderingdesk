@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { errorResult, okResult, plainText, untrusted } from "./output";
+import { errorResult, okResult, personLabel, plainText, untrusted } from "./output";
 
 // Prompt injection defenses for text returned to a chat app (design section
 // 4): no links, images, HTML or invisible characters, length caps, and
@@ -80,6 +80,41 @@ describe("plainText", () => {
     expect(plainText("a\u{2028}b\u{2029}c")).toBe("abc");
     expect(plainText("one\rtwo")).toBe("one\ntwo");
     expect(plainText("Caf\u00e9 \u4e2d\u6587, Jos\u00e9")).toBe("Caf\u00e9 \u4e2d\u6587, Jos\u00e9");
+  });
+});
+
+// Decision 13: requester and team member emails are never returned.
+// Shopify's displayName falls back to the email, then the phone, for a
+// customer with no first or last name, and the desk's display names fall
+// back to the email, so a name that is one of those is no name.
+describe("personLabel", () => {
+  it("keeps a name, cleaned like any text", () => {
+    expect(personLabel("Jordan Vale")).toBe("Jordan Vale");
+    expect(personLabel("  Jos\u00e9 \u00c1vila\u200b ")).toBe("Jos\u00e9 \u00c1vila");
+    expect(personLabel("Unit 7 Crew")).toBe("Unit 7 Crew");
+    expect(personLabel("Jordan Vale 2nd shift 555")).toBe("Jordan Vale 2nd shift 555");
+  });
+
+  it("is null for an empty value, an email or a phone number", () => {
+    for (const value of [null, undefined, 42, "", "   ", "\u200b"]) {
+      expect(personLabel(value), String(value)).toBeNull();
+    }
+    for (const value of [
+      "noname@example.com",
+      "NoName@Example.com",
+      "noname\uff20example.com",
+      "noname\ufe6bexample.com",
+      "Jordan Vale <jordan@example.com>",
+      "mailto:jordan@example.com",
+      "+15555550142",
+      "+1 555-555-0142",
+      "(555) 555-0142",
+      "555.555.0142",
+      "Tel: +1 555 555 0142",
+      "\uff0b\uff11\uff15\uff15\uff15\uff15\uff15\uff15\uff10\uff11\uff14\uff12",
+    ]) {
+      expect(personLabel(value), value).toBeNull();
+    }
   });
 });
 

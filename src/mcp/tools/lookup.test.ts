@@ -58,6 +58,30 @@ describe("people and location tools", () => {
     expect((await call(getPerson, { person_id: "p_nobody" }, toolDeps(db))).data.error).toMatchObject({ code: "not_found" });
   });
 
+  // Decision 13: requester emails are never returned. people.name is null
+  // when Shopify gave no name (the app's pages then show the email), and
+  // Shopify's displayName falls back to the email, then the phone, so a
+  // stored name can be one of those too.
+  it("never return a person's email or phone as their name, nor find them by it", async () => {
+    for (const stored of [null, "noname@example.com", "+15555550142"]) {
+      const db = await setup();
+      await db.update(schema.people).set({ name: stored, email: "noname@example.com" }).where(eq(schema.people.id, "p_jordan"));
+      const listed = await call(findPeople, {}, toolDeps(db));
+      expect(listed.data.people, String(stored)).toEqual([expect.objectContaining({ id: "p_jordan", name: null, home_location: "North Yard" })]);
+      for (const query of ["noname", "noname@example", "example.com", "5555550142"]) {
+        expect((await call(findPeople, { query }, toolDeps(db))).data, `${stored} ${query}`).toMatchObject({ total: 0, people: [] });
+      }
+      const person = await call(getPerson, { person_id: "p_jordan" }, toolDeps(db));
+      expect(person.data, String(stored)).toMatchObject({ id: "p_jordan", name: null });
+      const location = await call(getLocation, { location: "101" }, toolDeps(db));
+      expect(location.data.people, String(stored)).toEqual([{ id: "p_jordan", name: null, cards: 1 }]);
+      for (const data of [listed.data, person.data, location.data]) {
+        expect(JSON.stringify(data), String(stored)).not.toContain("noname@example.com");
+        expect(JSON.stringify(data), String(stored)).not.toContain("5555550142");
+      }
+    }
+  });
+
   it("list locations and show one by id or name, with its address and open cards", async () => {
     const db = await setup();
     const list = await call(listLocations, {}, toolDeps(db));

@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import * as schema from "@/db/schema";
 import { draftSnapshotOf } from "@/server/desk/test-helpers";
 import { indexOrders } from "@/server/search/index-orders";
-import { NOW, WS, call, principalFor, setupMcp, toolDeps } from "../test-helpers";
+import { MANAGER, NOW, WS, call, principalFor, setupMcp, toolDeps } from "../test-helpers";
 import { getOrder, listStatuses, searchOrders } from "./orders";
 
 async function setup() {
@@ -114,6 +114,65 @@ describe("get_order", () => {
     const db = await setup();
     const { data } = await call(getOrder, { order: "#9999" }, toolDeps(db));
     expect(data.error).toMatchObject({ code: "not_found" });
+  });
+});
+
+// Decision 13: requester and team member emails are never returned.
+// Shopify's displayName falls back to the customer's email, then phone,
+// when the customer has no first or last name; the sync then writes it as
+// the card's customer name and into "New request #D12 from ...", and a team
+// member with no name goes by their email in the desk's timeline.
+describe("names that are an email or a phone number", () => {
+  async function nameless(customerName: string) {
+    const db = await setup();
+    const card = (await db.select().from(schema.orders).where(eq(schema.orders.id, "d1")))[0]!;
+    await db
+      .update(schema.orders)
+      .set({ shopify: { ...(card.shopify as Record<string, unknown>), customerName, email: "noname@example.com" } })
+      .where(eq(schema.orders.id, "d1"));
+    await indexOrders(db, WS, ["d1"]);
+    await db.insert(schema.user).values({ id: "u_nameless", email: "nameless.member@example.com", name: "", emailVerified: true });
+    await db.insert(schema.events).values([
+      { id: "e_new", workspaceId: WS, orderId: "d1", type: "order_new", text: `New request #D12 from ${customerName}`, createdAt: NOW - 3 * 86400000, source: "shopify" },
+      { id: "e_note", workspaceId: WS, orderId: "d1", type: "note", text: "Checked sizes", actorId: "u_nameless", createdAt: NOW - 86400000, source: "app" },
+      { id: "e_mine", workspaceId: WS, orderId: "d1", type: "note", text: "On it", actorId: MANAGER, createdAt: NOW - 1000, source: "app" },
+    ]);
+    return db;
+  }
+
+  it("never returns the requester's email as their name", async () => {
+    const db = await nameless("noname@example.com");
+    const search = await call(searchOrders, {}, toolDeps(db));
+    expect(search.data.cards.find((card: { number: string }) => card.number === "#D12")).toMatchObject({ requester: null });
+    const { data } = await call(getOrder, { order: "#D12" }, toolDeps(db));
+    expect(data.requester).toBeNull();
+    expect(data.timeline.map((entry: { who: string; text: unknown }) => [entry.who, entry.text])).toEqual([
+      ["you", { untrusted: "On it" }],
+      ["a team member", { untrusted: "Checked sizes" }],
+      ["Shopify", { untrusted: "New request #D12" }],
+    ]);
+    for (const leak of ["noname@example.com", "nameless.member@example.com"]) {
+      expect(JSON.stringify(search.data), leak).not.toContain(leak);
+      expect(JSON.stringify(data), leak).not.toContain(leak);
+    }
+  });
+
+  it("never returns a phone number as the requester's name", async () => {
+    const db = await nameless("+15555550142");
+    const search = await call(searchOrders, {}, toolDeps(db));
+    expect(search.data.cards.find((card: { number: string }) => card.number === "#D12")).toMatchObject({ requester: null });
+    const { data } = await call(getOrder, { order: "#D12" }, toolDeps(db));
+    expect(data.requester).toBeNull();
+    expect(data.timeline.at(-1)).toMatchObject({ who: "Shopify", text: { untrusted: "New request #D12" } });
+    expect(JSON.stringify(search.data)).not.toContain("5555550142");
+    expect(JSON.stringify(data)).not.toContain("5555550142");
+  });
+
+  it("keeps a real name in the arrival entry", async () => {
+    const db = await nameless("Jordan Vale");
+    const { data } = await call(getOrder, { order: "#D12" }, toolDeps(db));
+    expect(data.requester).toBe("Jordan Vale");
+    expect(data.timeline.at(-1)).toMatchObject({ who: "Shopify", text: { untrusted: "New request #D12 from Jordan Vale" } });
   });
 });
 

@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import * as schema from "@/db/schema";
 import { indexOrders } from "@/server/search/index-orders";
 import { getLocationPage, listLocationSummaries } from "./locations";
 import {
@@ -61,6 +62,15 @@ describe("getLocationPage", () => {
       { title: "Business cards", variant: "", quantity: 1 },
     ]);
     expect(page?.people.map((person) => [person.name, person.cards])).toEqual([["Riley Oakes", 2]]);
+  });
+
+  // The MCP tools (src/mcp/tools/lookup.ts) show the stored name only: the
+  // display name falls back to the email.
+  it("keeps each person's stored name beside the display name", async () => {
+    const db = await setup();
+    await db.update(schema.people).set({ name: null, email: "riley@example.com" });
+    const page = await getLocationPage(db, WS, "loc_north", NOW);
+    expect(page?.people).toEqual([{ id: expect.any(String), name: "riley@example.com", storedName: null, cards: 2 }]);
   });
 
   it("leaves out the items of an order Shopify cancelled, inside the Cancelled status or not", async () => {

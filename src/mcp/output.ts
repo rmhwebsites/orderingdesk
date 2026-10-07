@@ -74,6 +74,31 @@ export function plainText(value: unknown, max = TEXT_MAX): string {
   return text.length > max ? text.slice(0, max - 3).trimEnd() + "..." : text;
 }
 
+// A phone number written any way: at least this many digits, and digits
+// make up at least half of what is not a space.
+const PHONE_DIGITS_MIN = 7;
+
+// A person's name as every tool returns it (Decision 13: requester and team
+// member emails are never returned). Shopify's displayName falls back to
+// the customer's email, then phone, when the customer has no first or last
+// name, the sync stores that as the card's customer name and as people.name,
+// and the desk's display names fall back to the email. So a value with an @
+// (in any width) or one that reads as a phone number is no name: null, and
+// the tool says "a team member" where it needs words. Callers pass the
+// stored name (people.name), not a display name with the email fallback.
+export function personLabel(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const visible = withoutHidden(value).replace(/\s+/g, "");
+  const digits = visible.match(/\p{Nd}/gu)?.length ?? 0;
+  if (visible.includes("@") || (digits >= PHONE_DIGITS_MIN && digits * 2 >= visible.length)) {
+    return null;
+  }
+  const text = plainText(value, NAME_MAX);
+  return text.length > 0 ? text : null;
+}
+
 export type Untrusted = { untrusted: string };
 
 export function untrusted(value: unknown, max = LONG_TEXT_MAX): Untrusted | null {

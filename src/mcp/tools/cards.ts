@@ -9,7 +9,7 @@ import { orders, statuses } from "../../db/schema";
 import { normalizeOrderNumber } from "../../lib/desk-query";
 import { roleAtLeast } from "../../lib/roles";
 import type { OrderSummary } from "../../server/desk/read";
-import { iso, NAME_MAX, plainText } from "../output";
+import { iso, NAME_MAX, personLabel, plainText } from "../output";
 import type { Principal } from "../types";
 
 export type CardRow = typeof orders.$inferSelect;
@@ -59,8 +59,9 @@ export function cardLine(
     closed: status?.closed ?? false,
     waiting_days: waitingDays(summary, now),
     placed: iso(summary.createdAt),
-    requester: plainText(summary.customerName, NAME_MAX) || null,
-    for_person: plainText(summary.requestFor, NAME_MAX) || null,
+    // Shopify's customer name can be the email or phone (personLabel).
+    requester: personLabel(summary.customerName),
+    for_person: personLabel(summary.requestFor),
     location: plainText(summary.locationName || summary.branch || summary.location, NAME_MAX) || null,
     items: summary.itemTitles.slice(0, ITEMS_SHOWN).map((title) => plainText(title, 120)),
     item_count: summary.itemCount,

@@ -85,6 +85,24 @@ describe("listPeople", () => {
     expect((await listPeople(db, WS, { q: "óscar riley" })).people).toEqual([]);
   });
 
+  // The MCP tools (src/mcp/tools/lookup.ts) show and match the stored name
+  // only: the display name falls back to the email.
+  it("keeps the stored name beside the display name, and matches the text a caller picks", async () => {
+    const db = await setup();
+    await db.update(schema.people).set({ name: null }).where(eq(schema.people.shopifyCustomerId, "78"));
+    const all = await listPeople(db, WS);
+    expect(all.people.map((person) => [person.name, person.storedName])).toEqual([
+      ["casey@example.com", null],
+      ["Riley Oakes", "Riley Oakes"],
+    ]);
+    const byName = (person: { name: string | null }) => person.name ?? "";
+    expect((await listPeople(db, WS, { q: "casey", matchOn: byName })).total).toBe(0);
+    expect((await listPeople(db, WS, { q: "riley@", matchOn: byName })).total).toBe(0);
+    expect((await listPeople(db, WS, { q: "riley", matchOn: byName })).people.map((person) => person.storedName)).toEqual(["Riley Oakes"]);
+    const page = await getPersonPage(db, WS, await personId(db, WS, "78"), NOW);
+    expect(page?.person).toMatchObject({ name: "casey@example.com", storedName: null });
+  });
+
   it("lists at most PEOPLE_LIST_MAX people but counts every match", async () => {
     const db = await setup();
     const extra = Array.from({ length: PEOPLE_LIST_MAX + 5 }, (_, i) => ({
