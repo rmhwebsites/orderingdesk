@@ -5,6 +5,7 @@ import { broadcastImported, broadcastMerges, broadcastSync, kickUsers } from "..
 import { notifyNewOrders } from "../notify";
 import { safeIndexOrders } from "../search/index-orders";
 import { runSearchTick } from "../search/search-tick";
+import { pruneAiUsage } from "../search/usage";
 import { shareShopifyMoves } from "../shopify/fanout";
 import { syncRoster } from "../shopify/roster-sync";
 import { runBackfillTick } from "./backfill";
@@ -133,6 +134,7 @@ export async function runAllSyncs(db: Db, env: CloudflareEnv, opts?: SyncOptions
   try {
     const now = opts?.now?.() ?? Date.now();
     await db.delete(webhookDeliveries).where(lt(webhookDeliveries.receivedAt, now - WEBHOOK_DELIVERY_RETENTION_MS));
+    await pruneAiUsage(db, now);
   } catch (e) {
     console.log("[sync] " + JSON.stringify({ prune: e instanceof Error ? e.name : "failed" }));
   }

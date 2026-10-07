@@ -255,3 +255,13 @@ describe("runAllSyncs and the search index", () => {
     expect(vi.mocked(runSearchTick).mock.calls.map((call) => call[2]).sort()).toEqual(["ws_a", "ws_b"]);
   });
 });
+
+describe("runAllSyncs housekeeping", () => {
+  it("prunes old AI usage counters", async () => {
+    const db = await setup();
+    vi.mocked(runSync).mockResolvedValue(result());
+    await db.insert(schema.aiUsage).values({ workspaceId: "ws_a", principalId: "u1", day: "2020-01-01", kind: "search", count: 1 });
+    await runAllSyncs(db, env);
+    expect(await db.select().from(schema.aiUsage)).toEqual([]);
+  });
+});
