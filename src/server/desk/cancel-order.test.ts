@@ -262,6 +262,22 @@ describe("cancelOrder", () => {
     expect(entries.find((event) => event.type === "note")?.meta).toEqual({ cancelReason: true });
   });
 
+  it("records source ai and the app on the reason note when an AI app's cancel finds the order already cancelled in Shopify", async () => {
+    // An MCP confirm retried after a lost answer, or one confirmed after
+    // someone cancelled in Shopify between prepare and confirm, lands here.
+    const db = await setup();
+    const shop = fakeShop({ cancelledAt: "2026-10-06T14:00:00Z" });
+    const result = await cancelOrder(db, { ...ctx(), via: { client: "claude" } }, { reason: "Duplicate order" }, deps(shop.impl));
+    expect(result).toMatchObject({ kind: "cancelled-in-shopify", noteEvent: { type: "note", source: "ai" } });
+    expect(shop.ops()).toEqual(["OrderCancelState"]);
+    const entries = await timeline(db);
+    const note = entries.find((event) => event.type === "note");
+    expect(note?.source).toBe("ai");
+    expect(note?.meta).toEqual({ cancelReason: true, ai: { client: "claude" } });
+    // Shopify's own move stays Shopify's: the person did not make it.
+    expect(entries.find((event) => event.type === "status")).toMatchObject({ source: "shopify", actorId: null });
+  });
+
   it("records the reason and the cancellation when Shopify's own move lands first", async () => {
     // Shopify finishes its job and the orders/cancelled webhook moves the
     // card while this cancel is still waiting on Shopify.

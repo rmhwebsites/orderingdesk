@@ -211,7 +211,10 @@ async function decideCancellation(db: Db, ctx: ReviewContext, body: unknown, dep
 // the card moves exactly as the orders/cancelled webhook would move it. The
 // reason is still saved as the manager's note (a retry after a lost answer
 // lands here when Shopify finished the first cancel), with no
-// order_cancelled entry: who cancelled it in Shopify is not known.
+// order_cancelled entry: who cancelled it in Shopify is not known. The note
+// is the person's own entry, so a cancel through an AI app records it as
+// source ai (an MCP confirm retried after a lost answer lands here too);
+// the move stays Shopify's.
 async function followShopifyCancel(
   db: Db,
   ctx: ReviewContext,
@@ -231,9 +234,9 @@ async function followShopifyCancel(
     type: "note" as const,
     text: reason,
     actorId: ctx.userId,
-    meta: { cancelReason: true },
+    meta: withVia({ cancelReason: true }, ctx.via),
     createdAt: now,
-    source: "app" as const,
+    source: eventSource(ctx.via),
   };
   await db.insert(events).values(note);
   return {
