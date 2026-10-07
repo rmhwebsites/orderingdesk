@@ -164,3 +164,48 @@ export function fakeShop(handlers: Record<string, Handler>) {
 export function timeoutError(): never {
   throw new DOMException("The operation timed out.", "TimeoutError");
 }
+
+// An in-memory KV namespace with the calls the OAuth library makes.
+export function memoryKv(): KVNamespace {
+  const store = new Map<string, { value: string; metadata?: unknown }>();
+  const kindOf = (type: unknown) => (typeof type === "string" ? type : (type as { type?: string } | undefined)?.type);
+  const read = (key: string, type: unknown) => {
+    const entry = store.get(key);
+    if (!entry) {
+      return null;
+    }
+    return kindOf(type) === "json" ? (JSON.parse(entry.value) as unknown) : entry.value;
+  };
+  return {
+    async get(key: string, type?: unknown) {
+      return read(key, type);
+    },
+    async getWithMetadata(key: string, type?: unknown) {
+      return { value: read(key, type), metadata: store.get(key)?.metadata ?? null, cacheStatus: null };
+    },
+    async put(key: string, value: string, options?: { metadata?: unknown }) {
+      store.set(key, { value: String(value), metadata: options?.metadata });
+    },
+    async delete(key: string) {
+      store.delete(key);
+    },
+    async list(options?: { prefix?: string }) {
+      const keys = [...store.entries()]
+        .filter(([name]) => name.startsWith(options?.prefix ?? ""))
+        .map(([name, entry]) => ({ name, metadata: entry.metadata }));
+      return { keys, list_complete: true, cacheStatus: null };
+    },
+  } as unknown as KVNamespace;
+}
+
+export function fakeCtx(props: Record<string, unknown> = {}): ExecutionContext & { pending: Promise<unknown>[] } {
+  const pending: Promise<unknown>[] = [];
+  return {
+    pending,
+    props,
+    waitUntil: (work: Promise<unknown>) => {
+      pending.push(work.catch(() => undefined));
+    },
+    passThroughOnException: () => undefined,
+  } as unknown as ExecutionContext & { pending: Promise<unknown>[] };
+}
