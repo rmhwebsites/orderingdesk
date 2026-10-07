@@ -21,7 +21,7 @@
   // `npx wrangler kv namespace create OAUTH_KV` and puts its id here before
   // the first deploy (Deploy notes); until then the zeros work for local
   // development only, and a deploy fails loudly.
-  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "00000000000000000000000000000000" }],
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "0930afa6e1fe4bd68131b2d8c8e2b25d" }],
   // Cloudflare Email Service send binding (requires Workers Paid and an
   // onboarded sending domain before production email works)
   "send_email": [{ "name": "EMAIL" }],
