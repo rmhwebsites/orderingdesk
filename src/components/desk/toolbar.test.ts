@@ -15,11 +15,15 @@ const base: ToolbarProps = {
   onStatus: () => {},
   statusChips: CHIPS,
   query: "",
+  resetKey: 0,
   onQuery: () => {},
+  onSubmit: () => {},
+  asking: false,
+  aiHint: false,
   sort: "newest",
   onSort: () => {},
   kindFilter: { kind: "all", onKind: () => {}, draftCount: 5, deletedCount: 0 },
-  shown: 34,
+  count: 34,
   view: "open",
   onView: () => {},
   viewCounts: { open: 23, approval: 3, all: 35, closed: 12 },
@@ -35,7 +39,10 @@ describe("Toolbar", () => {
     for (const marker of ['id="desk-status"', 'name="desk-kind"', 'id="desk-search"', 'id="desk-sort"']) {
       expect(html).toContain(marker);
     }
-    expect(html).toContain("34 cards shown");
+    // The server's count of matches over all history, announced politely.
+    expect(html).toContain('aria-live="polite">34 cards<');
+    // The one search box: a search form that submits on Enter.
+    expect(html).toContain('role="search"');
   });
 
   it("lists every status with its count, and unknown keys by their key", () => {
@@ -65,7 +72,7 @@ describe("Toolbar", () => {
     const off = searchButton(render({ layout: "phone" }));
     expect(off).toContain('<span class="sr-only">Search</span>');
     expect(off).not.toContain("bg-primary-strong");
-    // Spaces alone filter nothing (selectOrders trims), so they are not on.
+    // Spaces alone filter nothing (the search trims), so they are not on.
     expect(searchButton(render({ layout: "phone", query: "  " }))).toContain('<span class="sr-only">Search</span>');
   });
 });

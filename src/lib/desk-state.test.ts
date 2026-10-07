@@ -7,7 +7,6 @@ import {
   arrivalNotice,
   chipsForView,
   crossesClosed,
-  deskKindCounts,
   dropsDeletedFilter,
   listFilter,
   nextWaitingRequest,
@@ -339,23 +338,16 @@ describe("selectOrders", () => {
     }),
   ];
 
-  it("sorts newest and oldest", () => {
-    expect(selectOrders(orders, { query: "", statusKey: null, sort: "newest" }).map((o) => o.id)).toEqual(["a", "c", "b"]);
-    expect(selectOrders(orders, { query: "", statusKey: null, sort: "oldest" }).map((o) => o.id)).toEqual(["b", "c", "a"]);
-  });
-
-  it("searches order name, customer, email and every item title, ignoring case", () => {
-    const find = (query: string) =>
-      selectOrders(orders, { query, statusKey: null, sort: "newest" }).map((o) => o.id);
-    expect(find("1002")).toEqual(["b"]);
-    expect(find("  whitfield ")).toEqual(["b"]);
-    expect(find("HARBOUR")).toEqual(["b"]);
-    expect(find("steel toe")).toEqual(["c"]);
-    expect(find("zzz")).toEqual([]);
-  });
-
   it("filters by status key, including unknown keys", () => {
-    expect(selectOrders(orders, { query: "", statusKey: "shipped", sort: "newest" }).map((o) => o.id)).toEqual(["b"]);
+    expect(selectOrders(orders, { statusKey: "shipped" }).map((o) => o.id)).toEqual(["b"]);
+  });
+});
+
+describe("selectOrders after server search", () => {
+  it("keeps the server's matches in the server's order, filtering only view, kind and status", () => {
+    const rows = [order("b", { name: "#2", createdAt: 1 }), order("a", { name: "#1", createdAt: 2 })];
+    expect(selectOrders(rows, { statusKey: null, kind: "all", view: "all" }).map((row) => row.id)).toEqual(["b", "a"]);
+    expect(selectOrders(rows, { statusKey: "processing", kind: "all", view: "all" })).toEqual([]);
   });
 });
 
@@ -367,8 +359,7 @@ describe("requests in the list", () => {
     order("d2", { name: "#D13", kind: "draft", draftName: "#D13", draftDeleted: true, createdAt: 2 }),
     order("o2", { name: "#1234", draftName: "#D11", draftStatus: "completed", createdAt: 1, searchText: ["#D11"] }),
   ];
-  const ids = (kind: "all" | "drafts" | "orders" | "deleted", query = "") =>
-    selectOrders(list, { query, statusKey: null, sort: "newest", kind }).map((row) => row.id);
+  const ids = (kind: "all" | "drafts" | "orders" | "deleted") => selectOrders(list, { statusKey: null, kind }).map((row) => row.id);
 
   it("filters requests and orders, keeping deleted drafts out of everything but their own filter", () => {
     expect(ids("all")).toEqual(["o1", "d1", "o2"]);
@@ -376,17 +367,7 @@ describe("requests in the list", () => {
     expect(ids("orders")).toEqual(["o1", "o2"]);
     expect(ids("deleted")).toEqual(["d2"]);
     // No kind given reads as all.
-    expect(selectOrders(list, { query: "", statusKey: null, sort: "newest" }).map((row) => row.id)).toEqual(["o1", "d1", "o2"]);
-  });
-
-  it("searches the draft name, company and request fields too", () => {
-    expect(ids("all", "casey")).toEqual(["d1"]);
-    expect(ids("all", "buford hq")).toEqual(["d1"]);
-    expect(ids("all", "#d11")).toEqual(["o2"]);
-  });
-
-  it("counts the loaded requests, orders and deleted drafts", () => {
-    expect(deskKindCounts(list)).toEqual({ drafts: 1, orders: 2, deleted: 1 });
+    expect(selectOrders(list, { statusKey: null }).map((row) => row.id)).toEqual(["o1", "d1", "o2"]);
   });
 
   it("drops the Deleted filter with the last deleted request, once the desk has loaded", () => {
@@ -462,7 +443,7 @@ describe("views", () => {
     order("d3", { kind: "draft", statusKey: "new", draftDeleted: true, createdAt: 1 }),
   ];
   const ids = (view: "open" | "closed" | "approval" | "all", kind: "all" | "deleted" = "all") =>
-    selectOrders(list, { query: "", statusKey: null, sort: "newest", kind, view }, closed).map((row) => row.id);
+    selectOrders(list, { statusKey: null, kind, view }, closed).map((row) => row.id);
 
   it("keeps closed cards out of Open, and puts waiting requests in the approval queue", () => {
     expect(ids("open")).toEqual(["o1", "d1"]);
@@ -470,15 +451,6 @@ describe("views", () => {
     expect(ids("approval")).toEqual(["d1"]);
     expect(ids("all")).toEqual(["o1", "o2", "d1", "d2"]);
     expect(ids("open", "deleted")).toEqual(["d3"]);
-  });
-
-  it("sorts by waiting longest: the oldest status change first, the arrival when none was set", () => {
-    const waiting = [
-      order("a", { statusSetAt: 300, createdAt: 1 }),
-      order("b", { statusSetAt: null, createdAt: 100 }),
-      order("c", { statusSetAt: 200, createdAt: 2 }),
-    ];
-    expect(selectOrders(waiting, { query: "", statusKey: null, sort: "waiting" }).map((row) => row.id)).toEqual(["b", "c", "a"]);
   });
 
   it("moves the view counts with a card that crosses between open and closed", () => {
@@ -521,7 +493,7 @@ describe("views", () => {
   it("filters by the loaded view while another view loads, so the list stays instead of showing the new view's empty state", () => {
     const loaded = (view: "open" | "closed") => list.filter((row) => !row.draftDeleted && viewMatches(row, view, closed));
     const asked = (view: "open" | "closed" | "approval", kind: "all" | "drafts" = "all") =>
-      ({ query: "", statusKey: null, sort: "newest", kind, view }) as const;
+      ({ statusKey: null, kind, view }) as const;
     const shown = (cards: typeof list, view: "open" | "closed" | "approval", from: "open" | "closed", kind?: "all" | "drafts") =>
       selectOrders(cards, listFilter(asked(view, kind), from), closed).map((row) => row.id);
     // Open to Closed: the Open cards stay until Closed lands (filtering
@@ -561,7 +533,7 @@ describe("the approval queue and the rejected status", () => {
     expect(viewMatches(refused, "approval", closed, rejected)).toBe(false);
     expect(viewMatches(refused, "open", closed, rejected)).toBe(true);
     expect(
-      selectOrders([waiting, refused], { query: "", statusKey: null, sort: "newest", view: "approval" }, closed, rejected).map((row) => row.id),
+      selectOrders([waiting, refused], { statusKey: null, view: "approval" }, closed, rejected).map((row) => row.id),
     ).toEqual(["d1"]);
     expect(nextWaitingRequest([waiting, refused], "zz", closed, rejected)).toEqual({ id: "d1", name: "#d1" });
   });

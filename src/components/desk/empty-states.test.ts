@@ -40,7 +40,6 @@ describe("NoMatches", () => {
     kind?: "all" | "drafts" | "orders" | "deleted";
     statusLabel?: string | null;
     view?: "open" | "approval" | "all" | "closed";
-    onSearchAll?: () => void;
   }) =>
     renderToStaticMarkup(
       createElement(NoMatches, {
@@ -49,7 +48,6 @@ describe("NoMatches", () => {
         statusLabel: props.statusLabel ?? null,
         view: props.view,
         onClear: () => {},
-        onSearchAll: props.onSearchAll,
       }),
     );
 
@@ -104,28 +102,21 @@ describe("NoMatches", () => {
     expect(render({ view: "open", query: "vest" })).toContain("Nothing matches &quot;vest&quot;.");
   });
 
-  // Until the server search (Wave 1c) covers every card, a search looks only
-  // in the loaded view, and the desk opens on Open: a search that misses
-  // there says so and offers the All view, where Delivered and Rejected
-  // cards are, since Clear filters leaves the view as it is.
-  it("says a search looks in this view only, and offers to search all cards", () => {
-    const searchAll = () => {};
-    for (const view of ["open", "approval", "closed"] as const) {
-      const html = render({ view, query: "vest", onSearchAll: searchAll });
-      expect(html).toContain("Search looks in this view only.");
-      expect(html).toContain(">Search all cards<");
+  // Owner decision (Wave 1c): words search every card, open and closed,
+  // over all history, whatever view is picked, so a search that misses
+  // says where it looked and offers no other view (clearing it goes back to
+  // the view).
+  it("says a search looked through every card, and offers no other view to search", () => {
+    for (const view of ["open", "approval", "all", "closed"] as const) {
+      const html = render({ view, query: "vest" });
+      expect(html).toContain("Search looks through every card, open and closed.");
       expect(html).toContain(">Clear filters<");
-    }
-    // Nothing to offer in All, with no search, or with nowhere to switch.
-    for (const html of [
-      render({ view: "all", query: "vest", onSearchAll: searchAll }),
-      render({ view: "open", onSearchAll: searchAll }),
-      render({ view: "open", query: "   ", onSearchAll: searchAll }),
-      render({ view: "open", statusLabel: "Ordered", onSearchAll: searchAll }),
-      render({ view: "open", query: "vest" }),
-    ]) {
       expect(html).not.toContain("this view only");
       expect(html).not.toContain("Search all cards");
     }
+    // A status or a kind narrows the search, and no search says nothing of it.
+    expect(render({ view: "open", query: "vest", statusLabel: "New" })).not.toContain("every card");
+    expect(render({ view: "open", query: "vest", kind: "drafts" })).not.toContain("every card");
+    expect(render({ view: "open", query: "   " })).not.toContain("every card");
   });
 });

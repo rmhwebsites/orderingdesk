@@ -9,6 +9,7 @@ import { defaultSort, type DeskView, type ViewCounts } from "@/lib/desk-query";
 import type { DeskKind, SortKey, StatusChip } from "@/lib/desk-state";
 import { Segmented, type SegmentedOption } from "@/components/kit";
 import { ui } from "@/components/ui";
+import { DeskSearchField, matchLabel } from "./search-field";
 
 // The desk's filters (comprehensive desk design section 1): one row from
 // 880px (view, status, kind, search, sort); on phones one row with the
@@ -33,14 +34,22 @@ export type ToolbarProps = {
   statusKey: string | null;
   onStatus: (statusKey: string | null) => void;
   statusChips: StatusChip[];
+  // The search box (search-field.tsx): its text as the desk knows it, the
+  // reset counter, typing (debounced by the desk) and Enter.
   query: string;
+  resetKey: number;
   onQuery: (query: string) => void;
+  onSubmit: (query: string) => void;
+  // AI search is answering, and whether it is on for this workspace.
+  asking: boolean;
+  aiHint: boolean;
   sort: SortKey;
   onSort: (sort: SortKey) => void;
   // The requests and orders filter, when the workspace has requests.
   kindFilter: KindFilter | null;
-  // How many cards the list shows now (announced politely).
-  shown: number;
+  // Cards matching the filter over all history, the server's count
+  // (announced politely).
+  count: number;
   view: DeskView;
   onView: (view: DeskView) => void;
   viewCounts: ViewCounts;
@@ -155,44 +164,10 @@ function KindSegments({ filter, className }: { filter: KindFilter; className?: s
   );
 }
 
-function SearchField({
-  query,
-  onQuery,
-  hasRequests,
-  inputRef,
-  className = "",
-}: {
-  query: string;
-  onQuery: (query: string) => void;
-  hasRequests: boolean;
-  inputRef?: React.Ref<HTMLInputElement>;
-  className?: string;
-}) {
-  return (
-    <div className={`relative ${className}`.trim()}>
-      <label htmlFor="desk-search" className="sr-only">
-        Search orders
-      </label>
-      <MagnifyingGlassIcon size={16} aria-hidden className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-ink-3" />
-      <input
-        ref={inputRef}
-        id="desk-search"
-        type="search"
-        value={query}
-        onChange={(event) => onQuery(event.target.value)}
-        placeholder={hasRequests ? "Search order, request, name or item" : "Search order, customer, email or item"}
-        autoComplete="off"
-        spellCheck={false}
-        className={`${ui.input} pl-10`}
-      />
-    </div>
-  );
-}
-
-function ShownCount({ shown }: { shown: number }) {
+function MatchCount({ count }: { count: number }) {
   return (
     <p className="sr-only" aria-live="polite">
-      {`${shown.toLocaleString("en-US")} ${shown === 1 ? "card" : "cards"} shown`}
+      {matchLabel(count)}
     </p>
   );
 }
@@ -202,11 +177,15 @@ function RowToolbar({
   onStatus,
   statusChips,
   query,
+  resetKey,
   onQuery,
+  onSubmit,
+  asking,
+  aiHint,
   sort,
   onSort,
   kindFilter,
-  shown,
+  count,
   view,
   onView,
   viewCounts,
@@ -226,9 +205,17 @@ function RowToolbar({
       />
       <StatusFilter statusKey={statusKey} onStatus={onStatus} chips={statusChips} className="w-52 shrink-0" />
       {kindFilter ? <KindSegments filter={kindFilter} className="shrink-0" /> : null}
-      <SearchField query={query} onQuery={onQuery} hasRequests={kindFilter !== null} className="min-w-40 max-w-md flex-1" />
+      <DeskSearchField
+        value={query}
+        resetKey={resetKey}
+        onChange={onQuery}
+        onSubmit={onSubmit}
+        asking={asking}
+        aiHint={aiHint}
+        className="min-w-40 max-w-md flex-1"
+      />
       <SortSelect sort={sort} onSort={onSort} className="ml-auto w-44 shrink-0" />
-      <ShownCount shown={shown} />
+      <MatchCount count={count} />
     </div>
   );
 }
@@ -238,11 +225,15 @@ function PhoneToolbar({
   onStatus,
   statusChips,
   query,
+  resetKey,
   onQuery,
+  onSubmit,
+  asking,
+  aiHint,
   sort,
   onSort,
   kindFilter,
-  shown,
+  count,
   view,
   onView,
   viewCounts,
@@ -263,7 +254,7 @@ function PhoneToolbar({
   const active =
     (statusKey ? 1 : 0) + (kindFilter && kindFilter.kind !== "all" ? 1 : 0) + (sort !== defaultSort(view) ? 1 : 0);
   // The search keeps filtering when its row is closed, so the button says
-  // so (the same test as the list filter, src/lib/desk-state.ts).
+  // so (blank words search nothing, src/lib/desk-query.ts).
   const searchOn = query.trim().length > 0;
 
   return (
@@ -311,9 +302,18 @@ function PhoneToolbar({
       </div>
       {searching ? (
         <div id="desk-search-row" className="flex items-center gap-2">
-          <SearchField query={query} onQuery={onQuery} hasRequests={kindFilter !== null} inputRef={searchRef} className="min-w-0 flex-1" />
+          <DeskSearchField
+            value={query}
+            resetKey={resetKey}
+            onChange={onQuery}
+            onSubmit={onSubmit}
+            asking={asking}
+            aiHint={aiHint}
+            inputRef={searchRef}
+            className="min-w-0 flex-1"
+          />
           {query ? (
-            <button type="button" onClick={() => onQuery("")} className={ui.iconButton}>
+            <button type="button" onClick={() => onSubmit("")} className={ui.iconButton}>
               <XIcon size={18} aria-hidden />
               <span className="sr-only">Clear the search</span>
             </button>
@@ -327,7 +327,7 @@ function PhoneToolbar({
           <SortSelect sort={sort} onSort={onSort} className="w-full" />
         </div>
       ) : null}
-      <ShownCount shown={shown} />
+      <MatchCount count={count} />
     </div>
   );
 }

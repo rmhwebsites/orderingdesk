@@ -3,14 +3,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { XIcon } from "@phosphor-icons/react/X";
-import type { DeskView, ViewCounts } from "@/lib/desk-query";
+import {
+  DESK_QUERY_MAX,
+  SEARCH_DEFAULTS,
+  deskParams,
+  listScope,
+  parseDeskQuery,
+  reloadLimit,
+  type DeskQuery,
+  type DeskView,
+  type ViewCounts,
+} from "@/lib/desk-query";
 import {
   applyLiveEvent,
   approvalNotice,
   arrivalNotice,
   chipsForView,
   crossesClosed,
-  deskKindCounts,
   dropsDeletedFilter,
   listFilter,
   nextWaitingRequest,
@@ -22,7 +31,6 @@ import {
   totalOrders,
   touchesPurchaseOrders,
   viewLoadState,
-  viewMatches,
   withPurchaseOrder,
   type DeskFilter,
   type DeskKind,
@@ -46,6 +54,7 @@ import { BulkBar, type BulkResult } from "./bulk-bar";
 import { DeskSkeleton } from "./desk-skeleton";
 import type { EditSaveOutcome } from "./edit-request";
 import { DeskLoadError, EmptyDesk, NoMatches } from "./empty-states";
+import { LoadMore } from "./load-more";
 import {
   DrawerShell,
   OrderDrawerContent,
@@ -72,6 +81,12 @@ type DeskPayload = {
   view: DeskView;
   viewCounts: ViewCounts;
   queue: QueueSettingsView;
+  nextCursor: string | null;
+  matchCount: number;
+  searchReady: boolean;
+  locations: { id: string; name: string }[];
+  aiSearch: boolean;
+  requester: { id: string; name: string } | null;
 };
 
 type DraftsState = { draftCount: number; deletedDraftCount: number; enabled: boolean; missingScopes: string[] };
@@ -154,26 +169,46 @@ export function Desk() {
 
   const [load, setLoad] = useState<LoadState>({ status: "loading" });
   const [statuses, setStatuses] = useState<StatusView[]>([]);
-  const [hasMore, setHasMore] = useState(false);
   const [desk, setDesk] = useState<DeskState>({ orders: [], statusCounts: {}, timeline: null });
   const deskRef = useRef(desk);
-  // The view and filters live in the address (use-desk-filter.ts).
+  // The view and filters live in the address (use-desk-filter.ts); the
+  // server searches with all of them (src/server/search/query.ts).
   const [deskQuery, updateDeskQuery, searchText] = useDeskFilter();
-  const filter = useMemo<DeskFilter>(
-    () => ({ query: deskQuery.q, statusKey: deskQuery.status, sort: deskQuery.sort, kind: deskQuery.kind, view: deskQuery.view }),
-    [deskQuery],
-  );
+  const queryKey = useMemo(() => deskParams(deskQuery).toString(), [deskQuery]);
+  const queryKeyRef = useRef(queryKey);
+  // How many cards are loaded for the current query (a reload keeps them).
+  const depthRef = useRef(0);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [matchCount, setMatchCount] = useState(0);
+  const [searchReady, setSearchReady] = useState(true);
+  const [aiSearch, setAiSearch] = useState(false);
+  const [vocab, setVocab] = useState<{ locations: { id: string; name: string }[]; requester: { id: string; name: string } | null }>({
+    locations: [],
+    requester: null,
+  });
+  const [loadingMore, setLoadingMore] = useState(false);
+  // Bumped when the desk rewrites the words itself, so the search box shows them.
+  const [searchReset, setSearchReset] = useState(0);
+
+  useEffect(() => {
+    queryKeyRef.current = queryKey;
+  }, [queryKey]);
+
+  // The list filters only view, kind and status (src/lib/desk-state.ts):
+  // words search every card whatever the view (listScope).
+  const filter = useMemo<DeskFilter>(() => ({ statusKey: deskQuery.status, ...listScope(deskQuery) }), [deskQuery]);
   const view: DeskView = deskQuery.view;
   const [viewCounts, setViewCounts] = useState<ViewCounts>({ open: 0, approval: 0, all: 0, closed: 0 });
   const [queue, setQueue] = useState<QueueSettingsView>(DEFAULT_QUEUE_SETTINGS);
-  // The view whose cards the desk holds, and the last view whose load
-  // failed. While the address asks for another view the list keeps the
-  // loaded view's cards, dimmed, until the new ones land.
-  const [loadedView, setLoadedView] = useState<DeskView>(view);
-  const [failedView, setFailedView] = useState<DeskView | null>(null);
-  const viewState = viewLoadState(view, loadedView, failedView);
+  // The query whose cards the desk holds, and the last query whose load
+  // failed (query keys, deskParams). While the address asks for another
+  // query the list keeps the loaded cards, dimmed, until the new ones land.
+  const [loadedKey, setLoadedKey] = useState(queryKey);
+  const [failedKey, setFailedKey] = useState<string | null>(null);
+  const loadedQuery: DeskQuery = useMemo(() => parseDeskQuery(new URLSearchParams(loadedKey)), [loadedKey]);
+  const loadedView = listScope(loadedQuery).view;
+  const viewState = viewLoadState(queryKey, loadedKey, failedKey);
   const switching = viewState === "loading";
-  const viewRef = useRef<DeskView>(view);
   const closedRef = useRef<ReadonlySet<string>>(new Set());
   const rejectedRef = useRef<ReadonlySet<string>>(new Set());
   const [drafts, setDrafts] = useState<DraftsState>({ draftCount: 0, deletedDraftCount: 0, enabled: false, missingScopes: [] });
@@ -213,7 +248,7 @@ export function Desk() {
   // A different filter shows different cards: start the selection over.
   useEffect(() => {
     replaceSelection({ selected: new Set(), anchor: null });
-  }, [deskQuery.view, deskQuery.status, deskQuery.kind, deskQuery.q, replaceSelection]);
+  }, [queryKey, replaceSelection]);
 
   // Status changes still waiting for the server, re-applied over any reload
   // that lands meanwhile so the row does not flick back.
@@ -249,10 +284,14 @@ export function Desk() {
     }, FLASH_MS);
   }, []);
 
+  // The current query at the loaded depth. A response for a query that
+  // changed meanwhile is dropped and the new one fetched.
   const fetchDesk = useCallback(async () => {
-    const requested = viewRef.current;
+    const key = queryKeyRef.current;
     try {
-      const response = await fetch(`/api/workspaces/${encodeURIComponent(workspace.id)}/orders?view=${requested}`, {
+      const params = new URLSearchParams(key);
+      params.set("limit", String(reloadLimit(depthRef.current)));
+      const response = await fetch(`/api/workspaces/${encodeURIComponent(workspace.id)}/orders?${params.toString()}`, {
         cache: "no-store",
       });
       if (!response.ok) {
@@ -260,11 +299,16 @@ export function Desk() {
         throw new Error(body?.error ?? `The server answered ${response.status}.`);
       }
       const payload = (await response.json()) as DeskPayload;
-      if (requested !== viewRef.current) {
-        // The view changed while this request was out: load the new one.
+      if (key !== queryKeyRef.current) {
         reloadAgain.current = true;
         return;
       }
+      depthRef.current = payload.orders.length;
+      setNextCursor(payload.nextCursor);
+      setMatchCount(payload.matchCount);
+      setSearchReady(payload.searchReady);
+      setAiSearch(payload.aiSearch);
+      setVocab({ locations: payload.locations, requester: payload.requester });
       let next: DeskState = { ...deskRef.current, orders: payload.orders, statusCounts: payload.statusCounts };
       for (const [orderId, key] of pendingStatus.current) {
         next = optimisticStatus(next, orderId, key)?.state ?? next;
@@ -273,9 +317,8 @@ export function Desk() {
       setStatuses(payload.statuses);
       setViewCounts(payload.viewCounts);
       setQueue(payload.queue);
-      setLoadedView(payload.view ?? requested);
-      setFailedView(null);
-      setHasMore(payload.hasMore);
+      setLoadedKey(key);
+      setFailedKey(null);
       setDrafts({
         draftCount: payload.draftCount ?? 0,
         deletedDraftCount: payload.deletedDraftCount ?? 0,
@@ -304,7 +347,7 @@ export function Desk() {
       const message = e instanceof Error ? e.message : "Check your connection and try again.";
       // A failed refresh keeps what is on screen; only a first load fails.
       setLoad((current) => (current.status === "ready" ? current : { status: "error", message }));
-      setFailedView(requested);
+      setFailedKey(key);
     }
   }, [workspace.id, commit, flash, toast]);
 
@@ -326,9 +369,96 @@ export function Desk() {
     return inFlight.current;
   }, [fetchDesk]);
 
+  // Every query loads from its first page (the list stays, dimmed, until
+  // it lands); this is also the first load.
   useEffect(() => {
+    depthRef.current = 0;
     void reload();
-  }, [reload]);
+  }, [queryKey, reload]);
+
+  // Older cards for the loaded query, one page at a time.
+  const loadMore = useCallback(async () => {
+    if (!nextCursor || loadingMore) {
+      return;
+    }
+    const key = queryKeyRef.current;
+    setLoadingMore(true);
+    try {
+      const params = new URLSearchParams(key);
+      params.set("cursor", nextCursor);
+      const response = await fetch(`/api/workspaces/${encodeURIComponent(workspace.id)}/orders?${params.toString()}`, {
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        throw new Error(String(response.status));
+      }
+      const payload = (await response.json()) as DeskPayload;
+      if (key !== queryKeyRef.current) {
+        return;
+      }
+      const known = new Set(deskRef.current.orders.map((order) => order.id));
+      const orders = [...deskRef.current.orders, ...payload.orders.filter((order) => !known.has(order.id))];
+      commit({ ...deskRef.current, orders });
+      depthRef.current = orders.length;
+      setNextCursor(payload.nextCursor);
+    } catch {
+      toast({ title: "Older cards did not load. Try again.", tone: "warn" });
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [nextCursor, loadingMore, workspace.id, commit, toast]);
+
+  // Typing writes the words after a short pause; Enter, the clear button
+  // and Clear filters write them at once and show them in the box.
+  // writtenQ is what the desk last wrote, so words that change in the
+  // address from outside (a link, Back) reach the box too.
+  const typing = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const writtenQ = useRef(searchText);
+  const stopTyping = useCallback(() => {
+    if (typing.current) {
+      clearTimeout(typing.current);
+      typing.current = null;
+    }
+  }, []);
+  useEffect(() => stopTyping, [stopTyping]);
+  const writeWords = useCallback(
+    (text: string) => {
+      const q = text.slice(0, DESK_QUERY_MAX);
+      writtenQ.current = q;
+      updateDeskQuery({ q });
+    },
+    [updateDeskQuery],
+  );
+  const onQueryText = useCallback(
+    (text: string) => {
+      stopTyping();
+      typing.current = setTimeout(() => {
+        typing.current = null;
+        writeWords(text);
+      }, 250);
+    },
+    [stopTyping, writeWords],
+  );
+  const onSearchSubmit = useCallback(
+    (text: string) => {
+      stopTyping();
+      writeWords(text);
+      setSearchReset((count) => count + 1);
+    },
+    [stopTyping, writeWords],
+  );
+  const clearFilters = useCallback(() => {
+    stopTyping();
+    writtenQ.current = "";
+    updateDeskQuery({ ...SEARCH_DEFAULTS, q: "", status: null, kind: "all" });
+    setSearchReset((count) => count + 1);
+  }, [stopTyping, updateDeskQuery]);
+  useEffect(() => {
+    if (searchText !== writtenQ.current) {
+      writtenQ.current = searchText;
+      setSearchReset((count) => count + 1);
+    }
+  }, [searchText]);
 
   const closedKeys = useMemo(
     () => new Set(statuses.filter((status) => status.closed).map((status) => status.key)),
@@ -344,16 +474,6 @@ export function Desk() {
     closedRef.current = closedKeys;
     rejectedRef.current = rejectedKeys;
   }, [closedKeys, rejectedKeys]);
-
-  // A different view: load it (the server filters; the list stays until
-  // the new one lands).
-  useEffect(() => {
-    if (viewRef.current === view) {
-      return;
-    }
-    viewRef.current = view;
-    void reload();
-  }, [view, reload]);
 
   const loadMembers = useCallback(async () => {
     membersLoadedAt.current = Date.now();
@@ -975,14 +1095,6 @@ export function Desk() {
   );
 
   const viewChips = useMemo(() => chipsForView(chips, view, closedKeys), [chips, view, closedKeys]);
-  // Drafts and Deleted counts for what the loaded view holds.
-  const kindCounts = useMemo(
-    () =>
-      deskKindCounts(
-        desk.orders.filter((row) => viewMatches(row, loadedView === "approval" ? "open" : loadedView, closedKeys)),
-      ),
-    [desk.orders, loadedView, closedKeys],
-  );
   const total = totalOrders(desk.statusCounts);
   const drawerSummary = drawerOrderId ? desk.orders.find((order) => order.id === drawerOrderId) : undefined;
   const nextRequest = drawerOrderId ? nextWaitingRequest(visible, drawerOrderId, closedKeys, rejectedKeys) : null;
@@ -1015,24 +1127,30 @@ export function Desk() {
             onView={(next) => updateDeskQuery({ view: next, status: null })}
             viewCounts={viewCounts}
             showApproval={roleAtLeast(role, "manager")}
-            statusKey={filter.statusKey}
+            statusKey={deskQuery.status}
             onStatus={(statusKey) => updateDeskQuery({ status: statusKey })}
             statusChips={viewChips}
             query={searchText}
-            onQuery={(query) => updateDeskQuery({ q: query })}
-            sort={filter.sort}
+            resetKey={searchReset}
+            onQuery={onQueryText}
+            onSubmit={onSearchSubmit}
+            asking={false}
+            aiHint={aiSearch}
+            sort={deskQuery.sort}
             onSort={(sort) => updateDeskQuery({ sort })}
             kindFilter={
               showKindFilter && view !== "approval"
                 ? {
-                    kind: filter.kind ?? "all",
+                    kind: deskQuery.kind,
                     onKind: (kind: DeskKind) => updateDeskQuery({ kind }),
-                    draftCount: kindCounts.drafts,
-                    deletedCount: kindCounts.deleted,
+                    // The payload's counts over every card (the loaded page
+                    // is already filtered by kind).
+                    draftCount: drafts.draftCount,
+                    deletedCount: drafts.deletedDraftCount,
                   }
                 : null
             }
-            shown={visible.length}
+            count={matchCount}
           />
         ) : null}
       </div>
@@ -1071,7 +1189,7 @@ export function Desk() {
                   <button
                     type="button"
                     onClick={() => {
-                      setFailedView(null);
+                      setFailedKey(null);
                       void reload();
                     }}
                     className={ui.buttonSecondary}
@@ -1080,26 +1198,26 @@ export function Desk() {
                   </button>
                 }
               >
-                This view did not load. The cards below are from the view you had before.
+                These cards did not load. The cards below are from before your last change.
               </InlineMessage>
             ) : null}
-            {/* The loaded view's list or empty state, dimmed while another
-                view loads. */}
+            {!searchReady && deskQuery.q.trim() !== "" ? (
+              <InlineMessage tone="info">Search is still indexing older cards, so some may be missing for a little while.</InlineMessage>
+            ) : null}
+            {/* The loaded query's list or empty state, dimmed while another
+                query loads. */}
             <div aria-busy={switching || undefined} className={switching ? "opacity-60 transition-opacity" : undefined}>
               {visible.length === 0 ? (
                 <NoMatches
-                  view={loadedView}
-                  query={filter.query}
+                  view={loadedQuery.view}
+                  query={deskQuery.q}
                   kind={filter.kind ?? "all"}
                   statusLabel={
                     filter.statusKey === null
                       ? null
                       : (chips.find((chip) => chip.key === filter.statusKey)?.label ?? "this status")
                   }
-                  onClear={() => updateDeskQuery({ q: "", status: null, kind: "all" })}
-                  // The same switch as picking All in the toolbar: the
-                  // search stays, the status (a per-view pick) clears.
-                  onSearchAll={view === "all" ? undefined : () => updateDeskQuery({ view: "all", status: null })}
+                  onClear={clearFilters}
                 />
               ) : (
                 <OrderList
@@ -1120,11 +1238,13 @@ export function Desk() {
                 />
               )}
             </div>
-            {hasMore ? (
-              <p className="text-xs text-ink-2">
-                Showing the newest 1,000 orders. Older orders are still in Shopify, and the counts above include them.
-              </p>
-            ) : null}
+            {/* The cursor belongs to the loaded query, so older cards are
+                offered only once the list holds the address's query. */}
+            <LoadMore
+              remaining={nextCursor && viewState === "ready" ? Math.max(0, matchCount - desk.orders.length) : 0}
+              busy={loadingMore}
+              onLoad={() => void loadMore()}
+            />
           </>
         )
       ) : null}

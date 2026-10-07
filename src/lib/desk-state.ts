@@ -304,7 +304,11 @@ export function totalOrders(counts: Record<string, number>): number {
 
 export type { DeskKind, DeskView, SortKey, ViewCounts };
 
-export type DeskFilter = { query: string; statusKey: string | null; sort: SortKey; kind?: DeskKind; view?: DeskView };
+// What the list filters on the desk: the server matched the words, applied
+// the search filters and sorted (src/server/search/query.ts); this only
+// hides a card an optimistic status change moved out of the view, kind or
+// status.
+export type DeskFilter = { statusKey: string | null; kind?: DeskKind; view?: DeskView };
 
 function kindMatches(row: OrderSummary, kind: DeskKind): boolean {
   switch (kind) {
@@ -403,30 +407,28 @@ export function crossesClosed(
   );
 }
 
-// The filter the list applies (src/components/desk/desk.tsx). The view in
-// the address changes at once, but the desk holds the loaded view's cards
-// until the asked-for view lands, so the list filters by the loaded view:
-// it keeps showing those cards, dimmed, instead of emptying into the new
-// view's empty state. The approval queue shows every kind.
+// The filter the list applies (src/components/desk/desk.tsx). The address
+// changes at once, but the desk holds the loaded query's cards until the
+// asked-for query lands, so the list filters by the loaded query's view
+// (its listScope view, All while words search): it keeps showing those
+// cards, dimmed, instead of emptying into the new query's empty state. The
+// approval queue shows every kind.
 export function listFilter(filter: DeskFilter, loadedView: DeskView): DeskFilter {
   return { ...filter, view: loadedView, kind: loadedView === "approval" ? "all" : filter.kind };
 }
 
-// Where the list stands against the view in the address: ready (it holds
-// that view's cards), loading (the view changed and its cards have not
-// landed; true from the render the address changes in, so nothing flashes
-// before the load starts), or failed (the asked-for view's load failed;
-// failedView is the last view whose load failed, cleared by a load that
-// lands).
-export function viewLoadState(
-  askedView: DeskView,
-  loadedView: DeskView,
-  failedView: DeskView | null,
-): "ready" | "loading" | "failed" {
-  if (askedView === loadedView) {
+// Where the list stands against the address: ready (it holds the cards of
+// the query the address asks for), loading (the query changed and its cards
+// have not landed; true from the render the address changes in, so nothing
+// flashes before the load starts), or failed (the asked-for query's load
+// failed; failed is the last query whose load failed, cleared by a load
+// that lands). The desk passes query keys (src/lib/desk-query.ts
+// deskParams); views compare the same way.
+export function viewLoadState<T extends string>(asked: T, loaded: T, failed: T | null): "ready" | "loading" | "failed" {
+  if (asked === loaded) {
     return "ready";
   }
-  return failedView === askedView ? "failed" : "loading";
+  return failed === asked ? "failed" : "loading";
 }
 
 // The statuses the status filter offers in a view.
@@ -435,16 +437,6 @@ export function chipsForView(chips: StatusChip[], view: DeskView, closedKeys: Re
     return chips;
   }
   return chips.filter((chip) => (view === "closed" ? closedKeys.has(chip.key) : !closedKeys.has(chip.key)));
-}
-
-// The loaded cards per kind filter (the server's counts cover every card;
-// these are for what this desk has).
-export function deskKindCounts(orders: OrderSummary[]): { drafts: number; orders: number; deleted: number } {
-  return {
-    drafts: orders.filter((row) => kindMatches(row, "drafts")).length,
-    orders: orders.filter((row) => kindMatches(row, "orders")).length,
-    deleted: orders.filter((row) => kindMatches(row, "deleted")).length,
-  };
 }
 
 // The Deleted filter goes away with the last deleted request. The count is
@@ -479,49 +471,24 @@ export function arrivalNotice(orders: OrderSummary[]): { title: string; body?: s
   return { title, body: rest > 0 ? `${names.join(", ")} and ${rest} more` : names.join(", ") };
 }
 
-// The time a card has waited in its status: since its status was set, else
-// since it arrived.
-function waitingSince(row: OrderSummary): number {
-  return row.statusSetAt ?? row.createdAt;
-}
-
+// The cards the list shows, in the order the server sent them. The server
+// matched the words and sorted (src/server/search/query.ts); this only
+// hides a card an optimistic status change moved out of the view, the kind
+// or the status.
 export function selectOrders(
   orders: OrderSummary[],
   filter: DeskFilter,
   closedKeys: ReadonlySet<string> = NO_KEYS,
   rejectedKeys: ReadonlySet<string> = NO_KEYS,
 ): OrderSummary[] {
-  const query = filter.query.trim().toLowerCase();
   const kind = filter.kind ?? "all";
   const view = filter.view ?? "all";
-  const matches = orders.filter((row) => {
-    if (!viewMatches(row, view, closedKeys, rejectedKeys) || !kindMatches(row, kind)) {
-      return false;
-    }
-    if (filter.statusKey !== null && row.statusKey !== filter.statusKey) {
-      return false;
-    }
-    if (query.length === 0) {
-      return true;
-    }
-    return (
-      row.name.toLowerCase().includes(query) ||
-      row.customerName.toLowerCase().includes(query) ||
-      row.email.toLowerCase().includes(query) ||
-      row.itemTitles.some((title) => title.toLowerCase().includes(query)) ||
-      row.searchText.some((text) => text.toLowerCase().includes(query))
-    );
-  });
-  const newest = (a: OrderSummary, b: OrderSummary) =>
-    b.createdAt - a.createdAt || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0);
-  switch (filter.sort) {
-    case "newest":
-      return matches.sort(newest);
-    case "oldest":
-      return matches.sort((a, b) => -newest(a, b));
-    case "waiting":
-      return matches.sort((a, b) => waitingSince(a) - waitingSince(b) || newest(a, b));
-  }
+  return orders.filter(
+    (row) =>
+      viewMatches(row, view, closedKeys, rejectedKeys) &&
+      kindMatches(row, kind) &&
+      (filter.statusKey === null || row.statusKey === filter.statusKey),
+  );
 }
 
 // The request to open after an approval (comprehensive desk design section
