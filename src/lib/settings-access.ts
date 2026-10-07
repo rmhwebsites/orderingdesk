@@ -5,7 +5,8 @@
 //
 // - Everyone: their own notification choices and this device's push
 //   (Your notifications), first.
-// - Staff: the store's status and the vendor list, read only.
+// - Staff: the store's status and the vendor list, read only, and their
+//   own AI connections (managers see and revoke everyone's).
 // - Managers: also the team, statuses, search (time zone and the AI search
 //   switch), vendors and the workspace email settings (who gets new order
 //   and purchase order email).
@@ -17,6 +18,7 @@ import { roleAtLeast, type Role } from "./roles";
 export type SettingsSection =
   | "alerts"
   | "store"
+  | "ai"
   | "team"
   | "statuses"
   | "search"
@@ -28,6 +30,7 @@ export type SettingsSection =
 export const SETTINGS_SECTION_LABELS: Record<SettingsSection, string> = {
   alerts: "Your notifications",
   store: "Store connection",
+  ai: "AI connections",
   team: "Team",
   statuses: "Statuses",
   search: "Search",
@@ -53,7 +56,7 @@ export type SettingsAccess = {
 export function settingsAccess(role: Role): SettingsAccess {
   const manager = roleAtLeast(role, "manager");
   const platform = roleAtLeast(role, "platform");
-  const sections: SettingsSection[] = ["alerts", "store"];
+  const sections: SettingsSection[] = ["alerts", "store", "ai"];
   if (manager) {
     sections.push("team", "statuses", "search");
   }

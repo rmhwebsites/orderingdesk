@@ -10,6 +10,7 @@ import type { WorkspaceBranding } from "@/lib/branding";
 import type { QueueSettingsView } from "@/lib/queue-settings";
 import type { Role } from "@/lib/roles";
 import { settingsAccess, type SettingsAccess } from "@/lib/settings-access";
+import { aiSettingsFor, type AiSettingsView } from "./ai-connections";
 import { brandingView, type BrandingView } from "./branding/assets";
 import { getConnectionSettings, type ConnectionSettingsView } from "./desk/connection-view";
 import { getQueueSettings } from "./desk/queue-settings";
@@ -34,6 +35,8 @@ export type SettingsPageData = {
   // section); member is false for a platform admin who is not a member.
   alerts: { member: boolean; prefs: NotificationPrefsView };
   connection: ConnectionSettingsView | null;
+  // Everyone sees their own AI connections; managers everyone's.
+  ai: AiSettingsView;
   vendors: VendorView[];
   team: { members: MemberView[]; invites: PendingInviteView[]; requests: RosterRequests; rosterTags: RosterTags } | null;
   statuses: StatusView[] | null;
@@ -72,9 +75,10 @@ export async function loadSettingsPage(
   const access = settingsAccess(role);
   const shows = (section: SettingsAccess["sections"][number]) => access.sections.includes(section);
 
-  const [alerts, connection, vendors, team, statusRows, settings, mail, queue] = await Promise.all([
+  const [alerts, connection, ai, vendors, team, statusRows, settings, mail, queue] = await Promise.all([
     getNotificationPrefs(db, workspace.id, input.userId),
     getConnectionSettings(db, workspace.id),
+    aiSettingsFor(db, env, { workspaceId: workspace.id, userId: input.userId, role }),
     listVendors(db, workspace.id),
     shows("team") ? listMembers(db, workspace.id, { includeInvites: true }) : Promise.resolve(null),
     shows("statuses")
@@ -92,6 +96,7 @@ export async function loadSettingsPage(
     access,
     alerts,
     connection,
+    ai,
     vendors,
     team: team
       ? {

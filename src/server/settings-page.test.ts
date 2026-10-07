@@ -42,7 +42,7 @@ describe("loadSettingsPage", () => {
   it("reads only the store status and vendors for staff", async () => {
     const { db, workspace } = await setup();
     const page = await loadSettingsPage(db, env, { workspace, role: "staff", userId: "u_crew", basePath: "/w/ws_impact" });
-    expect(page.access.sections).toEqual(["alerts", "store", "vendors"]);
+    expect(page.access.sections).toEqual(["alerts", "store", "ai", "vendors"]);
     expect(page.alerts).toEqual({ member: true, prefs: { pushNewOrders: true, emailNewOrders: true, pushAllActivity: false } });
     expect(page.connection?.shopDomain).toBe("impact-rentals.myshopify.com");
     expect(page.vendors.map((vendor) => vendor.name)).toEqual(["Hard Hat Supply"]);
@@ -92,6 +92,15 @@ describe("loadSettingsPage", () => {
     // Not a member: nothing in this workspace notifies them.
     expect(page.alerts.member).toBe(false);
     expect(page.hubSettingsUrl).toBeNull();
+  });
+
+  // Wave 2: everyone sees their own AI connections; managers everyone's.
+  it("adds AI connections for everyone, managed by managers", async () => {
+    const { db, workspace } = await setup();
+    const staff = await loadSettingsPage(db, env, { workspace, role: "staff", userId: "u_crew", basePath: "/w/ws_impact" });
+    expect(staff.ai).toMatchObject({ canManage: false, canSwitch: false, connections: [] });
+    const manager = await loadSettingsPage(db, env, { workspace, role: "manager", userId: "u_lead", basePath: "/w/ws_impact" });
+    expect(manager.ai).toMatchObject({ canManage: true, canSwitch: false, connections: [] });
   });
 
   // Platform powers stay on the hub, so on a client host a platform admin

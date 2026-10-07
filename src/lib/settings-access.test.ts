@@ -5,7 +5,7 @@ describe("settingsAccess", () => {
   // Phase 6: everyone has their own notification choices, first.
   it("shows staff their own notifications, the store status and the vendor list, editing nothing else", () => {
     expect(settingsAccess("staff")).toEqual({
-      sections: ["alerts", "store", "vendors"],
+      sections: ["alerts", "store", "ai", "vendors"],
       canEditStore: false,
       canEditTeam: false,
       canEditRosterTags: false,
@@ -19,7 +19,7 @@ describe("settingsAccess", () => {
 
   it("gives managers the team, statuses, vendors and notifications, not the platform settings", () => {
     expect(settingsAccess("manager")).toEqual({
-      sections: ["alerts", "store", "team", "statuses", "search", "vendors", "notifications"],
+      sections: ["alerts", "store", "ai", "team", "statuses", "search", "vendors", "notifications"],
       canEditStore: false,
       canEditTeam: true,
       canEditRosterTags: false,
@@ -33,7 +33,7 @@ describe("settingsAccess", () => {
 
   it("gives platform admins everything", () => {
     expect(settingsAccess("platform")).toEqual({
-      sections: ["alerts", "store", "team", "statuses", "search", "vendors", "notifications", "domain", "branding"],
+      sections: ["alerts", "store", "ai", "team", "statuses", "search", "vendors", "notifications", "domain", "branding"],
       canEditStore: true,
       canEditTeam: true,
       canEditRosterTags: true,
@@ -48,5 +48,6 @@ describe("settingsAccess", () => {
   it("labels a person's own notifications apart from the workspace email settings", () => {
     expect(SETTINGS_SECTION_LABELS.alerts).toBe("Your notifications");
     expect(SETTINGS_SECTION_LABELS.notifications).toBe("Workspace email");
+    expect(SETTINGS_SECTION_LABELS.ai).toBe("AI connections");
   });
 });

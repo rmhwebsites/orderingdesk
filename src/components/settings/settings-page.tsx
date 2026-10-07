@@ -5,6 +5,7 @@ import { roleLabel } from "@/lib/roles";
 import { SETTINGS_SECTION_LABELS } from "@/lib/settings-access";
 import type { SettingsPageData } from "@/server/settings-page";
 import { ui } from "@/components/ui";
+import { AiConnectionsSection } from "./ai-connections";
 import { BrandingSection } from "./branding";
 import { CustomDomainSection } from "./custom-domain";
 import { InlineMessage } from "./kit";
@@ -66,6 +67,7 @@ export function SettingsPage({ data }: { data: SettingsPageData }) {
         <div className="flex min-w-0 max-w-5xl flex-col gap-12">
           <MyNotificationsSection workspaceId={workspace.id} workspaceName={workspace.name} initial={data.alerts} />
           <StoreConnectionSection workspaceId={workspace.id} initial={data.connection} canEdit={access.canEditStore} />
+          <AiConnectionsSection workspaceId={workspace.id} initial={data.ai} />
           {data.team ? (
             <TeamSection
               workspaceId={workspace.id}

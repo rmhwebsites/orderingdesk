@@ -95,13 +95,13 @@ describe("/w/[slug]/settings on the hub", () => {
     as("u_staff", "staff@example.com");
     const staff = (await outcome(slugPage("ws_impact"))) as ReactElement<{ data: SettingsPageData }>;
     expect(staff.type).toBe(SettingsPage);
-    expect(staff.props.data.access.sections).toEqual(["alerts", "store", "vendors"]);
+    expect(staff.props.data.access.sections).toEqual(["alerts", "store", "ai", "vendors"]);
     expect(staff.props.data.team).toBeNull();
     expect(staff.props.data.workspace.basePath).toBe("/w/ws_impact");
 
     as("u_lead", "lead@example.com");
     const manager = (await outcome(slugPage("ws_impact"))) as ReactElement<{ data: SettingsPageData }>;
-    expect(manager.props.data.access.sections).toEqual(["alerts", "store", "team", "statuses", "search", "vendors", "notifications"]);
+    expect(manager.props.data.access.sections).toEqual(["alerts", "store", "ai", "team", "statuses", "search", "vendors", "notifications"]);
 
     as("u_boss", "boss@example.com");
     const platform = (await outcome(slugPage("ws_other"))) as ReactElement<{ data: SettingsPageData }>;
