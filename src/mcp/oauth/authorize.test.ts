@@ -1,11 +1,12 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { eq } from "drizzle-orm";
-import { AuthorizationError, type AuthRequest, type CompleteAuthorizationOptions } from "@cloudflare/workers-oauth-provider";
+import { AuthorizationError, getOAuthApi, type AuthRequest, type CompleteAuthorizationOptions } from "@cloudflare/workers-oauth-provider";
 import type { Db } from "@/db";
 import * as schema from "@/db/schema";
 import { providerUserId } from "../grants";
-import { ADMIN, HOST, HUB, MANAGER, NOW, ORIGIN, WS, setupMcp, testEnv } from "../test-helpers";
+import { ADMIN, HOST, HUB, MANAGER, NOW, ORIGIN, WS, memoryKv, setupMcp, testEnv } from "../test-helpers";
 import { authorize, type AuthorizeDeps, type AuthorizeHelpers } from "./authorize";
+import { providerOptions } from "./provider";
 
 const CALLBACK = "https://claude.ai/api/mcp/auth_callback";
 const QUERY = "?response_type=code&client_id=c&state=st";
@@ -107,6 +108,10 @@ async function signIn(h: ReturnType<typeof harness>, email = "casey.lin@example.
 }
 
 describe("the authorize page", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("starts with the email step in the workspace's look, never framed", async () => {
     const db = await setupMcp();
     const response = await harness(db, fakeHelpers().helpers).get();
@@ -248,6 +253,59 @@ describe("the authorize page", () => {
     const unsafe = await harness(db, fakeHelpers({}, new AuthorizationError("invalid_request", { description: "Invalid redirect URI" })).helpers).get();
     expect(unsafe.status).toBe(400);
     expect(unsafe.headers.get("location")).toBeNull();
+  });
+
+  // Anyone can publish a Client ID Metadata Document naming any https
+  // redirect URI, and the library validates a CIMD redirect only against
+  // that document. Its error redirects (no PKCE, a bad response_type or
+  // resource) are followed only to the AI apps' own callbacks, with the real
+  // library.
+  it("follows the library's error redirect only to an AI app's callback, never to one a metadata document names", async () => {
+    const evilClient = "https://evil.example.net/oauth/client.json";
+    const evilLanding = "https://evil.example.net/ordering-desk/sign-in";
+    const claudeClient = "https://claude.ai/oauth/mcp-client";
+    const documents: Record<string, string> = { [evilClient]: evilLanding, [claudeClient]: CALLBACK };
+    const fetched: string[] = [];
+    vi.stubGlobal("Cloudflare", { compatibilityFlags: { global_fetch_strictly_public: true } });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        fetched.push(url);
+        const redirect = documents[url];
+        if (!redirect) {
+          return new Response("Not found", { status: 404 });
+        }
+        return Response.json({
+          client_id: url,
+          client_name: "Ordering Desk Helper",
+          redirect_uris: [redirect],
+          token_endpoint_auth_method: "none",
+          grant_types: ["authorization_code"],
+          response_types: ["code"],
+        });
+      }),
+    );
+    const db = await setupMcp();
+    const env = testEnv({ OAUTH_KV: memoryKv() } as Partial<CloudflareEnv>);
+    const stub = { fetch: async () => new Response("unused") };
+    const helpers = getOAuthApi(providerOptions(ORIGIN, { api: stub, ui: stub }), env);
+    const deps: AuthorizeDeps = { db, env, helpers, now: () => NOW, background: () => undefined, sendCode: async () => undefined };
+    const link = (client: string, redirect: string, query: string) =>
+      `${ORIGIN}/oauth/authorize?client_id=${encodeURIComponent(client)}&redirect_uri=${encodeURIComponent(redirect)}&state=x&${query}`;
+    const pkce = `code_challenge=${"a".repeat(43)}&code_challenge_method=S256`;
+    // No PKCE from a public client, an unsupported response_type, another
+    // resource: each is found after the library checked the redirect URI.
+    for (const query of ["response_type=code", `response_type=token&${pkce}`, `response_type=code&${pkce}&resource=https://other.example.org/mcp`]) {
+      const bounced = await authorize(new Request(link(evilClient, evilLanding, query)), deps);
+      expect(bounced.status, query).toBe(400);
+      expect(bounced.headers.get("location")).toBeNull();
+      expect(await bounced.text()).toContain("This link cannot be used");
+    }
+    expect(fetched).toContain(evilClient);
+    const back = await authorize(new Request(link(claudeClient, CALLBACK, "response_type=code")), deps);
+    expect(back.status).toBe(302);
+    expect(back.headers.get("location")).toMatch(/^https:\/\/claude\.ai\/api\/mcp\/auth_callback\?error=/);
   });
 
   it("on the hub, binds the workspace picked from the person's own", async () => {

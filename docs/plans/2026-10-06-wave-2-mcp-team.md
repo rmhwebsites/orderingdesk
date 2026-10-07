@@ -40,7 +40,7 @@ Repo: `/Users/ryboss/Documents/RMH LLC/Clients/Impact Rentals/order-desk`, branc
 ## Decisions this plan makes (binding for the implementer)
 
 1. **Packages** (checked on npm on 2026-10-06): `@cloudflare/workers-oauth-provider@1.2.2`, `agents@0.26.0`, `@modelcontextprotocol/server@2.0.0`, `zod@4.6.5`, and dev `@modelcontextprotocol/client@2.0.0`, all pinned exactly. `agents` 0.26.0 declares `@modelcontextprotocol/server` and `@modelcontextprotocol/client` 2.0.0 as exact peers, so the newer 2.3.1 cannot be installed beside it; npm also installs its other required peer `@modelcontextprotocol/sdk@1.30.0`, which no file imports. Only `agents/mcp/server` is imported (its stateless handler imports nothing but `@modelcontextprotocol/server` and `node:async_hooks`).
-2. **One `OAuthProvider` per origin**, cached in a module Map: issuer is the origin, resource is `<origin>/mcp`, endpoints `/oauth/authorize` (ours), `/oauth/token`, `/oauth/register` (the library's). Client ID Metadata Documents on (the `global_fetch_strictly_public` flag is already set; the library then advertises `client_id_metadata_document_supported: true` and `none` in `token_endpoint_auth_methods_supported`, the two values Claude needs before it uses its metadata document instead of registering). Dynamic registration stays on for clients without a metadata document (the MCP spec revision 2026-07-28 deprecates it but keeps it for compatibility), refused unless every redirect URI is one of the AI apps' exact callbacks (`https://claude.ai/api/mcp/auth_callback`, `https://claude.com/api/mcp/auth_callback`, `https://chatgpt.com/connector_platform_oauth_redirect`, `https://chatgpt.com/connector/oauth/<id>`) or a loopback `http` URI. The authorize page requires PKCE with `S256` from every client (the library itself requires it only from public clients). Access tokens live 30 minutes; a grant and its refresh token live 90 days, fixed (owner decision 1 of Oct 7: no idle extension, revoke stays instant): people reconnect every 90 days. `GRANT_TTL_S` is the one constant behind the refresh token lifetime, the mirror's `expires_at` and the Settings copy.
+2. **One `OAuthProvider` per origin**, cached in a module Map: issuer is the origin, resource is `<origin>/mcp`, endpoints `/oauth/authorize` (ours), `/oauth/token`, `/oauth/register` (the library's). Client ID Metadata Documents on (the `global_fetch_strictly_public` flag is already set; the library then advertises `client_id_metadata_document_supported: true` and `none` in `token_endpoint_auth_methods_supported`, the two values Claude needs before it uses its metadata document instead of registering). Dynamic registration stays on for clients without a metadata document (the MCP spec revision 2026-07-28 deprecates it but keeps it for compatibility), refused unless every redirect URI is one of the AI apps' exact callbacks (`https://claude.ai/api/mcp/auth_callback`, `https://claude.com/api/mcp/auth_callback`, `https://chatgpt.com/connector_platform_oauth_redirect`, `https://chatgpt.com/connector/oauth/<id>`) or a loopback `http` URI. The authorize page requires PKCE with `S256` from every client (the library itself requires it only from public clients), and follows the library's error redirect only to a redirect URI on that same list: a metadata document can name any https page, and the library checks a CIMD redirect only against the document. Access tokens live 30 minutes; a grant and its refresh token live 90 days, fixed (owner decision 1 of Oct 7: no idle extension, revoke stays instant): people reconnect every 90 days. `GRANT_TTL_S` is the one constant behind the refresh token lifetime, the mirror's `expires_at` and the Settings copy.
 3. **Scopes:** `desk.read`, `desk.write` and `offline_access` are supported; `requiredScopes` is left unset, so the consent page picks: "Look things up and make changes" (read and write, the default) or "Look things up only" (read). Without `desk.write` no prepare or confirm tool is listed.
 4. **Hosts:** on a client host a connection is for that workspace only. On the hub a member's consent page picks one of their workspaces. A platform admin on the hub gets one connection for every workspace (owner decision 3 of Oct 7): the consent page names every workspace with AI on and picks none, the grant mirror stores `workspace_id` null, every tool takes a `workspace` argument (an id or name from the extra read tool `list_workspaces`), each call resolves it into the per-workspace principal (role platform, the workspace's manager limit, its own counts and audit rows), and a workspace that does not exist or has AI off is refused with a structured error. The connection itself keeps working only while the person is a platform admin (re-read on every call) and only on the hub. The provider's user id is `encodeURIComponent("<workspaceId>.<userId>")`, with `*` for the every-workspace connection, so one connection per app per workspace can coexist.
 5. **Sign-in on the authorize page is always the 6-digit email code** (a browser session is not reused: better-auth's module imports `next/headers` and stays out of the worker graph). New table `ai_sign_in_codes`: the code is stored as SHA-256 of origin, row id and code; 10 minutes; 5 attempts; at most 5 codes per email per host per hour and 20 per IP per hour (counted and written in one statement, so requests sent together cannot all pass); a code is sent only to an existing account that may connect on this host (closed sign-up unchanged: no account is created here); everyone gets the same page and the same timing, because who may connect is looked up only after the page has answered (in the background with the email send), so a slow lookup (Wave 3's Shopify check for employees) never shows in the response time. The code email comes from the workspace's sender in its look, the code also in the subject (the local email fallback logs subjects).
@@ -4016,19 +4016,20 @@ git commit -m "feat: authorize pages for connecting AI apps (email, code, consen
 
 **Files:**
 - Create: `src/mcp/oauth/authorize.ts`
-- Test: `src/mcp/oauth/authorize.test.ts` (create; the OAuth library's helpers are stubbed)
+- Test: `src/mcp/oauth/authorize.test.ts` (create; the OAuth library's helpers are stubbed, except one test that runs the real ones against a stubbed Client ID Metadata Document naming a redirect off the AI app list)
 
 **Step 1: Write the failing test.** Create `src/mcp/oauth/authorize.test.ts`:
 
 ```ts
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { eq } from "drizzle-orm";
-import { AuthorizationError, type AuthRequest, type CompleteAuthorizationOptions } from "@cloudflare/workers-oauth-provider";
+import { AuthorizationError, getOAuthApi, type AuthRequest, type CompleteAuthorizationOptions } from "@cloudflare/workers-oauth-provider";
 import type { Db } from "@/db";
 import * as schema from "@/db/schema";
 import { providerUserId } from "../grants";
-import { ADMIN, HOST, HUB, MANAGER, NOW, ORIGIN, WS, setupMcp, testEnv } from "../test-helpers";
+import { ADMIN, HOST, HUB, MANAGER, NOW, ORIGIN, WS, memoryKv, setupMcp, testEnv } from "../test-helpers";
 import { authorize, type AuthorizeDeps, type AuthorizeHelpers } from "./authorize";
+import { providerOptions } from "./provider";
 
 const CALLBACK = "https://claude.ai/api/mcp/auth_callback";
 const QUERY = "?response_type=code&client_id=c&state=st";
@@ -4130,6 +4131,10 @@ async function signIn(h: ReturnType<typeof harness>, email = "casey.lin@example.
 }
 
 describe("the authorize page", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("starts with the email step in the workspace's look, never framed", async () => {
     const db = await setupMcp();
     const response = await harness(db, fakeHelpers().helpers).get();
@@ -4273,6 +4278,59 @@ describe("the authorize page", () => {
     expect(unsafe.headers.get("location")).toBeNull();
   });
 
+  // Anyone can publish a Client ID Metadata Document naming any https
+  // redirect URI, and the library validates a CIMD redirect only against
+  // that document. Its error redirects (no PKCE, a bad response_type or
+  // resource) are followed only to the AI apps' own callbacks, with the real
+  // library.
+  it("follows the library's error redirect only to an AI app's callback, never to one a metadata document names", async () => {
+    const evilClient = "https://evil.example.net/oauth/client.json";
+    const evilLanding = "https://evil.example.net/ordering-desk/sign-in";
+    const claudeClient = "https://claude.ai/oauth/mcp-client";
+    const documents: Record<string, string> = { [evilClient]: evilLanding, [claudeClient]: CALLBACK };
+    const fetched: string[] = [];
+    vi.stubGlobal("Cloudflare", { compatibilityFlags: { global_fetch_strictly_public: true } });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        fetched.push(url);
+        const redirect = documents[url];
+        if (!redirect) {
+          return new Response("Not found", { status: 404 });
+        }
+        return Response.json({
+          client_id: url,
+          client_name: "Ordering Desk Helper",
+          redirect_uris: [redirect],
+          token_endpoint_auth_method: "none",
+          grant_types: ["authorization_code"],
+          response_types: ["code"],
+        });
+      }),
+    );
+    const db = await setupMcp();
+    const env = testEnv({ OAUTH_KV: memoryKv() } as Partial<CloudflareEnv>);
+    const stub = { fetch: async () => new Response("unused") };
+    const helpers = getOAuthApi(providerOptions(ORIGIN, { api: stub, ui: stub }), env);
+    const deps: AuthorizeDeps = { db, env, helpers, now: () => NOW, background: () => undefined, sendCode: async () => undefined };
+    const link = (client: string, redirect: string, query: string) =>
+      `${ORIGIN}/oauth/authorize?client_id=${encodeURIComponent(client)}&redirect_uri=${encodeURIComponent(redirect)}&state=x&${query}`;
+    const pkce = `code_challenge=${"a".repeat(43)}&code_challenge_method=S256`;
+    // No PKCE from a public client, an unsupported response_type, another
+    // resource: each is found after the library checked the redirect URI.
+    for (const query of ["response_type=code", `response_type=token&${pkce}`, `response_type=code&${pkce}&resource=https://other.example.org/mcp`]) {
+      const bounced = await authorize(new Request(link(evilClient, evilLanding, query)), deps);
+      expect(bounced.status, query).toBe(400);
+      expect(bounced.headers.get("location")).toBeNull();
+      expect(await bounced.text()).toContain("This link cannot be used");
+    }
+    expect(fetched).toContain(evilClient);
+    const back = await authorize(new Request(link(claudeClient, CALLBACK, "response_type=code")), deps);
+    expect(back.status).toBe(302);
+    expect(back.headers.get("location")).toMatch(/^https:\/\/claude\.ai\/api\/mcp\/auth_callback\?error=/);
+  });
+
   it("on the hub, binds the workspace picked from the person's own", async () => {
     const db = await setupMcp();
     const { helpers, completed } = fakeHelpers({ redirectUri: CALLBACK }, undefined);
@@ -4328,7 +4386,8 @@ Expected: FAIL: `Failed to resolve import "./authorize"`.
 // Refused here: a request without an S256 PKCE challenge (whatever the
 // client type), apps outside client-policy.ts, workspaces whose AI switch
 // is off, and anyone without a live role. Errors redirect back to the app only
-// when the library validated the redirect URI. Logs carry ids only.
+// when the library validated the redirect URI and it is one of the AI apps'
+// callbacks (a metadata document can name any page). Logs carry ids only.
 // Relative imports only: custom-worker.ts bundles this.
 
 import { AuthorizationError, CimdFetchError, type AuthRequest, type ConsentDescription, type OAuthHelpers } from "@cloudflare/workers-oauth-provider";
@@ -4343,7 +4402,7 @@ import { SCOPE_OFFLINE, SCOPE_READ, SCOPE_WRITE } from "../constants";
 import { providerUserId, recordGrant } from "../grants";
 import { newId } from "../ids";
 import { connectableUser, connectableWorkspaces, connectsToEveryWorkspace, teamAiOn } from "./access";
-import { clientOf, consentAllowed } from "./client-policy";
+import { clientOf, consentAllowed, isAllowedRedirect } from "./client-policy";
 import { consumeSignIn, normalizeEmail, requestSignInCode, verifySignInCode } from "./codes";
 import { codePage, consentPage, emailPage, messagePage, pageHeaders } from "./pages";
 
@@ -4401,7 +4460,12 @@ export async function authorize(request: Request, deps: AuthorizeDeps): Promise<
     authRequest = await deps.helpers.parseAuthRequest(request);
     consent = await deps.helpers.describeConsent(authRequest);
   } catch (e) {
-    if (e instanceof AuthorizationError && e.redirectTo) {
+    // The library sets redirectTo once the redirect URI matches the client's
+    // registration, but anyone can publish a Client ID Metadata Document
+    // naming any https page, so its error redirect is followed only to the
+    // AI apps' own callbacks; anything else would make this host a
+    // redirector for phishing links.
+    if (e instanceof AuthorizationError && e.redirectTo && e.redirectUri && isAllowedRedirect(e.redirectUri)) {
       return Response.redirect(e.redirectTo, 302);
     }
     if (e instanceof AuthorizationError || e instanceof CimdFetchError) {

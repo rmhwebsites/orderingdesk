@@ -11,7 +11,8 @@
 // Refused here: a request without an S256 PKCE challenge (whatever the
 // client type), apps outside client-policy.ts, workspaces whose AI switch
 // is off, and anyone without a live role. Errors redirect back to the app only
-// when the library validated the redirect URI. Logs carry ids only.
+// when the library validated the redirect URI and it is one of the AI apps'
+// callbacks (a metadata document can name any page). Logs carry ids only.
 // Relative imports only: custom-worker.ts bundles this.
 
 import { AuthorizationError, CimdFetchError, type AuthRequest, type ConsentDescription, type OAuthHelpers } from "@cloudflare/workers-oauth-provider";
@@ -26,7 +27,7 @@ import { SCOPE_OFFLINE, SCOPE_READ, SCOPE_WRITE } from "../constants";
 import { providerUserId, recordGrant } from "../grants";
 import { newId } from "../ids";
 import { connectableUser, connectableWorkspaces, connectsToEveryWorkspace, teamAiOn } from "./access";
-import { clientOf, consentAllowed } from "./client-policy";
+import { clientOf, consentAllowed, isAllowedRedirect } from "./client-policy";
 import { consumeSignIn, normalizeEmail, requestSignInCode, verifySignInCode } from "./codes";
 import { codePage, consentPage, emailPage, messagePage, pageHeaders } from "./pages";
 
@@ -84,7 +85,12 @@ export async function authorize(request: Request, deps: AuthorizeDeps): Promise<
     authRequest = await deps.helpers.parseAuthRequest(request);
     consent = await deps.helpers.describeConsent(authRequest);
   } catch (e) {
-    if (e instanceof AuthorizationError && e.redirectTo) {
+    // The library sets redirectTo once the redirect URI matches the client's
+    // registration, but anyone can publish a Client ID Metadata Document
+    // naming any https page, so its error redirect is followed only to the
+    // AI apps' own callbacks; anything else would make this host a
+    // redirector for phishing links.
+    if (e instanceof AuthorizationError && e.redirectTo && e.redirectUri && isAllowedRedirect(e.redirectUri)) {
       return Response.redirect(e.redirectTo, 302);
     }
     if (e instanceof AuthorizationError || e instanceof CimdFetchError) {
