@@ -140,7 +140,9 @@ export function slugRouteForHost(resolution: HostResolution, slug: string): Slug
 const NOT_FOUND_PAGE =
   '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Not found</title></head><body style="font-family: sans-serif; padding: 48px 16px; text-align: center;"><h1 style="font-size: 20px;">Not found</h1></body></html>';
 
-export type GateResult = { kind: "pass"; request: Request } | { kind: "respond"; response: Response };
+export type GateResult =
+  | { kind: "pass"; request: Request; resolution: HostResolution | null }
+  | { kind: "respond"; response: Response };
 
 // Runs in custom-worker.ts before anything else:
 // - an unknown host (including a client domain that is not active yet) gets
@@ -151,10 +153,13 @@ export type GateResult = { kind: "pass"; request: Request } | { kind: "respond";
 //   to the host Cloudflare actually routed (the request URL's host), so
 //   the Host that pages, the auth origin and the health route read is
 //   always the routed one.
+// The resolution goes back to custom-worker.ts so the MCP routes need no
+// second lookup (null for HEALTH_PATH).
 export async function gateRequest(request: Request, env: HostEnv, db: Db): Promise<GateResult> {
   const url = new URL(request.url);
+  let resolution: HostResolution | null = null;
   if (url.pathname !== HEALTH_PATH) {
-    const resolution = await resolveHost(db, env, url.host);
+    resolution = await resolveHost(db, env, url.host);
     if (resolution.kind === "unknown") {
       return {
         kind: "respond",
@@ -167,9 +172,9 @@ export async function gateRequest(request: Request, env: HostEnv, db: Db): Promi
   }
   const forwarded = request.headers.get("x-forwarded-host");
   if (forwarded === null || forwarded === url.host) {
-    return { kind: "pass", request };
+    return { kind: "pass", request, resolution };
   }
   const headers = new Headers(request.headers);
   headers.set("x-forwarded-host", url.host);
-  return { kind: "pass", request: new Request(request, { headers }) };
+  return { kind: "pass", request: new Request(request, { headers }), resolution };
 }

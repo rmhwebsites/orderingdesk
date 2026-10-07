@@ -4,6 +4,7 @@
 import handler from "./.open-next/worker.js";
 export { WorkspaceRoom } from "./src/realtime/room";
 import { getDbFromEnv } from "./src/db";
+import { handleMcpRoute, isMcpRoute } from "./src/mcp/routes";
 import { LIVE_PATH, handleLiveRequest } from "./src/realtime/live";
 import { gateRequest } from "./src/server/host";
 import { runScheduledSync } from "./src/server/sync/cron";
@@ -19,11 +20,17 @@ export default {
       return gated.response;
     }
     // The realtime socket is answered here, before OpenNext: a Next.js route
-    // handler cannot reliably hand back a WebSocket upgrade. Everything else
-    // is the Next.js app.
-    if (new URL(request.url).pathname === LIVE_PATH) {
+    // handler cannot reliably hand back a WebSocket upgrade.
+    const pathname = new URL(request.url).pathname;
+    if (pathname === LIVE_PATH) {
       return handleLiveRequest(request, env, db);
     }
+    // The MCP server and its OAuth endpoints (src/mcp/routes.ts): answered
+    // here, before OpenNext, with the host the gate resolved.
+    if (isMcpRoute(pathname) && gated.resolution !== null) {
+      return handleMcpRoute(gated.request, env, ctx, gated.resolution);
+    }
+    // Everything else is the Next.js app.
     return handler.fetch(gated.request, env, ctx);
   },
   async scheduled(controller, env, ctx) {

@@ -170,6 +170,14 @@ describe("gateRequest (custom-worker, before OpenNext)", () => {
     expect(passed?.headers.get("x-forwarded-host")).toBe("orderingdesk.test");
   });
 
+  it("hands the custom worker the resolved host, and none for the health path", async () => {
+    const db = await setup();
+    const hub = await gateRequest(request("https://orderingdesk.test/mcp"), ENV, db);
+    expect(hub).toMatchObject({ kind: "pass", resolution: { kind: "hub" } });
+    const health = await gateRequest(request("https://anything.example.com/api/health"), ENV, db);
+    expect(health).toMatchObject({ kind: "pass", resolution: null });
+  });
+
   it("passes a request without x-forwarded-host through untouched", async () => {
     const db = await setup();
     const original = request("https://orders.impactrentals.store/");
