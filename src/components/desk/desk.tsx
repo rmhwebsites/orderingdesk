@@ -12,6 +12,7 @@ import {
   parseDeskQuery,
   querySortDefault,
   reloadLimit,
+  understoodChips,
   type DeskQuery,
   type DeskView,
   type ViewCounts,
@@ -142,12 +143,13 @@ function DraftsBanner({ settingsHref, onDismiss }: { settingsHref: string; onDis
 type LoadState = { status: "loading" } | { status: "error"; message: string } | { status: "ready" };
 
 // AI search for the question last submitted (design section 3): asking,
-// understood (the answer replaced the query) or a fallback (the keyword
-// results stand).
+// understood (the answer replaced the query; answer is that query and
+// fromView the view the person was on, null once they pick a view) or a
+// fallback (the keyword results stand).
 type AiState =
   | { status: "idle" }
   | { status: "asking"; q: string }
-  | { status: "understood"; q: string }
+  | { status: "understood"; q: string; answer: DeskQuery; fromView: DeskView | null }
   | { status: "fallback"; q: string; reason: string };
 const AI_IDLE: AiState = { status: "idle" };
 
@@ -498,9 +500,10 @@ export function Desk() {
             viewBeforeAi.current = fromView;
           }
           writtenQ.current = "";
-          updateDeskQuery(parseDeskQuery(new URLSearchParams(body.params)));
+          const answer = parseDeskQuery(new URLSearchParams(body.params));
+          updateDeskQuery(answer);
           setSearchReset((count) => count + 1);
-          setAi({ status: "understood", q });
+          setAi({ status: "understood", q, answer, fromView: viewBeforeAi.current });
         } else {
           setAi({ status: "fallback", q, reason: body?.fallback ?? "error" });
         }
@@ -1171,6 +1174,15 @@ export function Desk() {
     () => filterChips(deskQuery, { locations: vocab.locations, requesterName: vocab.requester?.name ?? null }),
     [deskQuery, vocab],
   );
+  // While an AI answer holds, the view, kind, status and sort it set are
+  // chips too (every part of the understanding is one), in front.
+  const activeChips = useMemo(
+    () => (ai.status === "understood" ? [...understoodChips(ai.answer, deskQuery, ai.fromView, statuses), ...searchChips] : searchChips),
+    [ai, deskQuery, statuses, searchChips],
+  );
+  // An answer holds while some part of it is still in force: removing or
+  // overriding its last part ends it, and the row goes.
+  const understood = ai.status === "understood" && activeChips.length > 0;
   const fallbackText = ai.status === "fallback" ? aiFallbackNotice(ai.reason) : null;
   const total = totalOrders(desk.statusCounts);
   const drawerSummary = drawerOrderId ? desk.orders.find((order) => order.id === drawerOrderId) : undefined;
@@ -1203,6 +1215,7 @@ export function Desk() {
             view={view}
             onView={(next) => {
               viewBeforeAi.current = null;
+              setAi((current) => (current.status === "understood" && current.fromView !== null ? { ...current, fromView: null } : current));
               updateDeskQuery({ view: next, status: null });
             }}
             viewCounts={viewCounts}
@@ -1239,8 +1252,8 @@ export function Desk() {
       {showToolbar ? (
         <>
           <FilterChips
-            chips={searchChips}
-            understood={ai.status === "understood"}
+            chips={activeChips}
+            understood={understood}
             onRemove={(patch) => updateDeskQuery(patch)}
             onClear={clearFilters}
           />

@@ -331,6 +331,46 @@ export function filterChips(query: DeskQuery, vocab: ChipVocabulary): FilterChip
   return chips;
 }
 
+const VIEW_CHIP_LABELS: Record<DeskView, string> = {
+  open: "Open cards",
+  approval: "Needs approval",
+  all: "All cards",
+  closed: "Closed cards",
+};
+const KIND_CHIP_LABELS: Record<Exclude<DeskKind, "all">, string> = { drafts: "Drafts only", orders: "Orders only", deleted: "Deleted drafts" };
+const SORT_CHIP_LABELS: Record<SortKey, string> = { newest: "Newest first", oldest: "Oldest first", waiting: "Waiting longest" };
+
+// The chips for the parts of an AI answer that have a control of their own
+// (view, kind, status, sort), each while it is still in force: every part
+// of the understanding is a chip (owner decision), so an answer that sets
+// no search filter still shows what it did, and a kind set while the kind
+// control is hidden is never an invisible filter. Removing one undoes only
+// that part: the view goes back to the one the person was on (fromView,
+// null once they picked a view themselves), the kind to every kind, the
+// status to none, the sort to the default.
+export function understoodChips(
+  answer: DeskQuery,
+  current: DeskQuery,
+  fromView: DeskView | null,
+  statuses: { key: string; label: string }[],
+): FilterChip[] {
+  const chips: FilterChip[] = [];
+  if (fromView !== null && answer.view !== fromView && current.view === answer.view) {
+    chips.push({ key: "view", label: VIEW_CHIP_LABELS[answer.view], patch: { view: fromView } });
+  }
+  if (answer.kind !== "all" && current.kind === answer.kind) {
+    chips.push({ key: "kind", label: KIND_CHIP_LABELS[answer.kind], patch: { kind: "all" } });
+  }
+  if (answer.status !== null && current.status === answer.status) {
+    const label = statuses.find((status) => status.key === answer.status)?.label ?? answer.status;
+    chips.push({ key: "status", label: `Status: ${label}`, patch: { status: null } });
+  }
+  if (answer.sort !== querySortDefault(answer) && current.sort === answer.sort) {
+    chips.push({ key: "sort", label: SORT_CHIP_LABELS[answer.sort], patch: { sort: querySortDefault(current) } });
+  }
+  return chips;
+}
+
 // The search box's text after the address's q changes. The box keeps its
 // own text (an input controlled by the router's transition drops typed keys
 // and moves the cursor), so it keeps that text while the address still

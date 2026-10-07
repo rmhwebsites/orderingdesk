@@ -21,8 +21,11 @@ export function aiFallbackNotice(reason: string): string | null {
   }
 }
 
-// The filters with no control of their own (src/lib/desk-query.ts
-// filterChips), each removable. understood: AI search set them just now.
+// The active filters as removable chips: the search filters, which have no
+// control of their own (src/lib/desk-query.ts filterChips), and while an AI
+// answer holds, the view, kind, status and sort it set (understoodChips).
+// understood: an AI answer is in force, so the row always shows, with
+// Clear all to go back to the view the person was on.
 export function FilterChips({
   chips,
   understood,
@@ -34,7 +37,7 @@ export function FilterChips({
   onRemove: (patch: Partial<DeskQuery>) => void;
   onClear: () => void;
 }) {
-  if (chips.length === 0) {
+  if (chips.length === 0 && !understood) {
     return null;
   }
   return (

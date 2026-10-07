@@ -17,6 +17,7 @@ import {
   querySortDefault,
   reloadLimit,
   searchBoxText,
+  understoodChips,
   type DeskQuery,
 } from "./desk-query";
 
@@ -291,5 +292,38 @@ describe("filterChips", () => {
     expect(filterChips({ ...EMPTY_QUERY, from: "2026-09-01", to: "2026-09-30" }, vocab).map((chip) => chip.label)).toEqual([
       "Sep 1, 2026 to Sep 30, 2026",
     ]);
+  });
+});
+
+describe("understoodChips", () => {
+  const statuses = [{ key: "on_hold", label: "On hold" }];
+
+  it("names the view, kind, status and sort an AI answer set, and each chip undoes only itself", () => {
+    const answer: DeskQuery = { ...EMPTY_QUERY, view: "closed", kind: "drafts", status: "on_hold", sort: "oldest" };
+    const chips = understoodChips(answer, answer, "open", statuses);
+    expect(chips.map((chip) => chip.label)).toEqual(["Closed cards", "Drafts only", "Status: On hold", "Oldest first"]);
+    expect(chips.map((chip) => chip.patch)).toEqual([{ view: "open" }, { kind: "all" }, { status: null }, { sort: "newest" }]);
+  });
+
+  it("gives a question that sets no search filter its chips (requests on hold, asked from the approval queue)", () => {
+    const answer: DeskQuery = { ...EMPTY_QUERY, view: "all", kind: "drafts", status: "on_hold" };
+    expect(filterChips(answer, { locations: [], requesterName: null })).toEqual([]);
+    const chips = understoodChips(answer, answer, "approval", statuses);
+    expect(chips.map((chip) => chip.label)).toEqual(["All cards", "Drafts only", "Status: On hold"]);
+    expect(chips[0].patch).toEqual({ view: "approval" });
+  });
+
+  it("leaves out what the answer did not change and what the person changed since", () => {
+    const answer: DeskQuery = { ...EMPTY_QUERY, view: "all", kind: "orders", status: "on_hold", sort: "waiting" };
+    // The answer kept the view the person was on, or they picked a view since.
+    expect(understoodChips(answer, answer, "all", statuses).map((chip) => chip.key)).toEqual(["kind", "status", "sort"]);
+    expect(understoodChips(answer, answer, null, statuses).map((chip) => chip.key)).toEqual(["kind", "status", "sort"]);
+    // The toolbar changed each part afterwards.
+    const changed: DeskQuery = { ...answer, view: "closed", kind: "all", status: "new", sort: "newest" };
+    expect(understoodChips(answer, changed, "open", statuses)).toEqual([]);
+    // A sort that is the view's own default is no part of the understanding.
+    expect(understoodChips({ ...EMPTY_QUERY, view: "all", kind: "orders" }, { ...EMPTY_QUERY, view: "all", kind: "orders" }, "all", statuses).map((chip) => chip.key)).toEqual(["kind"]);
+    // A status with no label left keeps its key.
+    expect(understoodChips({ ...EMPTY_QUERY, status: "gone" }, { ...EMPTY_QUERY, status: "gone" }, "open", statuses)[0].label).toBe("Status: gone");
   });
 });

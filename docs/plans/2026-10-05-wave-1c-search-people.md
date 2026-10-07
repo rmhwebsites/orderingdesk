@@ -5598,6 +5598,8 @@ git commit -m "feat: AI search route: shortcut, switch, daily cap, model, valida
 
 Typing still filters by words at once. Pressing Enter on a question of three words or more keeps those keyword results on screen, asks AI search, and swaps in the understood filter when it arrives, shown as removable chips. Any fallback keeps the keyword results; only the reasons a person can act on are explained. @design-taste-frontend
 
+**Review fix (Tasks 14 to 19 review):** the code below shows only the search filters as chips, so an answer that sets only a view, kind, status or sort ("requests on hold") showed no chips and no Clear all. As built, `understoodChips(answer, current, fromView, statuses)` in `src/lib/desk-query.ts` adds a chip for each of those parts while it is still in force ("All cards", "Drafts only", "Status: On hold", "Oldest first"); removing one goes back to the view the person was on, every kind, no status or the default sort. `FilterChips` always renders while `understood` is true, and the desk passes understood while some part of the answer is still in force.
+
 **Files:**
 - Create: `src/components/desk/filter-chips.tsx`
 - Modify: `src/components/desk/desk.tsx` (`onSearchSubmit` from Task 13; the render under the toolbar)
