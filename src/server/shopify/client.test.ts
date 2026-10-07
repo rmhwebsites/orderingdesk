@@ -18,9 +18,11 @@ import {
   APPROVE_DRAFT_MUTATION,
   CANCEL_ORDER_MUTATION,
   DRAFT_BEFORE_APPROVE_QUERY,
+  DRAFT_FOR_EDIT_QUERY,
   DRAFT_LINK_CHUNK,
   DRAFT_LINKS_QUERY,
   DRAFT_ORDER_QUERY,
+  EDIT_DRAFT_MUTATION,
   ORDER_CANCEL_STATE_QUERY,
   ORDER_LINE_ITEMS_QUERY,
   STATUS_TAGS_QUERY,
@@ -914,6 +916,16 @@ describe("draft order documents", () => {
     expect(DRAFT_LINK_CHUNK).toBe(100);
     expect(DRAFT_LINK_CHUNK * perId + 1).toBeLessThanOrEqual(QUERY_COST_BUDGET);
     expect(DRAFT_LINKS_QUERY).toContain("nodes(ids: $ids)");
+  });
+
+  it("keeps the edit read and the edit mutation under budget", () => {
+    // The draft, the purchasing entity (5 as this estimator prices the
+    // company fragment), the shipping address, and 50 line slots of 6 (the
+    // line, its variant, attributes, discount, price override and bundle
+    // components) with the connection and its pageInfo.
+    expect(requestedQueryCost(DRAFT_FOR_EDIT_QUERY)).toBe(1 + 5 + 1 + (3 + 50 * 6));
+    expect(requestedQueryCost(EDIT_DRAFT_MUTATION)).toBe(1 + (1 + 18 + 4 * 35) + 1);
+    expect(requestedQueryCost(DRAFT_FOR_EDIT_QUERY)).toBeLessThanOrEqual(QUERY_COST_BUDGET);
   });
 });
 

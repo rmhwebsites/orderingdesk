@@ -8,8 +8,9 @@
 // purpose: the cron path bundles this into the custom worker entrypoint.
 // Callers always get a typed result, never an exception.
 
+import { EDIT_LINES_MAX } from "../../lib/request-edit";
 import { DRAFT_FIELDS, orderFieldsFor, shopifyGraphql, type GraphqlResult } from "./client";
-import { normalizeLineItems, type NormalizedOrder } from "./normalize";
+import { companyLocationIdOf, normalizeLineItems, type NormalizedOrder } from "./normalize";
 
 export type AdminFailure =
   | { kind: "auth" }
@@ -435,6 +436,191 @@ export async function completeDraft(
   }
   const node = isRecord(payload) && isRecord(payload.draftOrder) ? payload.draftOrder : null;
   return { kind: "ok", node };
+}
+
+// ---------------------------------------------------------------------------
+// Edit a request (comprehensive design section 2)
+
+// Reading a line's variant id needs read_products (or write_products).
+export function productsEnabled(granted: readonly string[] | null | undefined): boolean {
+  return Array.isArray(granted) && (granted.includes("read_products") || granted.includes("write_products"));
+}
+
+// Read fresh before an edit and after a timeout: every line with its uuid,
+// variant and custom attributes exactly as Shopify has them (the stored
+// snapshot caps attribute values, so it is never the source of a save),
+// what would make a line impossible to keep exactly, the purchasing
+// company, contact and location, the recipient's name, and updatedAt (the
+// edit's concurrency token). 310 points by the client.test.ts estimator.
+export const DRAFT_FOR_EDIT_QUERY = `query DraftForEdit($id: ID!) {
+  draftOrder(id: $id) {
+    id
+    name
+    status
+    updatedAt
+    purchasingEntity {
+      __typename
+      ... on PurchasingCompany { company { id } contact { id } location { id name } }
+    }
+    shippingAddress { firstName lastName }
+    lineItems(first: ${EDIT_LINES_MAX}) {
+      nodes {
+        uuid
+        custom
+        quantity
+        title
+        sku
+        variantTitle
+        variant { id }
+        customAttributes { key value }
+        appliedDiscount { title }
+        priceOverride { amount }
+        components { uuid }
+      }
+      pageInfo { hasNextPage }
+    }
+  }
+}`;
+
+export type DraftForEditLine = {
+  uuid: string;
+  // The ProductVariant gid, or null (a custom line, or a deleted variant).
+  variantId: string | null;
+  quantity: number;
+  title: string;
+  variantTitle: string;
+  sku: string;
+  custom: boolean;
+  // Exactly as Shopify sent them; a null value reads as "".
+  attributes: { key: string; value: string }[];
+  // The line carries its own discount or a price override.
+  priced: boolean;
+  // The line is a bundle with components.
+  bundle: boolean;
+};
+
+export type DraftForEdit = {
+  name: string;
+  // Shopify's own value: OPEN, INVOICE_SENT or COMPLETED.
+  status: string;
+  updatedAt: string;
+  // Null for a customer's own (D2C) draft. Gids for the update, legacy ids
+  // for the locations table.
+  company: {
+    companyGid: string;
+    companyId: string;
+    contactGid: string | null;
+    locationGid: string;
+    locationId: string;
+    locationName: string;
+  } | null;
+  recipient: { firstName: string; lastName: string } | null;
+  lines: DraftForEditLine[];
+  // Shopify said there are no more lines than the ones read.
+  complete: boolean;
+};
+
+const COMPANY_GID = /^gid:\/\/shopify\/Company\/([1-9]\d{0,19})$/;
+
+function text(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function draftForEditOf(node: Record<string, unknown>): DraftForEdit {
+  const entity = isRecord(node.purchasingEntity) ? node.purchasingEntity : null;
+  const companyNode = entity && isRecord(entity.company) ? entity.company : null;
+  const contactNode = entity && isRecord(entity.contact) ? entity.contact : null;
+  const locationNode = entity && isRecord(entity.location) ? entity.location : null;
+  const companyGid = text(companyNode?.id);
+  const locationGid = text(locationNode?.id);
+  const companyId = companyGid.match(COMPANY_GID)?.[1] ?? null;
+  const locationId = companyLocationIdOf(locationGid);
+  const shipping = isRecord(node.shippingAddress) ? node.shippingAddress : null;
+  const connection = isRecord(node.lineItems) ? node.lineItems : {};
+  const nodes = Array.isArray(connection.nodes) ? connection.nodes.filter(isRecord) : [];
+  const pageInfo = isRecord(connection.pageInfo) ? connection.pageInfo : {};
+  return {
+    name: text(node.name),
+    status: text(node.status),
+    updatedAt: text(node.updatedAt),
+    company:
+      companyId && locationId
+        ? {
+            companyGid,
+            companyId,
+            contactGid: typeof contactNode?.id === "string" ? contactNode.id : null,
+            locationGid,
+            locationId,
+            locationName: text(locationNode?.name),
+          }
+        : null,
+    recipient: shipping ? { firstName: text(shipping.firstName), lastName: text(shipping.lastName) } : null,
+    lines: nodes
+      .filter((line) => typeof line.uuid === "string" && line.uuid.length > 0)
+      .map((line) => ({
+        uuid: line.uuid as string,
+        variantId: isRecord(line.variant) && typeof line.variant.id === "string" ? line.variant.id : null,
+        quantity: typeof line.quantity === "number" && Number.isInteger(line.quantity) ? line.quantity : 1,
+        title: text(line.title),
+        variantTitle: text(line.variantTitle),
+        sku: text(line.sku),
+        custom: line.custom === true,
+        attributes: Array.isArray(line.customAttributes)
+          ? line.customAttributes
+              .filter(isRecord)
+              .filter((attribute) => typeof attribute.key === "string")
+              .map((attribute) => ({ key: attribute.key as string, value: text(attribute.value) }))
+          : [],
+        priced: isRecord(line.appliedDiscount) || isRecord(line.priceOverride),
+        bundle: Array.isArray(line.components) && line.components.length > 0,
+      })),
+    complete: pageInfo.hasNextPage === false,
+  };
+}
+
+// The draft as Shopify has it now, or null when it no longer exists.
+export async function fetchDraftForEdit(
+  shopDomain: string,
+  token: string,
+  draftOrderGid: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ kind: "ok"; draft: DraftForEdit | null } | AdminFailure> {
+  const result = await shopifyGraphql(shopDomain, token, DRAFT_FOR_EDIT_QUERY, { id: draftOrderGid }, fetchImpl);
+  if (result.kind !== "ok") {
+    return failed(result);
+  }
+  return { kind: "ok", draft: isRecord(result.data.draftOrder) ? draftForEditOf(result.data.draftOrder) : null };
+}
+
+// draftOrderUpdate with the input the edit service builds (the full line
+// list, the purchasing entity, and a shipping address only for a new
+// location; never tags, note or cart attributes). The response carries the
+// draft in the sync's own selection, so the card is written at once.
+export const EDIT_DRAFT_MUTATION = `mutation EditDraft($id: ID!, $input: DraftOrderInput!) {
+  draftOrderUpdate(id: $id, input: $input) {
+    draftOrder {${DRAFT_FIELDS}
+    }
+    userErrors { field message }
+  }
+}`;
+
+export async function updateDraftOrder(
+  shopDomain: string,
+  token: string,
+  draftOrderGid: string,
+  input: Record<string, unknown>,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ kind: "ok"; node: Record<string, unknown> | null } | AdminFailure> {
+  const result = await shopifyGraphql(shopDomain, token, EDIT_DRAFT_MUTATION, { id: draftOrderGid, input }, fetchImpl);
+  if (result.kind !== "ok") {
+    return failed(result);
+  }
+  const payload = result.data.draftOrderUpdate;
+  const refused = userErrorsOf(payload);
+  if (refused) {
+    return { kind: "refused", detail: refused };
+  }
+  return { kind: "ok", node: isRecord(payload) && isRecord(payload.draftOrder) ? payload.draftOrder : null };
 }
 
 // ---------------------------------------------------------------------------
