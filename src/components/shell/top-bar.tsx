@@ -20,6 +20,7 @@ import { AccountMenu, type AccountSync } from "./account-menu";
 import { Bell } from "./bell";
 import { useWorkspace } from "./workspace-provider";
 import { WorkspaceBrandSlot } from "./workspace-brand-slot";
+import { WorkspaceNav } from "./workspace-nav";
 
 const LIVE_TEXT = {
   live: "Live updates on",
@@ -144,11 +145,12 @@ function WorkspaceAccount({ account }: { account: AccountView }) {
   return <AccountMenu account={account} settingsHref={`${workspace.basePath}/settings`} sync={syncItem} />;
 }
 
-// One 56px row at every width: the workspace (its name truncates first),
-// the sync chip from sm, the Sync button from lg, Needs approval for those
-// who approve (its label from lg), Settings from sm, the bell, and the
-// account menu last so its panel, right aligned to it, stays
-// on screen.
+// One 56px row at every width: the workspace (its name truncates first;
+// phones show its symbol only), Desk, People and Locations (icons only on
+// phones), the sync chip from sm, the Sync button from lg, Needs approval
+// for those who approve (its label from lg), Settings from sm, the bell,
+// and the account menu last so its panel, right aligned to it, stays on
+// screen.
 export function TopBar({ name, images, account }: { name: string; images: BrandImages; account: AccountView }) {
   const { workspace } = useWorkspace();
   return (
@@ -164,11 +166,15 @@ export function TopBar({ name, images, account }: { name: string; images: BrandI
           className="-m-1 flex min-w-0 flex-1 items-center gap-3 rounded-control p-1 lg:flex-initial"
         >
           <WorkspaceBrandSlot name={name} images={images} />
-          <span className="min-w-0">
+          {/* Phones keep the symbol only, so the workspace links fit the
+              row; the name stays for screen readers. */}
+          <span className="min-w-0 max-sm:sr-only">
             <span className="block truncate font-display text-[15px] font-semibold leading-tight text-ink">{name}</span>
             <span className="block text-xs leading-tight text-ink-2">{APP_NAME}</span>
           </span>
         </Link>
+
+        <WorkspaceNav />
 
         <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-2">
           <SyncChip />

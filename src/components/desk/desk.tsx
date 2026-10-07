@@ -616,8 +616,15 @@ export function Desk() {
           order: DrawerOrder;
           itemsTruncated: boolean;
           location?: ShipToLocation | null;
+          requesterId?: string | null;
         };
-        setDetail({ status: "ready", order: body.order, itemsTruncated: body.itemsTruncated, location: body.location ?? null });
+        setDetail({
+          status: "ready",
+          order: body.order,
+          itemsTruncated: body.itemsTruncated,
+          location: body.location ?? null,
+          requesterId: body.requesterId ?? null,
+        });
       } else if (detailResult.status === "fulfilled" && detailResult.value.status === 404) {
         setDetail({ status: "error", message: "Not found", missing: true });
       } else if (!quiet) {
@@ -1372,6 +1379,7 @@ export function Desk() {
                   closedKeys={closedKeys}
                   selection={{ selected: selection.selected, onToggle: toggleCard, onToggleAll: toggleAll }}
                   showPrices={showPrices}
+                  basePath={workspace.basePath}
                 />
               )}
             </div>
@@ -1429,6 +1437,7 @@ export function Desk() {
             onCreatePo={() => setPoModal({ orderId: drawerOrderId, po: null })}
             onEditPo={(po) => setPoModal({ orderId: drawerOrderId, po })}
             showPrices={showPrices}
+            basePath={workspace.basePath}
           />
         ) : null}
       </DrawerShell>

@@ -10,6 +10,7 @@ import { statusOptionsFor } from "@/lib/status-options";
 import type { OrderSummary } from "@/server/desk/read";
 import type { StatusView } from "@/server/desk/shapes";
 import { Chip, SelectBox } from "@/components/kit";
+import { RequesterName } from "@/components/lookup/requester-name";
 import { StatusSelect } from "./status-select";
 
 // The desk list (comprehensive desk design section 1): a table of one-line
@@ -44,6 +45,9 @@ export type ListProps = {
   // amber chip. The desktop rows have a Branch column in place of the total
   // (from 1280 px, see OrderTable) and always mark a card with a price.
   showPrices: boolean;
+  // Where the workspace's pages live ("" on its client host): a requester's
+  // name links to their page under it.
+  basePath: string;
 };
 
 function itemsLine(order: OrderSummary): string {
@@ -119,12 +123,12 @@ function KindMark({ order, cancelledKey }: { order: OrderSummary; cancelledKey: 
 
 // The cards always name the branch here; a table row names it only below
 // xl, where its Branch column is hidden.
-function CustomerLine({ order, branch }: { order: OrderSummary; branch: "always" | "below-xl" }) {
+function CustomerLine({ order, branch, basePath }: { order: OrderSummary; branch: "always" | "below-xl"; basePath: string }) {
   const line = requestLine(order, { withBranch: branch === "always" });
   const branchName = branch === "below-xl" ? branchText(order) : "";
   return (
     <span className="block truncate text-sm" title={order.email || undefined}>
-      <span className="font-medium text-ink">{order.customerName || "No customer name"}</span>
+      <RequesterName name={order.customerName} requesterId={order.requesterId} basePath={basePath} className="font-medium text-ink" />
       {line ? <span className="text-ink-2">{` · ${line}`}</span> : null}
       {branchName ? <span className="text-ink-2 xl:hidden">{` · ${branchName}`}</span> : null}
     </span>
@@ -275,6 +279,7 @@ export function OrderTable({
   ageRule,
   closedKeys,
   selection,
+  basePath,
 }: ListProps) {
   const cancelledKey = statuses.find((status) => status.shopifyLink === "cancelled")?.key;
   return (
@@ -344,7 +349,7 @@ export function OrderTable({
                   <DayText order={order} now={now} />
                 </td>
                 <td className={`px-3 ${flash}`}>
-                  <CustomerLine order={order} branch="below-xl" />
+                  <CustomerLine order={order} branch="below-xl" basePath={basePath} />
                 </td>
                 <td className={`px-3 ${flash}`}>
                   <span className="flex min-w-0 items-center gap-2">
@@ -390,6 +395,7 @@ export function OrderCards({
   closedKeys,
   selection,
   showPrices,
+  basePath,
 }: ListProps) {
   const cancelledKey = statuses.find((status) => status.shopifyLink === "cancelled")?.key;
   return (
@@ -425,7 +431,7 @@ export function OrderCards({
             </span>
           </div>
           <div className="mt-1">
-            <CustomerLine order={order} branch="always" />
+            <CustomerLine order={order} branch="always" basePath={basePath} />
           </div>
           <div className="mt-0.5">
             <ItemsLine order={order} />

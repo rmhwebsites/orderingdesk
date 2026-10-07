@@ -18,6 +18,7 @@ import { isPriced } from "@/lib/queue-settings";
 import type { RequestFields } from "@/lib/request-fields";
 import { AddressBlock } from "@/components/address-block";
 import { Chip, DetailRow, InlineMessage } from "@/components/kit";
+import { RequesterName } from "@/components/lookup/requester-name";
 import { CopyButton, Section } from "./drawer-kit";
 
 const NEW_TAB = " (opens in a new tab)";
@@ -268,16 +269,30 @@ export function RequestSection({
   fields,
   note,
   poNumber,
+  requesterId,
+  basePath,
 }: {
   customerName: string;
   email: string;
   fields: RequestFields;
   note: string;
   poNumber: string;
+  // people.id of who asked (order_search), or null: their name links to
+  // their page under basePath.
+  requesterId: string | null;
+  basePath: string;
 }) {
   return (
     <Section title="Request">
-      <p className="text-sm font-medium text-ink">{customerName || "No requester name"}</p>
+      <p className="text-sm font-medium text-ink">
+        <RequesterName
+          name={customerName}
+          requesterId={requesterId}
+          basePath={basePath}
+          fallback="No requester name"
+          className="text-sm font-medium text-ink"
+        />
+      </p>
       {email ? (
         <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-2">
           <span className="select-all break-all text-sm text-ink-2">{email}</span>

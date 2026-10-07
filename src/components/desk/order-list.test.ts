@@ -65,6 +65,7 @@ const base: ListProps = {
   closedKeys: new Set(),
   selection: null,
   showPrices: true,
+  basePath: "",
 };
 
 const render = (layout: "table" | "cards", overrides: Partial<ListProps> = {}) =>
@@ -123,6 +124,17 @@ describe("OrderList", () => {
     expect(orderCells).toHaveLength(2);
     for (const cell of orderCells) {
       expect(cell[1].split(" ")).toContain("overflow-hidden");
+    }
+  });
+});
+
+describe("OrderList requester names", () => {
+  it("link a known requester to their page in the table and on the cards, and leave the rest plain", () => {
+    const orders = [card("1008", { customerName: "Riley Oakes", requesterId: "p1" }), card("1009", { customerName: "Casey Lin" })];
+    for (const layout of ["table", "cards"] as const) {
+      const html = render(layout, { orders, basePath: "/w/impact" });
+      expect(html, layout).toMatch(/<a[^>]*href="\/w\/impact\/people\/p1"[^>]*>Riley Oakes<\/a>/);
+      expect(html, layout).toContain('<span class="font-medium text-ink">Casey Lin</span>');
     }
   });
 });

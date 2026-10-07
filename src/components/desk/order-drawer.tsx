@@ -32,6 +32,7 @@ import { APP_NAME } from "@/lib/brand";
 import type { PoView } from "@/server/po/service";
 import { PurchaseOrders } from "./po-history";
 import { Chip, Spinner } from "@/components/kit";
+import { RequesterName } from "@/components/lookup/requester-name";
 import { CopyButton, Section } from "./drawer-kit";
 import { ItemsSection, RequestSection, ShipToSection, type ShipToLocation } from "./request-parts";
 import { ReviewActions, ReviewSummary, type NextRequest } from "./review-panel";
@@ -58,7 +59,8 @@ export type DrawerOrder = {
 export type DrawerDetail =
   | { status: "loading" }
   | { status: "error"; message: string; missing: boolean }
-  | { status: "ready"; order: DrawerOrder; itemsTruncated: boolean; location: ShipToLocation | null };
+  // requesterId: people.id of who asked (the order route), or null.
+  | { status: "ready"; order: DrawerOrder; itemsTruncated: boolean; location: ShipToLocation | null; requesterId: string | null };
 
 export type MemberView = { userId: string; role: string; email: string | null; name: string | null };
 
@@ -437,6 +439,7 @@ export function OrderDrawerContent({
   onCreatePo,
   onEditPo,
   showPrices = true,
+  basePath,
 }: {
   labelId: string;
   orderId: string;
@@ -477,8 +480,13 @@ export function OrderDrawerContent({
   // Totals and the Paid chip (the workspace's Show prices setting); a card
   // with a price keeps its totals either way.
   showPrices?: boolean;
+  // Where the workspace's pages live ("" on its client host), for the
+  // requester's page.
+  basePath: string;
 }) {
   const order = detail.status === "ready" ? detail.order : null;
+  // Who asked: the order route's people id, else the list's.
+  const requesterId = (detail.status === "ready" ? detail.requesterId : null) ?? summary?.requesterId ?? null;
   const snapshot = order ? readSnapshot(order.shopify) : null;
   // The card's kind follows its Shopify order id (a request has none). Right
   // after an approval the snapshot can still be the draft for a moment.
@@ -715,10 +723,20 @@ export function OrderDrawerContent({
                 fields={fields}
                 note={showsDraft ? snapshot.note : (kept?.note ?? "")}
                 poNumber={showsDraft ? snapshot.poNumber : (kept?.poNumber ?? "")}
+                requesterId={requesterId}
+                basePath={basePath}
               />
             ) : (
               <Section title="Customer">
-                <p className="text-sm font-medium text-ink">{snapshot.customerName || "No customer name"}</p>
+                <p className="text-sm font-medium text-ink">
+                  <RequesterName
+                    name={snapshot.customerName}
+                    requesterId={requesterId}
+                    basePath={basePath}
+                    fallback="No customer name"
+                    className="text-sm font-medium text-ink"
+                  />
+                </p>
                 {snapshot.email ? (
                   <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-2">
                     <span className="select-all break-all text-sm text-ink-2">{snapshot.email}</span>

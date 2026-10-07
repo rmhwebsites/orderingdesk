@@ -20,7 +20,7 @@ const state = vi.hoisted(() => ({
 }));
 vi.mock("./workspace-provider", () => ({ useWorkspace: () => state.value }));
 vi.mock("@/components/toasts", () => ({ useToast: () => () => {} }));
-vi.mock("next/navigation", () => ({ useRouter: () => ({ replace() {}, refresh() {} }) }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ replace() {}, refresh() {} }), usePathname: () => "/" }));
 
 const { TopBar } = await import("./top-bar");
 
@@ -108,5 +108,18 @@ describe("TopBar Needs approval", () => {
     expect(html).toContain('aria-label="Needs approval, 3 waiting"');
     state.value = { ...state.value, role: "staff" };
     expect(render()).not.toContain("view=approval");
+  });
+});
+
+describe("TopBar navigation", () => {
+  it("shows Desk, People and Locations", () => {
+    const html = renderToStaticMarkup(createElement(TopBar, { name: "Impact", images: { logo: null, symbol: null }, account: ACCOUNT }));
+    expect(html).toContain('aria-label="Workspace"');
+    expect(html).toContain('href="/people"');
+    expect(html).toContain('href="/locations"');
+  });
+
+  it("keeps the workspace symbol only on phones, so the links fit the one row", () => {
+    expect(render()).toContain('<span class="min-w-0 max-sm:sr-only">');
   });
 });

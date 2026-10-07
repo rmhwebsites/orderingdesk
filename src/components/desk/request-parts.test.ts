@@ -52,6 +52,8 @@ describe("RequestSection", () => {
         },
         note: "",
         poNumber: "PO-77",
+        requesterId: null,
+        basePath: "",
       }),
     );
     expect(html).toContain("Jordan Vale");
@@ -59,6 +61,19 @@ describe("RequestSection", () => {
     expect(html).toContain("&lt;b&gt;Ship to Branch&lt;/b&gt;");
     expect(html).toContain("PO-77");
     expect(html).not.toContain(">Note<");
+  });
+
+  it("links the requester to their page when the search index knows them", () => {
+    const fields = { company: "", location: "", requestFor: "", branch: "", attributes: [] };
+    const linked = renderToStaticMarkup(
+      createElement(RequestSection, { customerName: "Jordan Vale", email: "", fields, note: "", poNumber: "", requesterId: "p7", basePath: "" }),
+    );
+    expect(linked).toMatch(/<a[^>]*href="\/people\/p7"[^>]*>Jordan Vale<\/a>/);
+    const nameless = renderToStaticMarkup(
+      createElement(RequestSection, { customerName: "", email: "", fields, note: "", poNumber: "", requesterId: null, basePath: "" }),
+    );
+    expect(nameless).toContain("No requester name");
+    expect(nameless).not.toContain("/people/");
   });
 });
 

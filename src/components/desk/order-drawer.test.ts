@@ -55,7 +55,13 @@ const noop = () => {};
 const none = async () => null;
 
 function render(
-  opts: { order?: DrawerOrder; timeline?: EventView[]; members?: MemberView[]; extra?: Record<string, unknown> } = {},
+  opts: {
+    order?: DrawerOrder;
+    timeline?: EventView[];
+    members?: MemberView[];
+    requesterId?: string | null;
+    extra?: Record<string, unknown>;
+  } = {},
 ) {
   return renderToStaticMarkup(
     createElement(
@@ -65,7 +71,7 @@ function render(
         labelId: "drawer-title",
         orderId: "d1",
         summary: undefined,
-        detail: { status: "ready", order: opts.order ?? draftCard(), itemsTruncated: false, location: null },
+        detail: { status: "ready", order: opts.order ?? draftCard(), itemsTruncated: false, location: null, requesterId: opts.requesterId ?? null },
         timeline: opts.timeline ?? [],
         timelineStatus: "ready",
         statuses: STATUSES,
@@ -86,6 +92,7 @@ function render(
         poRefreshKey: 0,
         onCreatePo: noop,
         onEditPo: noop,
+        basePath: "/w/impact",
         ...(opts.extra ?? {}),
       }),
     ),
@@ -186,5 +193,18 @@ describe("OrderDrawerContent", () => {
     const html = render({ order: draftCard({ statusKey: "new" }), extra: { role: "staff" } });
     expect(html.match(/<footer[^>]*>/)?.[0]).toContain("sm:hidden");
     expect(html).not.toContain(">Approve<");
+  });
+});
+
+describe("OrderDrawerContent requester", () => {
+  it("links the requester of a request and the customer of an order to their page", () => {
+    const request = render({ order: draftCard({ statusKey: "new", statusSetBy: null }), requesterId: "p1" });
+    expect(request).toMatch(/<a[^>]*href="\/w\/impact\/people\/p1"[^>]*>Jordan Vale<\/a>/);
+    const order = render({
+      order: draftCard({ id: "o1", shopifyOrderId: "5001", name: "#1001", shopify: snapshotOf(), statusKey: "new", statusSetBy: null, shopifyDraftId: null, draftName: null }),
+      requesterId: "p2",
+    });
+    expect(order).toMatch(/<a[^>]*href="\/w\/impact\/people\/p2"[^>]*>Riley Oakes<\/a>/);
+    expect(render({ order: draftCard({ statusKey: "new", statusSetBy: null }) })).not.toContain("/people/");
   });
 });
