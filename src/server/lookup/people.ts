@@ -4,7 +4,7 @@
 // Counts read the live statuses, like the desk; the card list is the desk's
 // own server search narrowed to the person.
 
-import { and, asc, count, desc, eq, gte, isNotNull, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, isNotNull, sql } from "drizzle-orm";
 import type { Db } from "@/db";
 import { locations, orderSearch, orders, people, statuses, workspaceSettings } from "@/db/schema";
 import { DEFAULT_TIME_ZONE, isTimeZone } from "@/lib/date-range";
@@ -12,7 +12,7 @@ import { EMPTY_QUERY } from "@/lib/desk-query";
 import { orderSummaryOf, type OrderSummary } from "@/server/desk/read";
 import { statusView, type StatusView } from "@/server/desk/shapes";
 import { normalizeSearchText } from "@/server/search/haystack";
-import { likePattern, searchOrders } from "@/server/search/query";
+import { searchOrders } from "@/server/search/query";
 import { itemTotals, ITEMS_WINDOW_MS, type ItemTotal } from "./items";
 
 export const PEOPLE_LIST_MAX = 200;
@@ -50,27 +50,19 @@ export type PersonListRow = {
   lastSeenAt: number;
 };
 
+// Case is folded in JS, on the stored name and email as on the typed words:
+// SQLite's lower() and LIKE fold ASCII letters only, so a stored "Óscar"
+// never matched a typed "óscar". A workspace has few people, so a search
+// reads them all, newest first, and filters here.
 export async function listPeople(db: Db, workspaceId: string, opts: { q?: string } = {}): Promise<{ people: PersonListRow[]; total: number }> {
   const words = normalizeSearchText(opts.q ?? "").split(" ").filter((word) => word.length > 0).slice(0, 4);
-  const where = and(
-    eq(people.workspaceId, workspaceId),
-    ...words.map(
-      (word) =>
-        or(
-          sql`lower(coalesce(${people.name}, '')) like ${likePattern(word)} escape '\\'`,
-          sql`coalesce(${people.email}, '') like ${likePattern(word)} escape '\\'`,
-        )!,
-    ),
-  );
-  const [rows, totals, counts] = await Promise.all([
+  const [rows, counts] = await Promise.all([
     db
       .select({ id: people.id, name: people.name, email: people.email, locationName: locations.name, lastSeenAt: people.lastSeenAt })
       .from(people)
       .leftJoin(locations, homeJoin)
-      .where(where)
-      .orderBy(desc(people.lastSeenAt), asc(people.id))
-      .limit(PEOPLE_LIST_MAX),
-    db.select({ total: count() }).from(people).where(where),
+      .where(eq(people.workspaceId, workspaceId))
+      .orderBy(desc(people.lastSeenAt), asc(people.id)),
     db
       .select({
         requesterId: orderSearch.requesterId,
@@ -83,10 +75,14 @@ export async function listPeople(db: Db, workspaceId: string, opts: { q?: string
       .where(and(eq(orderSearch.workspaceId, workspaceId), isNotNull(orderSearch.requesterId), notDeletedDraft))
       .groupBy(orderSearch.requesterId),
   ]);
+  const matches = rows.filter((row) => {
+    const text = normalizeSearchText(`${row.name ?? ""} ${row.email ?? ""}`);
+    return words.every((word) => text.includes(word));
+  });
   const byPerson = new Map(counts.map((row) => [row.requesterId, row]));
   return {
-    total: Number(totals[0]?.total ?? 0),
-    people: rows.map((row) => ({
+    total: matches.length,
+    people: matches.slice(0, PEOPLE_LIST_MAX).map((row) => ({
       id: row.id,
       name: displayName(row.name, row.email),
       email: row.email,

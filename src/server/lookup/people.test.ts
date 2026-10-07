@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import type { Db } from "@/db";
 import * as schema from "@/db/schema";
 import { indexOrders } from "@/server/search/index-orders";
-import { getPersonPage, listPeople } from "./people";
+import { getPersonPage, listPeople, PEOPLE_LIST_MAX } from "./people";
 import {
   draftSnapshotOf,
   openTestDb,
@@ -70,6 +70,39 @@ describe("listPeople", () => {
     expect((await listPeople(db, WS, { q: "RILEY" })).people.map((person) => person.name)).toEqual(["Riley Oakes"]);
     expect((await listPeople(db, WS, { q: "casey@" })).people.map((person) => person.name)).toEqual(["Casey Lin"]);
     expect((await listPeople(db, WS, { q: "nobody" })).people).toEqual([]);
+  });
+
+  it("finds a name with an uppercase accented letter however it is typed", async () => {
+    const db = await setup();
+    await seedOrder(db, WS, { id: "o_oscar", statusKey: "new", createdAt: NOW - DAY, shopify: snapshotOf({ customerId: "79", customerName: "Óscar Vale", email: "oscar@example.com" }) });
+    await indexOrders(db, WS, ["o_oscar"]);
+    for (const q of ["Óscar", "óscar", "ÓSCAR", "vale", "óscar vale"]) {
+      const found = await listPeople(db, WS, { q });
+      expect(found.people.map((person) => person.name), q).toEqual(["Óscar Vale"]);
+      expect(found.total, q).toBe(1);
+    }
+    expect((await listPeople(db, WS, { q: "óscar riley" })).people).toEqual([]);
+  });
+
+  it("lists at most PEOPLE_LIST_MAX people but counts every match", async () => {
+    const db = await setup();
+    const extra = Array.from({ length: PEOPLE_LIST_MAX + 5 }, (_, i) => ({
+      id: `p_extra_${i}`,
+      workspaceId: WS,
+      shopifyCustomerId: `9${i}`,
+      name: `Ávila Stone ${i}`,
+      email: `avila${i}@example.com`,
+      firstSeenAt: NOW - DAY,
+      lastSeenAt: NOW - i,
+    }));
+    for (let start = 0; start < extra.length; start += 20) {
+      await db.insert(schema.people).values(extra.slice(start, start + 20));
+    }
+    const found = await listPeople(db, WS, { q: "ávila" });
+    expect(found.total).toBe(PEOPLE_LIST_MAX + 5);
+    expect(found.people).toHaveLength(PEOPLE_LIST_MAX);
+    expect(found.people[0]?.name).toBe("Ávila Stone 0");
+    expect((await listPeople(db, WS)).total).toBe(PEOPLE_LIST_MAX + 7);
   });
 });
 
