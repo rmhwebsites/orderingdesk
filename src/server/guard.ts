@@ -1,15 +1,16 @@
 import { cache } from "react";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { headers } from "next/headers";
 import { NextResponse } from "next/server";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { getDb, type Db } from "@/db";
-import { orders, purchaseOrders, workspaceMembers, workspaces } from "@/db/schema";
+import { orders, purchaseOrders, workspaces } from "@/db/schema";
 import { roleAtLeast, type Role } from "@/lib/roles";
 import { isPlatformAdmin } from "./access";
 import { getAuth } from "./auth";
 import type { HostResolution } from "./host";
 import { requestHost } from "./request-host";
+import { workspaceRoleOf } from "./workspace-role";
 
 export { roleAtLeast, type Role };
 
@@ -104,33 +105,11 @@ export async function resolveWorkspaceRole(
   required: Role,
   knownToExist = false,
 ): Promise<Role> {
-  if (viewer.platformAdmin || viewer.platformAdminOnClientHost) {
-    const role: Role = viewer.platformAdmin ? "platform" : "manager";
-    if (!roleAtLeast(role, required)) {
-      throw notFound();
-    }
-    if (!knownToExist) {
-      const rows = await db
-        .select({ id: workspaces.id })
-        .from(workspaces)
-        .where(eq(workspaces.id, workspaceId))
-        .limit(1);
-      if (rows.length === 0) {
-        throw notFound();
-      }
-    }
-    return role;
-  }
-  const rows = await db
-    .select({ role: workspaceMembers.role })
-    .from(workspaceMembers)
-    .where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, viewer.userId)))
-    .limit(1);
-  const membership = rows[0];
-  if (!membership || !roleAtLeast(membership.role, required)) {
+  const role = await workspaceRoleOf(db, viewer, workspaceId, knownToExist);
+  if (!role || !roleAtLeast(role, required)) {
     throw notFound();
   }
-  return membership.role;
+  return role;
 }
 
 // Guard for workspace-scoped routes: 401 without a session, the host scope
