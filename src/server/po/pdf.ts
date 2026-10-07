@@ -21,6 +21,7 @@
 
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFImage, type PDFPage, type RGB } from "pdf-lib";
 import { contrastRatio, DEFAULT_ACCENT } from "@/lib/accent";
+import { addressBlockFromLines } from "@/lib/address";
 import { APP_NAME } from "@/lib/brand";
 import { formatDate } from "@/lib/format";
 import { centsToDecimal, costToCents, formatCents, lineTotalCents, subtotalCents, type PoLine } from "@/lib/po";
@@ -334,15 +335,22 @@ function drawParties(w: Writer, input: PoPdfInput): void {
   let right = top;
   w.text("Ship to", x, right, { bold: true, size: 9, color: palette.heading });
   right -= 16;
-  const shipTo = input.shipTo.map((line) => clean(fonts, line)).filter((line) => line.length > 0);
-  if (shipTo.length === 0) {
+  // The first line (the location, or the recipient) is the heading, as in
+  // every other place an address shows (src/lib/address.ts).
+  const block = addressBlockFromLines(input.shipTo.map((line) => clean(fonts, line)));
+  if (!block) {
     w.text("No ship-to address", x, right, { size: 10, color: palette.muted });
     right -= 13;
-  }
-  for (const [index, entry] of shipTo.entries()) {
-    for (const line of wrap(index === 0 ? fonts.bold : fonts.regular, entry, index === 0 ? 11 : 10, columnWidth)) {
-      w.text(line, x, right, { bold: index === 0, size: index === 0 ? 11 : 10 });
-      right -= index === 0 ? 14 : 13;
+  } else {
+    for (const line of wrap(fonts.bold, block.heading ?? "", 11, columnWidth)) {
+      w.text(line, x, right, { bold: true, size: 11 });
+      right -= 14;
+    }
+    for (const entry of block.lines) {
+      for (const line of wrap(fonts.regular, entry, 10, columnWidth)) {
+        w.text(line, x, right, { size: 10 });
+        right -= 13;
+      }
     }
   }
 

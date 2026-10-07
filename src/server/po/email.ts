@@ -4,6 +4,7 @@
 // Every interpolated value passes escapeHtml; the subject passes
 // sanitizeSubject.
 
+import { addressBlockFromLines } from "@/lib/address";
 import { formatDate } from "@/lib/format";
 import { formatCents, type PoLine } from "@/lib/po";
 import { escapeHtml, sanitizeSubject } from "@/server/email/escape";
@@ -44,7 +45,7 @@ function table(rows: Array<[string, string]>): string {
 export function vendorPoEmail(env: CloudflareEnv, workspace: MailWorkspace, po: VendorPoEmailInput): RenderedEmail {
   const units = po.lines.reduce((sum, line) => sum + line.quantity, 0);
   const total = formatCents(po.subtotalCents, po.currency);
-  const shipTo = po.shipTo.filter((line) => line.trim().length > 0);
+  const block = addressBlockFromLines(po.shipTo);
   const rows: Array<[string, string]> = [
     ["Purchase order", escapeHtml(po.poNumber)],
     ["Date", escapeHtml(formatDate(po.date, po.timeZone ?? "UTC"))],
@@ -52,8 +53,12 @@ export function vendorPoEmail(env: CloudflareEnv, workspace: MailWorkspace, po: 
     ["Items", escapeHtml(`${plural(po.lines.length, "line")}, ${plural(units, "unit")}`)],
     ["Total", escapeHtml(total)],
   ];
-  if (shipTo.length > 0) {
-    rows.push(["Ship to", shipTo.map(escapeHtml).join("<br>")]);
+  if (block) {
+    // The first line (the location, or the recipient) in bold, like the PDF.
+    rows.push([
+      "Ship to",
+      [`<strong>${escapeHtml(block.heading ?? "")}</strong>`, ...block.lines.map(escapeHtml)].join("<br>"),
+    ]);
   }
   const notes = po.notes?.trim() ?? "";
   const shownNotes = notes.length > NOTES_SHOWN ? `${notes.slice(0, NOTES_SHOWN)}... (the PDF has the full notes)` : notes;

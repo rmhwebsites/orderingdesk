@@ -28,6 +28,7 @@ import { createPortal } from "react-dom";
 import { PlusIcon } from "@phosphor-icons/react/Plus";
 import { TrashIcon } from "@phosphor-icons/react/Trash";
 import { XIcon } from "@phosphor-icons/react/X";
+import type { LocationAddress } from "@/lib/address";
 import { formatCents, type PoLine } from "@/lib/po";
 import { savePoDraft } from "@/lib/po-client";
 import { emptyLine, formFromOrder, formFromPo, formTotals, readForm, sameForm, type PoForm, type PoFormErrors, type PoFormLine } from "@/lib/po-form";
@@ -541,7 +542,10 @@ export function PoModal({
       if (!orderResponse.ok || !vendorsResponse.ok || !listResponse.ok || (linesResponse && !linesResponse.ok && linesResponse.status !== 502)) {
         throw new Error("load");
       }
-      const order = (await orderResponse.json()) as { order: { name: string; shopify: unknown } };
+      const order = (await orderResponse.json()) as {
+        order: { name: string; shopify: unknown };
+        location?: { name: string; address: LocationAddress | null } | null;
+      };
       const vendorList = (await vendorsResponse.json()) as { vendors: VendorView[] };
       const list = (await listResponse.json()) as { nextNumber: string | null };
       const snapshot = readSnapshot(order.order.shopify);
@@ -551,7 +555,7 @@ export function PoModal({
         lines = linesResponse.ok && Array.isArray(body?.lines) ? body.lines : null;
         setLinesProblem(lines ? null : (body?.error ?? "The order's full item list did not load."));
       }
-      const first = initialPo ? formFromPo(initialPo) : formFromOrder(snapshot, lines);
+      const first = initialPo ? formFromPo(initialPo) : formFromOrder(snapshot, lines, order.location ?? null);
       setVendors(vendorList.vendors);
       setForm(first);
       setBaseline(first);
@@ -912,7 +916,7 @@ export function PoModal({
               </div>
             </div>
 
-            <Field id="po-ship-to" label="Ship to" help="From the order. One line per row; printed on the purchase order." error={errors?.shipTo}>
+            <Field id="po-ship-to" label="Ship to" help="From the order: the location first. One line per row; printed on the purchase order." error={errors?.shipTo}>
               <textarea
                 id="po-ship-to"
                 rows={5}

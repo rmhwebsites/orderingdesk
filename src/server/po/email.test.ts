@@ -44,11 +44,17 @@ describe("vendorPoEmail", () => {
   it("summarizes the PO in the workspace's branded layout, with no button", () => {
     const email = vendorPoEmail(env, workspace(), po());
     expect(email.subject).toBe("Purchase order IMP-2026-0041 from IMPACT Rentals");
-    for (const expected of ["Hello Northline Supply,", "IMP-2026-0041", "Oct 4, 2026", "Order #1001", "2 lines, 5 units", "CA$35.00", "Riley Oakes<br>12 Harbour St", "Deliver before noon", "Reply to this email"]) {
+    for (const expected of ["Hello Northline Supply,", "IMP-2026-0041", "Oct 4, 2026", "Order #1001", "2 lines, 5 units", "CA$35.00", "<strong>Riley Oakes</strong><br>12 Harbour St", "Deliver before noon", "Reply to this email"]) {
       expect(email.html).toContain(expected);
     }
     expect(email.html).not.toContain("<a href");
     expect(email.text).toContain("The PDF is attached");
+  });
+
+  it("shows the ship-to's first line in bold, and keeps the plain text as it was", () => {
+    const email = vendorPoEmail(env, workspace(), po({ shipTo: ["Buford HQ", "100 Example Way"] }));
+    expect(email.html).toContain("<strong>Buford HQ</strong><br>100 Example Way");
+    expect(email.text).toContain("Ship to: Buford HQ\n100 Example Way");
   });
 
   // The vendor may read the plain-text part (a text-only client).

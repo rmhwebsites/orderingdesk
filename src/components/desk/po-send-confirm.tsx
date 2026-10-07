@@ -19,9 +19,11 @@
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { PaperPlaneTiltIcon } from "@phosphor-icons/react/PaperPlaneTilt";
+import { addressBlockFromLines } from "@/lib/address";
 import { costToCents, formatCents, lineTotalCents, type PoRecipients } from "@/lib/po";
 import { newRequestId, recipientSummary, sendPo } from "@/lib/po-client";
 import type { PoView } from "@/server/po/service";
+import { AddressBlock } from "@/components/address-block";
 import { InlineMessage } from "@/components/settings/kit";
 import { ui } from "@/components/ui";
 import { Spinner } from "@/components/kit";
@@ -105,14 +107,8 @@ function SendContent({ content, labelId }: { content: PendingContent; labelId: s
           <span className="text-ink-2">, {plural(content.lines.length, "line")}</span>
         </dd>
         <dt className="text-ink-2">Ship to</dt>
-        <dd className="break-words text-ink">
-          {content.shipTo.length > 0
-            ? content.shipTo.map((line, index) => (
-                <span key={index} className="block">
-                  {line}
-                </span>
-              ))
-            : "No ship-to address"}
+        <dd className="break-words">
+          <AddressBlock block={addressBlockFromLines(content.shipTo)} empty="No ship-to address" />
         </dd>
         {content.notes ? (
           <>

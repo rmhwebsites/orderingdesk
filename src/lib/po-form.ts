@@ -6,7 +6,7 @@
 
 import type { PoView } from "@/server/po/service";
 import type { OrderSnapshot } from "./order-snapshot";
-import { shippingLines } from "./order-snapshot";
+import { addressBlock, addressBlockLines, type LocationAddress } from "./address";
 import {
   costToCents,
   linesFromOrderItems,
@@ -61,14 +61,22 @@ function formLine(line: PoLine): PoFormLine {
 // lines: the full line list to start from (the po-lines route); omitted,
 // the snapshot's own items; null, it could not be read (the snapshot is
 // partial), so the form starts with one empty line and never with a partial
-// list.
-export function formFromOrder(snapshot: OrderSnapshot, given?: PoLine[] | null): PoForm {
+// list. location: the card's synced company location; the ship-to then
+// starts with its name (comprehensive design section 2).
+export function formFromOrder(
+  snapshot: OrderSnapshot,
+  given?: PoLine[] | null,
+  location?: { name: string; address: LocationAddress | null } | null,
+): PoForm {
   const source = given === undefined ? linesFromOrderItems(snapshot.items) : (given ?? []);
   const lines = source.map(formLine);
+  const shipTo = addressBlockLines(
+    addressBlock({ locationName: location?.name, locationAddress: location?.address ?? null, shipping: snapshot.shipping }),
+  );
   return {
     vendorId: "",
     lines: lines.length > 0 ? lines : [emptyLine()],
-    shipTo: snapshot.shipping ? shippingLines(snapshot.shipping).join("\n") : "",
+    shipTo: shipTo.join("\n"),
     notes: "",
   };
 }

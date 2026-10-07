@@ -40,6 +40,13 @@ describe("formFromOrder", () => {
     expect(unreadable.shipTo).toBe("Riley Oakes\n12 Harbour St\nHalifax NS B3H 1A1\nCanada");
   });
 
+  // Comprehensive design section 2: the ship-to starts with the company
+  // location's name, then the order's street lines.
+  it("starts the ship-to with the company location's name when the order has one", () => {
+    const prefilled = formFromOrder(snapshot, undefined, { name: "Buford HQ", address: null });
+    expect(prefilled.shipTo).toBe("Buford HQ\n12 Harbour St\nHalifax NS B3H 1A1\nCanada");
+  });
+
   it("starts with one empty line for an order without items", () => {
     const prefilled = formFromOrder(readSnapshot({ items: [] }));
     expect(prefilled.lines).toHaveLength(1);
