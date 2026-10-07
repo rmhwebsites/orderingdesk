@@ -109,6 +109,18 @@ describe("TopBar Needs approval", () => {
     state.value = { ...state.value, role: "staff" };
     expect(render()).not.toContain("view=approval");
   });
+
+  it("is a 40px icon below lg with its count on the corner, like the bell's, so a phone row with a sync problem keeps the workspace symbol clear", () => {
+    state.value = { ...state.value, role: "manager", needsApproval: 3 };
+    const html = render();
+    const tag = html.match(/<a[^>]*aria-label="Needs approval, 3 waiting"[^>]*>/)?.[0] ?? "";
+    const link = classOf(tag, /class="([^"]*)"/).split(" ");
+    expect(link).toEqual(expect.arrayContaining(["relative", "h-10", "max-lg:w-10", "max-lg:px-0"]));
+    expect(link).not.toContain("max-lg:px-2.5");
+    const count = classOf(html, /aria-label="Needs approval, 3 waiting"[^>]*>[^]*?<span aria-hidden="true" class="([^"]*)">3<\/span>/).split(" ");
+    expect(count).toEqual(expect.arrayContaining(["max-lg:absolute", "max-lg:right-0", "max-lg:top-0", "max-lg:ring-2", "max-lg:ring-surface"]));
+    expect(count.filter((name) => name === "absolute" || name === "ring-2")).toEqual([]);
+  });
 });
 
 describe("TopBar navigation", () => {

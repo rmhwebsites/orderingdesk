@@ -105,6 +105,9 @@ function SyncButton() {
 }
 
 // Managers and platform admins: the approval queue, with how many wait.
+// Below lg a 40px icon with the count on its corner, like the bell's: inline
+// it was 66px, and a phone row with a sync problem chip ran 25px over and
+// slid the workspace symbol under Desk.
 function ApprovalLink() {
   const { workspace, role, needsApproval } = useWorkspace();
   if (!roleAtLeast(role, "manager")) {
@@ -116,7 +119,7 @@ function ApprovalLink() {
     <Link
       href={href}
       aria-label={count > 0 ? `Needs approval, ${count} waiting` : "Needs approval"}
-      className={`${ui.buttonQuiet} h-10 max-lg:px-2.5`}
+      className={`${ui.buttonQuiet} relative h-10 max-lg:w-10 max-lg:px-0`}
     >
       <ClipboardTextIcon size={18} aria-hidden />
       <span aria-hidden className="max-lg:hidden">
@@ -125,7 +128,7 @@ function ApprovalLink() {
       {count > 0 ? (
         <span
           aria-hidden
-          className="grid h-5 min-w-5 place-items-center rounded-control bg-primary px-1 text-xs font-semibold tabular-nums text-primary-ink"
+          className="grid h-5 min-w-5 place-items-center rounded-control bg-primary px-1 text-xs font-semibold tabular-nums text-primary-ink max-lg:absolute max-lg:right-0 max-lg:top-0 max-lg:ring-2 max-lg:ring-surface"
         >
           {count > 99 ? "99+" : count}
         </span>
