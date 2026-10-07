@@ -1939,3 +1939,290 @@ request, never a real employee's first.
   permission check refused a press that sends a Shopify write, even to the
   unreachable sample store) and the 400 ms Save guard; both are covered by
   the route, service and confirmArmed tests.
+
+## STATE UPDATE, 2026-10-07 Wave 1c search, AI search, people and locations (supersedes above)
+
+- Branch build/m1-core on top of 1b28eba (Wave 1b's state update). Commits
+  e993294 through 3db20cc (35), plus this docs commit, built batch by batch
+  from docs/plans/2026-10-05-wave-1c-search-people.md, each batch reviewed
+  for spec compliance and then code quality. NOT pushed, NOT deployed.
+  Gates at the end: 2048 tests in 198 files, `npx tsc --noEmit
+  --incremental false` clean, `npm run build` clean (the new routes
+  /w/[slug]/people, /w/[slug]/people/[id], /w/[slug]/locations,
+  /w/[slug]/locations/[id], /people, /people/[id], /locations,
+  /locations/[id] and /api/workspaces/[id]/search/ai all dynamic). No new
+  dependency (15 rolldown bindings in package-lock.json, unchanged).
+- Commits: e993294 migration 0013; 6fcc4f8 snapshots keep the requester's
+  customer id and company contact; cce0873, ce5f978 the two Wave 1b final
+  review fixes (below); 82c5ef8, b56b0d8 the haystack and indexOrders;
+  4fd3c9a, 08659f1 every writer keeps the index current; a61e745, f5299ce,
+  a7e6ab1 the requester read from Shopify, the cron's search tick and its
+  rolling verify pass; b3eae46, 8cde99c, 3ab5fc2, 81181e2, d91f817,
+  d725f5a dates in the workspace time zone, the desk query and its chips,
+  the server search with keyset pages, the desk payload and the URL driven
+  desk, the search sort and the AI view contract; 2d028b2, 9a194de,
+  3731380, 47d0869, b62dd08, c0f6df5, 07a4133, c710988, 9f4358e, 15655f2,
+  b05a4e0 the Workers AI binding, the filter schema and validation, the
+  vocabulary and daily caps, the AI route, AI search in the search box,
+  Settings > Search and their review fixes; 5031014, 3635169, b394708,
+  68b17b8, 9b23552, 34d6d1c the people and location read models and pages,
+  the Desk / People / Locations top bar, requester links and their review
+  fixes; 3db20cc final verification fix (below).
+- NEW MIGRATION 0013 (drizzle/0013_search_people.sql), additive, no data
+  step: `order_search` (one row per card: lowercased haystack plus kind,
+  status_key, closed, location_id, requester_id, created_at,
+  status_set_at; indexes on workspace with closed and created_at, status,
+  location, requester), `people` (unique on workspace and Shopify customer
+  id; name, email, company contact, location, first and last seen),
+  `ai_usage` (workspace, principal, UTC day, kind, count; primary key on
+  the first four), and four `workspace_settings` columns: `time_zone`
+  (default America/New_York), `ai_search` (default 1), `search_indexed_at`
+  (null until the first full pass) and `search_backfill_cursor`. The sync
+  test pin and the schema drift test are at 0013. No new secret; one new
+  binding, `"ai": { "binding": "AI" }` in wrangler.jsonc (no build field).
+- Proven on production-shaped data (newest backup,
+  orderingdesk-before-0012-2026-10-07.sql, at 0011, 45 data rows, in a
+  throwaway local D1 under the scratchpad with --persist-to, never
+  --remote): 0000 to 0011, the rows (foreign keys deferred to commit, as
+  the export lists tables by name), then 0012 and 0013 through `wrangler
+  d1 migrations apply --local`. Every table keeps its rows except statuses
+  8 to 9 (0012's Cancelled: slate, sort 8, closed, link cancelled); the 8
+  old status rows, orders (the eleven pre-0010 columns and every older
+  column), events, purchase orders, store_connections and
+  workspace_settings (old columns) are identical by digest; orders gain
+  location_id, store_connections locations_synced_at, workspace_settings
+  the four columns (America/New_York, 1, null, null); locations,
+  order_search, people and ai_usage exist and are empty with their
+  indexes; foreign_key_check is empty and integrity_check ok. The cron's
+  search tick then ran on the same file (better-sqlite3, a wrong
+  ENCRYPTION_KEY and a fetch that throws, so nothing could reach Shopify):
+  one tick indexed all 12 cards and stamped search_indexed_at with the
+  cursor cleared; every search row's status, closed flag, kind and date
+  equal the live rows; the All view counts the 12 visible cards (Open 12,
+  Closed 0); every card is found by its name with words typed while Open
+  is picked; no fetch was made, and requesters stay unlinked (0 people)
+  without the store, as expected (production fetches them).
+- What shipped:
+  - Search index: every snapshot write (sync, webhooks, history import,
+    draft sync), status change, approval, cancel, edit, PO number, closed
+    flag change and location rename rewrites the card's `order_search`
+    row and upserts its requester into `people` (an index failure is
+    logged and never fails the write). The desk reads
+    its filters (view, status, kind, location, dates, sort) from the live
+    `orders` and `statuses` rows and only its words from the haystack and
+    its person filter from `requester_id`, so a card lists correctly the
+    moment it is written.
+  - The cron (every 10 minutes, last in each workspace's turn, for
+    workspaces whose store connection is not disabled): the one-time
+    backfill in batches of 200 oldest first (cursor
+    `"<createdAt>~<orderId>"`), stamping `search_indexed_at` when a batch
+    comes back short; then a repair sweep (missing rows, filter columns
+    that differ from `orders`, orphans) and a rolling verify pass of 50
+    cards a tick that rewrites a haystack or requester a writer missed.
+    `ai_usage` rows older than 35 days are pruned.
+  - Requester backfill: cards stored before this wave carry no customer
+    id, so the backfill reads their customer and company contact from
+    Shopify (`REQUESTER_IDS_QUERY`, one `nodes(ids:)` read per 50 cards;
+    needs `read_companies` for the contact) and links people from that; a
+    later re-index keeps the link (coalesce). A store that cannot be read
+    logs a `requesters` line and the cards are indexed without a
+    requester; a transient Shopify answer skips the tick (retried next
+    tick).
+  - Snapshot churn (Task 2): snapshots now keep `customerId` and the
+    draft's `contactId`. A stored snapshot without them differs from a
+    fresh normalization, so the first time Shopify reports such an order
+    or draft updated, the sync rewrites its snapshot once (an ordinary
+    update; no status rule fires on these keys). Cards Shopify never
+    touches again keep the old snapshot; the requester backfill covers
+    them. The orders page query stays at 798 of the 800 budget (the
+    customer id is a free scalar); the drafts page goes from 639 to 643
+    and a single draft read gains 1 (the company contact); both documents
+    validated against the Shopify Admin schema.
+  - Desk search: one server query over all history driven by the URL
+    (parameterized LIKE per word, every word must match, 8 words at most;
+    keyset pages of 200 with "Show older cards", no 1,000 card cap). URL
+    params: view, status, kind, q, sort, location (comma list of Shopify
+    location ids), requester (a people id), person, item, pz, words,
+    number, date (today, yesterday, this_week, last_week, this_month,
+    last_month, last_7_days, last_30_days), from and to (YYYY-MM-DD),
+    older and newer (days in the current status, "Waiting over n days");
+    cursor and limit for the API. Every filter without its own control is
+    a removable chip with Clear all. Dates are computed on the server in
+    the workspace time zone; weeks start on Monday. A query's default sort
+    follows the view its list really covers (a search started from the
+    approval queue lists newest first). While `search_indexed_at` is null
+    a typed search shows "Search is still indexing older cards".
+  - AI search: a question of three or more words that is not an order
+    number goes, on Enter, to POST /api/workspaces/[id]/search/ai
+    (members, staff and up; body {q}, 200 characters at most). The desk
+    shows keyword results at once and swaps in the understood filter when
+    it arrives ("Understood as" chips for every part, each removable,
+    Clear all back to the view the person was on); an answer that lands
+    after the person changed the query is dropped. Model
+    `AI_SEARCH_MODEL = "@cf/zai-org/glm-4.7-flash"` (granite-4.0-h-micro
+    is the A/B candidate behind the constant), strict `json_schema`
+    response format, thinking off, temperature 0, max_completion_tokens
+    200, 2.5 s deadline (signal plus a race), rejectIfBusy, tag `search`.
+    The model sees only the question, today's date and the vocabulary
+    staff control (status labels, location names, item titles); never
+    notes, personalization, cart attributes or requester details. Its
+    answer is validated in code (unknown keys, statuses and locations
+    dropped; "any", "none" and null read as empty; a status kept only when
+    the question names its label; one status at most). Caps in D1: 100
+    questions per person and 2,000 per workspace per UTC day. Fallback
+    reasons: shortcut, off, limit, timeout, busy, invalid, error; keyword
+    results stand and the desk says why (limit, invalid, or "did not
+    answer in time" for timeout, busy and error). `[search]` log lines
+    carry ids, the outcome and milliseconds, never the question.
+  - Settings > Search (managers and platform admins; staff do not see
+    it): the workspace time zone and the AI search switch (off: keyword
+    search only, no AI call).
+  - People and Locations: `/w/[slug]/people`, `/w/[slug]/people/[id]`,
+    `/w/[slug]/locations`, `/w/[slug]/locations/[id]` on the hub and
+    `/people`, `/people/[id]`, `/locations`, `/locations/[id]` on the
+    client host, team members only (staff and up), each page calling the
+    slug guard itself. People list (200, name or email filter, accents
+    and case folded in JS), a person page (open, approved, rejected and
+    cancelled counts, items and sizes over 12 months, the newest 100
+    cards, "See all on the desk" to `?requester=<id>&view=all`), the
+    locations list and a location page (address, open cards up to 100,
+    every order up to 50, top items over 12 months, who ordered). Every
+    card opens its drawer on the desk. An order Shopify cancelled outside
+    the Cancelled status counts as cancelled and is marked like the desk.
+  - Top bar: Desk, People, Locations with the current one marked (icons
+    only below xl, 40px targets, one 56px row at every width); every
+    requester name in a desk row, a phone card and the drawer links to
+    their page without opening the row.
+- Owner decisions (2026-10-07, they win over the plan):
+  - Plain words (`q`) search ALL cards, open and closed, over all history,
+    whatever view is selected; clearing them returns to the view the
+    person was on (Open by default). This replaced Wave 1a's "looks in
+    this view only / Search all cards" empty state (f94ad82): the button
+    is gone and the empty state says "Search looks through every card,
+    open and closed." Contract: `q` holds only words a person typed; an
+    AI answer never writes it (its leftover text goes to `words`, which
+    stays inside the chosen view, chip "Words: ...").
+  - AI search applies the filter it understood, its own state and view,
+    shown as removable chips.
+  - Weeks start on Monday.
+  - Employees never see these pages; only team members (staff and up)
+    do. Employees reach any of this through AI only, in later waves.
+  - The two Wave 1b final review fixes, test-first in the first batch:
+    a Shopify "Ordering Desk: <status>" tag never moves a card out of the
+    status linked to `cancelled` (only Shopify un-cancelling, which does
+    not happen, or a manager in the app can) (cce0873); the cancel
+    reason staff note is cut to 255 characters by code points
+    (Array.from), never leaving a lone surrogate (ce5f978).
+- Final verification fix (3db20cc): at 375 px a manager's top bar with a
+  sync problem chip ran 25 px over, so the workspace symbol slid under the
+  Desk link. Below lg, Needs approval is now a 40 px icon with its count
+  on the corner like the bell's (it was 66 px inline); from lg it keeps
+  its label and inline count. Measured after: symbol ends at 48 px, Desk
+  starts at 57 px, the last control ends at 359 px, no sideways scroll.
+- Deploy order (operator, after review):
+  1. At the final commit the three gates are green (above).
+  2. Backup and bookmark: `npx wrangler d1 export orderingdesk --remote
+     --output ../backups/orderingdesk-before-0013-<date>.sql` and record a
+     time-travel bookmark (`npx wrangler d1 time-travel info
+     orderingdesk`).
+  3. Migrate remotely FIRST: `npm run db:migrate:remote`. It applies 0013,
+     and 0012 too if Wave 1b is not live yet (then also follow Wave 1b's
+     steps 4 to 6 above: Refresh connection once). Code from this wave
+     reads `time_zone`, `ai_search` and `search_indexed_at` on every desk
+     load and the sync writes `order_search` and `people`, so code
+     deployed before 0013 breaks the desk and every sync.
+  4. THEN deploy: `npm run deploy`. No new secret; the `AI` binding needs
+     only Workers AI on the account (Workers Paid is active). Never add a
+     `build` field to wrangler.jsonc.
+  5. Watch `npx wrangler tail`: `[search]` lines with `backfilled` counts
+     and `"finished":true` per workspace (IMPACT's few dozen cards finish
+     in the first tick), a `requesters` line only if the store could not
+     be read, and no `[search]` error lines. Then read-only:
+     `npx wrangler d1 execute orderingdesk --remote --command "SELECT
+     workspace_id, search_indexed_at FROM workspace_settings"` shows every
+     workspace stamped, and `SELECT count(*) FROM people` is above zero.
+  6. Pages loaded before the deploy lack search, chips and the new top
+     bar: reload once.
+  7. Rollback: AI search alone in Settings > Search (keyword search keeps
+     working). The whole release: `npx wrangler rollback`; 0013 is
+     additive, so older code keeps working with it applied. Use the
+     time-travel bookmark only for damaged data.
+- Live checks with Ryan after the deploy (invented names in anything
+  written down):
+  - [ ] About 50 questions (the owner's examples and variations): measure
+    latency against the 2.5 s deadline and watch `[search]` outcomes (`ok`
+    versus `invalid`, `timeout`, `busy`). If poor, turn AI search off per
+    workspace and try granite-4.0-h-micro behind `AI_SEARCH_MODEL` in a
+    follow-up. Usage shows in the Cloudflare dashboard under Workers AI
+    (tag `search`); the 10,000 free Neurons a day are shared by every
+    project on the account.
+  - [ ] Words typed while Open is picked find a delivered or cancelled
+    card; clearing them returns to Open.
+  - [ ] A person page and a location page for real requesters and
+    branches; "See all on the desk" lands on the filtered desk.
+  - [ ] Settings > Search: time zone and AI switch save; a staff member
+    does not see the section.
+- Known limits:
+  - Workers AI on the live service is not measured yet: latency under
+    2.5 s, how reliably glm-4.7-flash honors the strict schema with
+    thinking off at volume, and whether `max_completion_tokens` is
+    honored (versus `max_tokens`). A few questions through the local
+    platform proxy on 2026-10-07 came back in the schema's shape but
+    filled empty fields with "any" and picked statuses nobody named; both
+    are handled in code (07a4133).
+  - `next dev` cannot run AI search: the local platform proxy cannot carry
+    the AbortSignal, so every question falls back with `error` in about 2
+    ms and the desk says "did not answer in time" (keyword results
+    stand). Production's binding takes the signal.
+  - Status labels are not in the haystack: a keyword search for "on hold"
+    finds nothing (AI search maps it to the status, the status strip
+    filters it).
+  - The search tick runs only for workspaces whose store connection is
+    not disabled. Two writers indexing the same card at the same instant
+    can leave its haystack one write behind until the rolling verify pass
+    reaches it (50 cards a tick).
+  - The requester backfill needs `read_companies` for the company contact
+    (IMPACT has it). A store without a companies scope gets a fatal answer
+    for every chunk; those old cards are indexed without a requester, and
+    new cards still link theirs from the snapshot.
+  - AI search picks at most one status, and keeps it only when the
+    question names its label.
+  - The kind counts (Drafts, Deleted) are over every card, not per view.
+  - An explicit sort=newest picked in the approval queue reads as the
+    search default once words are typed (the URL cannot tell them apart),
+    so clearing the words goes back to waiting longest first.
+  - Card lists on the people and location pages leave out requests whose
+    draft Shopify deleted, like the desk's All; a person whose only card
+    is such a request shows "0 open, 0 in all". The person page lists the
+    newest 100 cards (the desk link shows the rest).
+  - While typed words search every card, the view control keeps showing
+    the view the person was on (the phone's select reads "Open (28)"
+    beside closed results); the empty state explains it.
+  - Requester names are text-height links (about 17 px), under the 40 px
+    target rule; a missed tap opens the row's drawer, which is harmless.
+  - For a moment while a new query loads, the dimmed previous empty state
+    can show the new filter's wording.
+- Local verification (screenshots under the scratchpad's wave-1c/ui,
+  `next dev` on port 3100 with the local sample data, 1440 by 900 and 375
+  by 812, light and dark, as platform admin and as staff, on the hub and
+  the client host impact.localhost): the "still indexing" note on a typed
+  search before the backfill; then the sample data indexed by the search
+  tick (35 cards; requesters linked with invented sample customer ids as
+  the stand-in for the Shopify read the sample store cannot answer);
+  words typed on Open find a delivered card; `#1024` makes no AI call;
+  a question shows keyword results first, then (with a browser stand-in
+  for the AI answer, as next dev cannot call Workers AI) the "Understood
+  as" chips for view, sort, location, date and words, one chip removed,
+  Clear all back to Open; the drawer's requester link opens the person
+  page; a person page and its "See all on the desk" chip; the people and
+  locations lists; a location page whose card opens its drawer on the
+  desk; Settings > Search saving the time zone and the AI switch (put
+  back to America/New_York and on), and no Search section for staff; the
+  client host's /people, /people/[id] and /locations/[id] with host-local
+  links; no sideways scroll at 375 px on every screen. Contrast, all AA:
+  chip text 15.3 (light) and 14.0 (dark), the chip's remove icon 8.4 and
+  8.6, Clear all 8.8 (light), `text-ink-2` 9.6 and 9.6, "Understood as"
+  10.3 (dark). Not checked live: real Workers AI latency and strict
+  schema behavior, the requester fetch against the real store, the
+  backfill on production, and "Show older cards" in the dev server (35
+  sample cards; covered by tests and the Task 13 harness, 200 to 300).
