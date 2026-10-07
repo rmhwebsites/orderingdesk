@@ -336,6 +336,21 @@ describe("cancellations from Shopify", () => {
     expect(decide(unfulfilled(), unfulfilled("Ordering Desk: Cancelled"), "new", none, WITH_CANCELLED)).toBeNull();
   });
 
+  // Wave 1b final review: only a manager in the app moves a card out of
+  // the cancelled status (Shopify never un-cancels an order).
+  it("never moves a card out of the cancelled status by a tag or a fulfillment", () => {
+    expect(decide(cancelled(), cancelled("Ordering Desk: Approved"), "cancelled", none, WITH_CANCELLED)).toBeNull();
+    expect(decide(unfulfilled(), unfulfilled("Ordering Desk: Processing"), "cancelled", none, WITH_CANCELLED)).toBeNull();
+    const first: StatusRow[] = [{ key: "cancelled", label: "Cancelled", sort: 0, shopifyLink: "cancelled" }, ...STATUSES];
+    expect(decide(unfulfilled(), fulfilled(), "cancelled", none, first)).toBeNull();
+    // The same changes still move a card in any other status.
+    expect(decide(cancelled(), cancelled("Ordering Desk: Approved"), "new", none, WITH_CANCELLED)).toEqual({
+      to: STATUSES[2],
+      reason: "tag",
+    });
+    expect(decide(unfulfilled(), fulfilled(), "new", none, first)).toEqual({ to: STATUSES[3], reason: "fulfilled" });
+  });
+
   it("follows a draft completed and cancelled in one change to the cancelled status", () => {
     const rows: StatusRow[] = [...WITH_CANCELLED, { key: "done", label: "Done", sort: 10, shopifyLink: "draft_completed" }];
     expect(decide(draftSnapshotOf(), cancelled(), "new", none, rows)).toMatchObject({ reason: "cancelled", to: { key: "cancelled" } });

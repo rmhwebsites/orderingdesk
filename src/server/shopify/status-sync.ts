@@ -37,8 +37,10 @@
 // - Cancellation (comprehensive design section 2): the fresh order snapshot
 //   carries cancelledAt and the stored one did not: the card moves to the
 //   status linked to cancelled FROM ANY STATUS, and nothing else in the same
-//   change counts. A tag never moves a card into that status. An order first
-//   seen already cancelled starts there.
+//   change counts. A tag never moves a card into that status, and nothing
+//   from Shopify (a tag, a fulfillment) moves a card out of it: only a
+//   manager in the app does. An order first seen already cancelled starts
+//   there.
 // - The Shopify state mapping (shopifyStateOf, over the stored snapshot):
 //     delivered: displayFulfillmentStatus FULFILLED, and every fulfillment
 //       that was not canceled shows DELIVERED or PICKED_UP (see deliveredOf
@@ -306,6 +308,13 @@ export function decideShopifyMove(input: {
       return null;
     }
     return { to, reason: byState && state ? state : "completed", completedAs: completedName(input.after) };
+  }
+
+  // A card in the status linked to cancelled leaves it only by a manager in
+  // the app: neither a tag nor a fulfillment moves it out (Shopify never
+  // un-cancels an order).
+  if (byKey.get(input.currentKey)?.shopifyLink === "cancelled") {
+    return null;
   }
 
   const namedBefore = statusesNamed(tagsOf(input.before), input.statuses);
