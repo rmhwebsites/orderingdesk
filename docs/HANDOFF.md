@@ -2245,3 +2245,310 @@ request, never a real employee's first.
 - Live checks still open for Ryan (Wave 0 list): about 50 AI search
   questions on the live desk (latency inside 2.5 s, strict schema
   followed), the people and location pages, Refresh connection.
+
+## STATE UPDATE, 2026-10-07 WAVE 2 MCP server for team members (supersedes above)
+
+- Branch build/m1-core on top of Wave 1c (78faaaa). NOT pushed, NOT
+  deployed. Built from docs/plans/2026-10-06-wave-2-mcp-team.md (binding
+  decisions there), design docs/plans/2026-10-05-comprehensive-desk-design.md
+  section 4 (team parts). Commits, in order: 0a903eb packages; 359c023
+  OAUTH_KV binding; 8a9c605 migration 0014; 2e28102, 6004604, 7c5c1ac,
+  2f9819d, 001323f via AI in the desk services, the shared follow-ups and
+  "via Claude" in the timeline and the bell; 5726673 the worker-safe
+  workspace role; 35f76bc, 584f511, feca03d, 8dab903, 266bf00, 2397fca,
+  9abe734 tool output, ids and echoes, limits and audit, the grant mirror,
+  the client policy and the hidden-character and link repairs; dee3748,
+  28a4be7, 2faa223, 60a0063, a3c9838, 23215b8, ee56471, 39161de the OAuth
+  providers, sign-in codes, who may connect, the authorize pages and
+  handler and their review fixes; 8f8e4b6, ab115d7 the MCP endpoint and
+  the custom worker routes; ce98d2f, 09a147f, 8aa6d51, f8b9ace, f1f51b0
+  read tools and prepared actions; e434ac2, 33dcd5d, 891cea6, c59f3a2,
+  cceabc8 write tools (status, note, approve, reject, cancel, edit, place
+  request); b9ad0ca the platform admin's every-workspace hub connection;
+  0f6d1a4, b0a5978, cfca319, 72f6f72 review fixes; 36ad467, 060f0f8
+  Settings > AI connections; 12588e2 connection email and the cron prune;
+  5a980fa the local smoke script; f7fe998, 8b0bf5f, 94cd24d review fixes
+  (migration 0015); ff97d75, ce7c1db final verification fixes (below);
+  plus this docs commit.
+- Owner decisions applied (they win over the plan where they differ):
+  connections last 90 days, fixed (revoke stays instant); a platform
+  admin's hub connection works in every workspace whose AI switch is on
+  (every tool takes a workspace, a workspace with AI off is refused); no
+  Proof needed tag, chip, notification line or Approve warning anywhere
+  (prepare_place_request returns every personalization detail with "Ask
+  the person to confirm these details are correct." and the confirm must
+  repeat them with details_confirmed: true); the AI switch for team
+  members (`workspace_settings.ai_team`) defaults OFF for every workspace,
+  so nothing is reachable until a platform admin turns it on in the hub's
+  Settings > AI connections; the OAUTH_KV id in wrangler.jsonc stays the
+  all-zeros placeholder during the build and the lead creates the real
+  namespace and commits its id at deploy time. Open question for Ryan: a
+  manager or platform admin placing a request for an employee
+  (prepare_/confirm_place_request) is NOT filtered by Locksmith in this
+  wave; Shopify's checkout validation still applies to those drafts,
+  because nothing passes bypassCartValidations.
+- NEW MIGRATIONS, additive, no data step: 0014 (drizzle/0014_mcp_team.sql)
+  ai_grants (workspace_id null for a platform admin's every-workspace hub
+  connection; kv_revoked_at), ai_actions, ai_sign_in_codes, audit_log
+  (workspace_id null only for list_workspaces and unknown-workspace calls),
+  and workspace_settings.ai_team (DEFAULT 0, owner decision; the plan said
+  1), ai_reads_per_day (1000), ai_staff_changes_per_day (50),
+  ai_manager_changes_per_day (100); 0015 (drizzle/0015_audit_created.sql)
+  the audit_log created_at index the cron's prune deletes through.
+  events.source gains "ai" and events.type "request_placed"
+  (TypeScript-only enums, no SQL). The sync test pin and the drift test
+  are at 0015.
+- NEW BINDING: kv_namespaces OAUTH_KV (zeros until the lead creates it; a
+  deploy with the zeros fails loudly). No new secret. No build field in
+  wrangler.jsonc. Packages, pinned: @cloudflare/workers-oauth-provider
+  1.2.2, agents 0.26.0 (only agents/mcp/server is imported),
+  @modelcontextprotocol/server 2.0.0, zod 4.6.5; dev
+  @modelcontextprotocol/client 2.0.0 (npm also installs
+  @modelcontextprotocol/sdk 1.30.0 as an agents peer; nothing imports it).
+  NEW PIN: next 16.3.8 exactly (see the fix below).
+- What shipped:
+  - Routes in custom-worker.ts after the host gate: /mcp,
+    /.well-known/oauth-protected-resource/mcp,
+    /.well-known/oauth-authorization-server, /oauth/* (authorize is ours,
+    token and register the library's). One OAuth provider per host
+    (issuer = the host's origin, resource = <origin>/mcp). Client ID
+    Metadata Documents on; registration only for Claude's and ChatGPT's
+    exact callbacks and loopback redirects; PKCE S256 from every client.
+    Access tokens 30 minutes, connections 90 days, fixed.
+  - Authorize pages (Worker HTML in the workspace look): work email,
+    6-digit code (hashed, 10 minutes, 5 tries, 5 per email per hour per
+    host, 20 per IP per hour, sent only to accounts with access, same page
+    and timing for everyone), consent naming the app (verified domain or
+    "not verified"), where access goes (local app warning), the workspace
+    (a member picks one on the hub; a platform admin on the hub connects
+    once for every workspace with AI on, names listed) and the role, "look
+    up and change" or "look up only", and the 90-day line.
+  - Every MCP call re-reads the connection (ai_grants), the role and the
+    AI switch from D1; 23 tools listed by role and scope, plus
+    list_workspaces on the every-workspace hub connection; every write is
+    prepared (single use, 10 minutes, content hashed, bound to the
+    connection and workspace) and confirmed with the order number and the
+    key field repeated; daily limits per person in ai_usage (mcp_read,
+    mcp_change); one audit_log row per call; typed text returned as
+    { untrusted }, links, images and hidden characters stripped, contact
+    details hidden.
+  - "via AI": changes made through an AI app are source "ai" with the app
+    (Claude, Claude Code, ChatGPT or "an AI app") in the timeline and the
+    bell.
+  - Settings > AI connections: the MCP address with Copy and the 90-day
+    line, connections with Revoke (managers: everyone's; platform admins
+    on the hub also every-workspace connections, marked Every workspace),
+    daily limits (managers), the switch and Revoke all (platform admins;
+    Revoke all also ends every-workspace connections). New connection
+    email ("Not you? Revoke it"). Removing a member revokes their
+    connections. The cron prunes MCP tables and revokes KV grants of
+    revoked connections.
+- Final verification fixes (test first, gates before each commit):
+  - ff97d75 DEPLOY BLOCKER FIXED. The Task 1 lockfile ritual had moved
+    next from 16.3.8 (what production runs) to 16.4.0, released on Oct 6.
+    Next 16.4.0 loads .next/server/preview-props.json, which
+    @opennextjs/cloudflare 1.20.9 (the newest release) does not inline, so
+    the built Worker answered 500 on every page and route ("Unexpected
+    loadManifest(/.next/server/preview-props.json) call!") while next
+    build, next dev and every test passed. next is now pinned to 16.3.8
+    exactly, with the lockfile ritual (only the next packages, rolldown
+    1.2.12 to 1.2.13, @oxc-project/types and electron-to-chromium moved;
+    15 rolldown bindings). src/test/framework-pins.test.ts holds the pin:
+    move next only with an OpenNext release that supports it, after `npm
+    run preview` serves pages. Same commit: wrangler dev served every
+    request under the production route's host (orderingdesk.com), so the
+    host gate answered 404 to everything on localhost:8787; the preview
+    script now passes `-- --local-upstream localhost:8787` (deploy
+    unchanged; src/mcp/wrangler-config.test.ts).
+  - ce7c1db the activity panel ran past the left edge of a 375px screen
+    (the account menu follows the bell, so a panel hung from the bell's
+    right edge started at x = -28; pre-existing since the Wave 1c top bar):
+    below sm it now spans the screen under the top bar. The authorize code
+    page's "Use a different email" link is a 44px target.
+- Deploy order (operator; never push main without Ryan, it auto-deploys):
+  1. Gates at the final commit: `npm run test`, `npx tsc --noEmit
+     --incremental false`, `npm run build`.
+  2. Backup and bookmark: `npx wrangler d1 export orderingdesk --remote
+     --output "../backups/orderingdesk-before-0014-$(date +%F).sql"`, then
+     `npx wrangler d1 time-travel info orderingdesk`, bookmark recorded
+     here.
+  3. Migrate remotely: `npm run db:migrate:remote` (applies 0014 and
+     0015). The running code ignores the new tables and columns; the new
+     code needs them (Settings and workspace creation break if it is
+     deployed first).
+  4. The lead creates the KV namespace (`npx wrangler kv namespace create
+     OAUTH_KV`), puts its id in wrangler.jsonc in place of the zeros and
+     commits only that file. No new secrets.
+  5. Then deploy (`npm run deploy`; it builds with next 16.3.8 from the
+     lockfile). AI is off in every workspace until a platform admin turns
+     it on in the hub's Settings > AI connections. Then the read-only
+     checks and the supervised live checks of the plan's Deploy notes
+     (steps 8 to 11). Rollback: the switch off per workspace stops every
+     call; `npx wrangler rollback` for the release (0014 and 0015 are
+     additive).
+- Known limits (open points of the Wave 2 plan that remain open):
+  Claude Code's label ("via Claude Code" through its metadata document or
+  "via an AI app" through dynamic registration) and ChatGPT's redirect are
+  unverified until a live connection; only Claude, ChatGPT and loopback
+  apps can connect; a revoke blocks the next call at once but the KV grant
+  is revoked by the cron within about ten minutes (refresh still answers
+  until then, every call is refused); consent is asked on every
+  connection and people reconnect every 90 days; default limits 1000
+  lookups, 50 staff and 100 manager changes a day; personalization labels
+  are free text; Stage 0 for API-created B2B drafts (price at every
+  location, Shopify emails, contact without a role) is known only after
+  the supervised live check; contact details are hidden by label only;
+  list_workspaces is audited but not counted; no audit log screen (query
+  with wrangler); agents 0.26.0 pins its MCP peers to 2.0.0; the Reject
+  form copy and employees' own tools are Wave 3; which MCP spec revision
+  each client uses is to be recorded live; AI questions through
+  search_orders call Workers AI (Wave 1c's cap applies); Revoke all also
+  ends every-workspace hub connections; an every-workspace connection
+  resolves a workspace by id or exact name (a shared name asks for the
+  id); Locksmith for manager-placed requests (open question above). New:
+  next stays at 16.3.8 until OpenNext supports 16.4; the Worker bundle
+  size was not re-measured (no `wrangler deploy --dry-run` in this pass;
+  the dry run during the build, with next 16.4.0, read Total Upload
+  15546.00 KiB / gzip 3308.80 KiB).
+- Checked locally on 2026-10-07 (nothing remote; outputs pasted):
+  - Gates before the fixes: 2291 tests in 242 files, tsc clean, build
+    clean; after them: `npm run test` 2295 tests in 244 files passed, `npx
+    tsc --noEmit --incremental false` clean, `npm run build` clean (Next.js
+    16.3.8; /api/workspaces/[id]/ai, /api/workspaces/[id]/ai/connections/
+    [grantId] and /api/workspaces/[id]/ai/revoke-all dynamic). `grep -c
+    '"node_modules/@rolldown/binding-' package-lock.json` = 15. `npm ls`:
+    @cloudflare/workers-oauth-provider@1.2.2,
+    @modelcontextprotocol/client@2.0.0, @modelcontextprotocol/server@2.0.0,
+    agents@0.26.0 (with @modelcontextprotocol/sdk@1.30.0), zod@4.6.5
+    deduped everywhere, next@16.3.8, @opennextjs/cloudflare@1.20.9; no
+    invalid.
+  - Hygiene over 78faaaa...HEAD: dashes and emoji `clean`; `no addresses
+    added`; the one client domain hit is a pre-existing context line in
+    src/server/host.test.ts; the wrangler diff is only the kv_namespaces
+    entry and its comment, no build field; `no proof flag`; `no
+    bypassCartValidations`.
+  - Migration proof (backup orderingdesk-before-0013-2026-10-07.sql, at
+    0012, 53 data rows, throwaway local D1 under the scratchpad with
+    --persist-to, foreign keys deferred to commit; 0000 to 0012, the rows,
+    0013 as production has it now, snapshot, then 0014 and 0015):
+    ```
+    == orders11_sha256: before 4e393a71c984ae83 after 4e393a71c984ae83 identical=True
+    == events_sha256: before 67ff4bd747f922bb after 67ff4bd747f922bb identical=True
+    == purchase_orders_sha256: before 4f53cda18c2baa0c after 4f53cda18c2baa0c identical=True
+       ai_actions: NEW rows=0 columns=13
+       ai_grants: NEW rows=0 columns=16
+       ai_sign_in_codes: NEW rows=0 columns=12
+       audit_log: NEW rows=0 columns=10
+       workspace_settings: rows 1 -> 1, old columns identical=True, added=['ai_team', 'ai_reads_per_day', 'ai_staff_changes_per_day', 'ai_manager_changes_per_day']
+       (every other table: rows unchanged, identical; events 13, orders 13, locations 5, statuses 9)
+    == foreign_key_check (empty is good): []
+    == integrity: ok
+    == settings: rows 1, ai_team 0, ai_reads_per_day 1000, ai_staff_changes_per_day 50, ai_manager_changes_per_day 100
+    == new tables: grants 0, actions 0, codes 0, audit 0
+    == new indexes: ai_actions_expires, ai_actions_grant, ai_grants_user, ai_grants_ws_user, ai_codes_email, ai_codes_expires, ai_codes_ip, audit_created, audit_grant, audit_ws_created
+    == d1_migrations newest: 16 0015_audit_created.sql, 15 0014_mcp_team.sql, 14 0013_search_people.sql
+    ```
+  - Local end to end: `npm run preview` (APP_URL http://localhost:8787 in
+    .dev.vars for the run, restored to http://localhost:3100 after), local
+    D1 at 0015 with scripts/seed-local.sql plus local-only sample rows
+    (AI on for the sample workspace, three more sample workspaces with
+    long names and AI on, one with AI off, a sample manager, sample
+    connections, a request tagged via AI). `node scripts/mcp-smoke.mjs
+    --email qa.admin@example.com --log <preview log> --workspace "Example
+    Co"`:
+    ```
+    PASS sign-in link requested: 200
+    PASS sign-in link in the preview log
+    PASS signed in on the hub: 302
+    PASS 401 with this host's resource metadata: Bearer realm="OAuth", resource_metadata="http://localhost:8787/.well-known/oauth-protected-resource/mcp"
+    PASS protected resource metadata
+    PASS authorization server metadata
+    PASS registered a loopback client: 201
+    PASS refused a client with a foreign redirect: 400
+    PASS authorize page asks for the email
+    PASS authorize page is never framed
+    PASS code page
+    PASS code in the preview log
+    PASS a wrong code says how many tries are left
+    PASS consent page
+    PASS consent covers every workspace, with nothing to pick
+    PASS consent says how long the connection lasts
+    PASS back to the app with a code: http://127.0.0.1:43110/callback
+    PASS state and issuer returned
+    PASS access token with desk.write: 200
+    PASS tools listed: 24 tools
+    PASS annotations
+    PASS every tool but list_workspaces takes workspace
+    PASS list_workspaces: 4 workspaces
+    PASS a workspace to work in: Example Co (sample data)
+    PASS a workspace that does not exist is refused: not_found
+    PASS get_my_access: Platform admin, look up and change (each change previewed, then confirmed)
+    PASS search_orders (open cards): 14 open
+    PASS a sample card to work on: #1012
+    PASS search_orders with filters: 2 requests
+    PASS search_orders with a question: keywords
+    PASS get_order: prepare_status_change,prepare_add_note,prepare_cancel
+    PASS list_statuses: 9 statuses
+    PASS find_people: 35 people
+    PASS get_person
+    PASS list_locations: 2 locations
+    PASS get_location
+    PASS find_products answers (a structured refusal is fine locally): refused
+    PASS prepare_add_note names the workspace to confirm in
+    PASS a confirm with another note is refused
+    PASS confirm_add_note
+    PASS a confirmation works once
+    PASS prepare_status_change
+    PASS confirm_status_change: Processing
+    PASS status changed back: New
+    PASS prepare_approve answers (a structured refusal is fine locally): refused
+    PASS AI connections switched off for the workspace: 200
+    PASS a workspace with AI off is refused: forbidden
+    PASS AI connections switched back on: 200
+    PASS the workspace answers again
+    PASS the connection for every workspace is listed in Settings
+    PASS revoked in Settings: 200
+    PASS the next call is refused with invalid_token: 401
+    {"passed":52,"workspaceId":"sample-ws-example-co"}
+    ```
+    Then in the local D1: audit rows confirm_add_note already_used 1,
+    mismatch 1, ok 1; confirm_status_change ok 2; find_people ok 1;
+    find_products refused 1; get_location ok 1; get_my_access forbidden 1,
+    not_found 1, ok 2; get_order ok 1; get_person ok 1; list_locations ok
+    1; list_statuses ok 1; list_workspaces ok 1; prepare_add_note ok 1;
+    prepare_approve refused 1; prepare_status_change ok 2; search_orders ok
+    4. list_workspaces and the unknown-workspace get_my_access with
+    workspace_id NULL, the AI-off refusal with the sample workspace's id.
+    Events: note, status, status with source ai and app other. The grant:
+    workspace_id NULL (every workspace), revoked, revoke_reason person,
+    kv_revoked_at NULL (the cron did not run locally). ai_usage: mcp_read
+    17, mcp_change 3.
+  - Not checked: the plan's Step 6 (a real Claude Code session against the
+    local preview) needs an interactive session and adding a local MCP
+    server to the Claude Code config; left for the operator. Not checked
+    live: Claude web, desktop and mobile and ChatGPT against production; a
+    real draftOrderCreate and draftOrderCalculate for a B2B contact;
+    Shopify's emails for API-created drafts.
+  - Visual pass at 1440x900 and 375x812, light and dark, headless Chrome
+    against the preview (screenshots in the scratchpad, wave-2/ui, never
+    committed): authorize email page (and its invalid-address message),
+    code page, wrong code ("That code is not right. 4 tries left."),
+    consent for a platform admin on the hub (local app warning, every
+    workspace paragraph with four long names wrapping at 375, the two
+    access choices, the 90-day line), "This link cannot be used" and "This
+    page expired": inputs and buttons 44px, 16px text (the code field
+    22px), focus outline 3px solid on the button and the field, no
+    sideways scroll at 375, lowest text contrast 5.54 (light) and 8.91
+    (dark). Settings > AI connections as platform admin (three
+    connections, the Every workspace chip on the hub connection, limits,
+    switch, the Revoke all step, the limits error "Lookups a day must be a
+    whole number from 50 to 5000.", the AI-off warning in a workspace with
+    AI off), as manager (everyone's connections and limits, no switch), as
+    staff (own connection only; after Revoke the empty state "No AI apps
+    are connected for you yet." and focus on the section heading): no
+    sideways scroll, 40px controls, lowest contrast 6.04. Desk drawer of
+    #1011 with two "via Claude Code" entries; the bell listing "You via an
+    AI app" and "Riley Oakes (sample) via Claude Code"; the request tagged
+    via AI with its Approve confirmation: no Proof needed chip or text
+    anywhere and no proof warning. Fixed in ce7c1db: the bell panel at 375
+    (now x 16 to 359 under the top bar) and the code page link.
