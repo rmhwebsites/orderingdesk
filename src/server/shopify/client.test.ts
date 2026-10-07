@@ -23,6 +23,7 @@ import {
   ORDER_LINE_ITEMS_QUERY,
   STATUS_TAGS_QUERY,
 } from "./admin";
+import { COMPANY_LOCATION_QUERY, COMPANY_LOCATIONS_QUERY } from "./locations";
 
 const DOMAIN = "impact-rentals.myshopify.com";
 const TOKEN = "shpat_super_secret_value_9f3a";
@@ -911,5 +912,17 @@ describe("draft order documents", () => {
     expect(DRAFT_LINK_CHUNK).toBe(100);
     expect(DRAFT_LINK_CHUNK * perId + 1).toBeLessThanOrEqual(QUERY_COST_BUDGET);
     expect(DRAFT_LINKS_QUERY).toContain("nodes(ids: $ids)");
+  });
+});
+
+// Company locations (comprehensive design section 2) under the same
+// estimate and budget.
+describe("company location documents", () => {
+  it("prices a page of 50 locations and a single location", () => {
+    // The connection (2) and pageInfo (1), plus per location the node, its
+    // company and its shipping address.
+    expect(requestedQueryCost(COMPANY_LOCATIONS_QUERY)).toBe(3 + 50 * 3);
+    expect(requestedQueryCost(COMPANY_LOCATION_QUERY)).toBe(3);
+    expect(requestedQueryCost(COMPANY_LOCATIONS_QUERY)).toBeLessThanOrEqual(QUERY_COST_BUDGET);
   });
 });
