@@ -59,6 +59,9 @@ export const SCOPES = [
 export async function seedMcpWorkspace(db: Db): Promise<void> {
   await seedWorkspace(db, WS);
   await db.update(schema.workspaces).set({ name: "Example Rentals", customDomain: HOST, customDomainStatus: "active" }).where(eq(schema.workspaces.id, WS));
+  // The AI switch defaults off (owner decision, Oct 7); a platform admin
+  // turned it on for this workspace.
+  await db.update(schema.workspaceSettings).set({ aiTeam: true }).where(eq(schema.workspaceSettings.workspaceId, WS));
   await seedDraftStatuses(db, WS);
   await seedUser(db, MANAGER, "casey.lin@example.com", "Casey Lin");
   await seedUser(db, STAFF, "riley.oakes@example.com", "Riley Oakes");
