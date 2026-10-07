@@ -5,7 +5,7 @@ import * as schema from "@/db/schema";
 import { encryptSecret } from "@/server/crypto";
 import { indexOrders } from "./index-orders";
 import { BACKFILL_ROWS, backfillCursor, parseBackfillCursor, runSearchTick, VERIFY_ROWS } from "./search-tick";
-import { openTestDb, seedDraft, seedOrder, seedWorkspace, snapshotOf } from "@/server/desk/test-helpers";
+import { openTestDb, seedDraft, seedLocation, seedOrder, seedWorkspace, snapshotOf } from "@/server/desk/test-helpers";
 
 const WS = "ws_impact";
 const KEY = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
@@ -34,7 +34,25 @@ const everyoneIs77 = (call: Call) => ({
   },
 });
 
-async function setup(opts: { store?: boolean } = {}) {
+// Every card Shopify is asked about was bought by customer 77 (contact 501)
+// for the company location given.
+const boughtAt = (locationId: string) => (call: Call) => ({
+  data: {
+    nodes: (call.variables.ids as string[]).map((id) => ({
+      id,
+      customer: { id: "gid://shopify/Customer/77" },
+      purchasingEntity: {
+        __typename: "PurchasingCompany",
+        contact: { id: "gid://shopify/CompanyContact/501" },
+        location: { id: `gid://shopify/CompanyLocation/${locationId}` },
+      },
+    })),
+  },
+});
+
+const COMPANIES = ["read_orders", "read_customers", "read_draft_orders", "read_companies"];
+
+async function setup(opts: { store?: boolean; scopes?: string[] } = {}) {
   const { db } = openTestDb();
   await seedWorkspace(db, WS);
   if (opts.store !== false) {
@@ -42,10 +60,18 @@ async function setup(opts: { store?: boolean } = {}) {
       workspaceId: WS,
       shopDomain: SHOP,
       encryptedToken: await encryptSecret(TOKEN, KEY, WS),
-      scopes: ["read_orders", "read_customers", "read_draft_orders"],
+      scopes: opts.scopes ?? ["read_orders", "read_customers", "read_draft_orders"],
     });
   }
   return db;
+}
+
+async function locationOf(db: Db, id: string) {
+  return (await db.select({ locationId: schema.orders.locationId }).from(schema.orders).where(eq(schema.orders.id, id)))[0].locationId;
+}
+
+async function searchRowOf(db: Db, id: string) {
+  return (await db.select().from(schema.orderSearch).where(eq(schema.orderSearch.orderId, id)))[0];
 }
 
 async function settingsOf(db: Db) {
@@ -109,6 +135,69 @@ describe("runSearchTick backfill", () => {
     expect(await runSearchTick(db, env, WS, { fetchImpl: busy.impl, now: () => NOW })).toMatchObject({ skipped: "shopify-busy", backfilled: 0 });
     expect(await searchCount(db)).toBe(0);
     expect((await settingsOf(db)).searchBackfillCursor).toBeNull();
+  });
+
+  // Orders stored before Wave 1b read the purchasing entity carry no
+  // location (in production 9 of 12 cards), and the name backfill matches
+  // none of them: with a companies scope the requester read names it too.
+  it("gives an old order its company location from Shopify and indexes it with that location", async () => {
+    const db = await setup({ scopes: COMPANIES });
+    await seedLocation(db, WS, { shopifyLocationId: "101", name: "North Yard" });
+    await seedOrder(db, WS, { id: "o1", createdAt: 1000, shopify: snapshotOf() });
+    await seedOrder(db, WS, { id: "o2", createdAt: 2000, shopify: snapshotOf({ customerId: "77" }) });
+    const shop = shopify(boughtAt("101"));
+    expect(await runSearchTick(db, env, WS, { fetchImpl: shop.impl, now: () => NOW })).toMatchObject({ backfilled: 2, finished: true });
+    expect(shop.calls).toHaveLength(1);
+    expect(shop.calls[0].query).toContain("location { id }");
+    expect(shop.calls[0].variables.ids).toEqual(["gid://shopify/Order/shop-o1", "gid://shopify/Order/shop-o2"]);
+    expect(await locationOf(db, "o1")).toBe("101");
+    expect(await locationOf(db, "o2")).toBe("101");
+    for (const id of ["o1", "o2"]) {
+      const row = await searchRowOf(db, id);
+      expect(row.locationId).toBe("101");
+      expect(row.haystack).toContain("north yard");
+    }
+    const [person] = await db.select().from(schema.people);
+    expect(person).toMatchObject({ shopifyCustomerId: "77", companyContactId: "501", locationId: "101" });
+    expect((await searchRowOf(db, "o1")).requesterId).toBe(person.id);
+  });
+
+  it("leaves the location of a card that already has one untouched", async () => {
+    const db = await setup({ scopes: COMPANIES });
+    await seedLocation(db, WS, { shopifyLocationId: "101", name: "North Yard" });
+    await seedLocation(db, WS, { shopifyLocationId: "202", name: "Harbor Point" });
+    await seedOrder(db, WS, { id: "o1", createdAt: 1000, shopify: snapshotOf({ customerId: "77" }) });
+    await seedOrder(db, WS, { id: "o2", createdAt: 2000, shopify: snapshotOf() });
+    await db.update(schema.orders).set({ locationId: "101" });
+    const shop = shopify(boughtAt("202"));
+    expect(await runSearchTick(db, env, WS, { fetchImpl: shop.impl, now: () => NOW })).toMatchObject({ backfilled: 2, finished: true });
+    // o1 needs nothing; o2 is asked for its requester only.
+    expect(shop.calls.map((call) => call.variables.ids)).toEqual([["gid://shopify/Order/shop-o2"]]);
+    expect(await locationOf(db, "o1")).toBe("101");
+    expect(await locationOf(db, "o2")).toBe("101");
+    expect((await searchRowOf(db, "o2")).locationId).toBe("101");
+    expect((await searchRowOf(db, "o2")).haystack).not.toContain("harbor point");
+    expect((await searchRowOf(db, "o2")).requesterId).not.toBeNull();
+  });
+
+  // A store without read_companies or write_companies refuses the purchasing
+  // entity's company fields, which used to fail every chunk.
+  it("still links the requesters of a store without a companies scope, asking for the customer only", async () => {
+    const db = await setup();
+    await seedOrder(db, WS, { id: "o1", createdAt: 1000, shopify: snapshotOf() });
+    await seedOrder(db, WS, { id: "o2", createdAt: 2000, shopify: snapshotOf({ customerId: "78" }) });
+    const shop = shopify((call) =>
+      call.query.includes("purchasingEntity")
+        ? { errors: [{ message: "Access denied for purchasingEntity field. Required access: `read_companies` access scope." }] }
+        : everyoneIs77(call),
+    );
+    expect(await runSearchTick(db, env, WS, { fetchImpl: shop.impl, now: () => NOW })).toMatchObject({ backfilled: 2, finished: true });
+    // o2 names its customer and no location can be read: it is not asked.
+    expect(shop.calls.map((call) => call.variables.ids)).toEqual([["gid://shopify/Order/shop-o1"]]);
+    expect(shop.calls[0].query).not.toContain("purchasingEntity");
+    const person = (await db.select().from(schema.people).where(eq(schema.people.shopifyCustomerId, "77")))[0];
+    expect((await searchRowOf(db, "o1")).requesterId).toBe(person.id);
+    expect(await locationOf(db, "o1")).toBeNull();
   });
 
   it("indexes without requesters when no store is connected", async () => {

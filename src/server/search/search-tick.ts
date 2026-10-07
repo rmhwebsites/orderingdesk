@@ -3,10 +3,14 @@
 // 1. Backfill, until workspace_settings.search_indexed_at is set: the next
 //    BACKFILL_ROWS cards by (created_at, id) after the stored cursor are
 //    indexed. Cards whose snapshot predates customer ids get their
-//    requester from Shopify first (one read per 50 cards). A busy Shopify
-//    keeps the cursor where it is; a store that cannot be read is skipped
-//    (those cards index without a requester). A batch shorter than
-//    BACKFILL_ROWS ends the pass and stamps the workspace.
+//    requester from Shopify first (one read per 50 cards), and with a
+//    companies scope so do cards without a company location (orders stored
+//    before Wave 1b read the purchasing entity): the location Shopify names
+//    is written to orders.location_id where it is still null, before the
+//    batch is indexed, so the card's search text and filter columns carry
+//    it. A busy Shopify keeps the cursor where it is; a store that cannot be
+//    read is skipped (those cards index without a requester). A batch
+//    shorter than BACKFILL_ROWS ends the pass and stamps the workspace.
 // 2. Repair, every tick once the backfill is done: up to REPAIR_ROWS cards
 //    whose search row is missing or disagrees with orders and statuses on a
 //    filter column are indexed again, and rows whose card is gone are
@@ -22,12 +26,12 @@
 
 import { and, asc, eq, gt, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import type { Db } from "../../db";
-import { rowsAffected } from "../../db/batch";
-import { orderSearch, orders, statuses, workspaceSettings } from "../../db/schema";
-import { fetchRequesterIds } from "../shopify/admin";
+import { applyBatch, rowsAffected } from "../../db/batch";
+import { orderSearch, orders, statuses, storeConnections, workspaceSettings } from "../../db/schema";
+import { companiesEnabled, fetchRequesterIds, type RequesterIds } from "../shopify/admin";
 import { getAccessToken } from "../shopify/token";
 import { requesterOf } from "./haystack";
-import { indexOrders, type RequesterHint } from "./index-orders";
+import { indexOrders } from "./index-orders";
 
 export const BACKFILL_ROWS = 200;
 export const REPAIR_ROWS = 200;
@@ -62,6 +66,7 @@ type BackfillCard = {
   shopifyDraftId: string | null;
   shopify: unknown;
   draftSnapshot: unknown;
+  locationId: string | null;
 };
 
 function gidOf(card: BackfillCard): string | null {
@@ -71,18 +76,41 @@ function gidOf(card: BackfillCard): string | null {
   return card.shopifyDraftId !== null ? `gid://shopify/DraftOrder/${card.shopifyDraftId}` : null;
 }
 
+// Whether the store connection's grant holds a companies scope (the
+// purchasing entity's company contact and location need one).
+async function companiesGranted(db: Db, workspaceId: string): Promise<boolean> {
+  const rows = await db
+    .select({ scopes: storeConnections.scopes })
+    .from(storeConnections)
+    .where(eq(storeConnections.workspaceId, workspaceId))
+    .limit(1);
+  return companiesEnabled(rows[0]?.scopes ?? null);
+}
+
+// What Shopify says about the batch's cards, by card id: the requester of
+// cards stored without one and, with a companies scope, the company
+// location of cards without one.
 async function requesterHints(
   db: Db,
   env: CloudflareEnv,
   workspaceId: string,
   cards: readonly BackfillCard[],
   opts: SearchTickOptions | undefined,
-): Promise<Map<string, RequesterHint> | "busy"> {
-  const wanted = new Map<string, string>();
-  for (const card of cards) {
+): Promise<Map<string, RequesterIds> | "busy"> {
+  const withGid = cards.flatMap((card) => {
     const gid = gidOf(card);
-    if (gid && requesterOf(card.shopify, card.draftSnapshot).customerId === "") {
-      wanted.set(gid, card.id);
+    return gid ? [{ card, gid }] : [];
+  });
+  const noRequester = ({ card }: { card: BackfillCard }) => requesterOf(card.shopify, card.draftSnapshot).customerId === "";
+  const noLocation = ({ card }: { card: BackfillCard }) => card.locationId === null;
+  if (!withGid.some((entry) => noRequester(entry) || noLocation(entry))) {
+    return new Map();
+  }
+  const companies = await companiesGranted(db, workspaceId);
+  const wanted = new Map<string, string>();
+  for (const entry of withGid) {
+    if (noRequester(entry) || (companies && noLocation(entry))) {
+      wanted.set(entry.gid, entry.card.id);
     }
   }
   if (wanted.size === 0) {
@@ -96,7 +124,7 @@ async function requesterHints(
     console.log("[search] " + JSON.stringify({ workspaceId, requesters: "store unavailable", cards: wanted.size }));
     return new Map();
   }
-  const fetched = await fetchRequesterIds(token.shopDomain, token.token, [...wanted.keys()], opts?.fetchImpl ?? fetch);
+  const fetched = await fetchRequesterIds(token.shopDomain, token.token, [...wanted.keys()], { companies }, opts?.fetchImpl ?? fetch);
   if (fetched.kind === "transient") {
     return "busy";
   }
@@ -104,7 +132,7 @@ async function requesterHints(
     console.log("[search] " + JSON.stringify({ workspaceId, requesters: fetched.kind, cards: wanted.size }));
     return new Map();
   }
-  const hints = new Map<string, RequesterHint>();
+  const hints = new Map<string, RequesterIds>();
   for (const [gid, ids] of fetched.ids) {
     const cardId = wanted.get(gid);
     if (cardId) {
@@ -112,6 +140,26 @@ async function requesterHints(
     }
   }
   return hints;
+}
+
+// The company location Shopify named, for cards still without one (a card
+// that has a location keeps it). One statement per card, in one batch; the
+// caller indexes the batch next, so the card's search row takes the
+// location (filter column and name in the haystack) in the same tick.
+async function fillLocations(db: Db, workspaceId: string, cards: readonly BackfillCard[], hints: ReadonlyMap<string, RequesterIds>): Promise<void> {
+  const writes = cards.flatMap((card) => {
+    const locationId = hints.get(card.id)?.locationId ?? null;
+    if (card.locationId !== null || locationId === null) {
+      return [];
+    }
+    return [
+      db
+        .update(orders)
+        .set({ locationId })
+        .where(and(eq(orders.workspaceId, workspaceId), eq(orders.id, card.id), isNull(orders.locationId))),
+    ];
+  });
+  await applyBatch(db, writes);
 }
 
 // Cards after a (created_at, id) cursor, oldest first.
@@ -138,6 +186,7 @@ async function backfillStep(
       shopifyDraftId: orders.shopifyDraftId,
       shopify: orders.shopify,
       draftSnapshot: orders.draftSnapshot,
+      locationId: orders.locationId,
     })
     .from(orders)
     .where(and(eq(orders.workspaceId, workspaceId), afterCursor(cursor)))
@@ -147,6 +196,7 @@ async function backfillStep(
   if (hints === "busy") {
     return { backfilled: 0, repaired: 0, removed: 0, skipped: "shopify-busy" };
   }
+  await fillLocations(db, workspaceId, cards, hints);
   const indexed = cards.length > 0 ? await indexOrders(db, workspaceId, cards.map((card) => card.id), { requesters: hints }) : { indexed: 0 };
   const finished = cards.length < BACKFILL_ROWS;
   const last = cards[cards.length - 1];

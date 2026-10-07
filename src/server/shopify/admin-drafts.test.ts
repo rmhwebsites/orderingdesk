@@ -311,7 +311,7 @@ describe("companiesEnabled", () => {
 });
 
 describe("fetchRequesterIds", () => {
-  it("reads the customer and company contact of each order and draft by id, in chunks", async () => {
+  it("reads the customer, company contact and company location of each order and draft by id, in chunks", async () => {
     const ids = Array.from({ length: REQUESTER_CHUNK + 1 }, (_, i) => `gid://shopify/Order/${i + 1}`);
     ids.push("gid://shopify/DraftOrder/12");
     const shop = stub((call) => ({
@@ -319,36 +319,87 @@ describe("fetchRequesterIds", () => {
         nodes: (call.variables.ids as string[]).map((id) =>
           id.endsWith("/Order/2")
             ? { id, customer: null, purchasingEntity: null }
-            : id.includes("DraftOrder")
+            : id.endsWith("/Order/3")
               ? {
                   id,
-                  customer: { id: "gid://shopify/Customer/78" },
-                  purchasingEntity: { __typename: "PurchasingCompany", contact: { id: "gid://shopify/CompanyContact/501" } },
+                  customer: { id: "gid://shopify/Customer/77" },
+                  purchasingEntity: {
+                    __typename: "PurchasingCompany",
+                    contact: { id: "gid://shopify/CompanyContact/500" },
+                    location: { id: "gid://shopify/CompanyLocation/101" },
+                  },
                 }
-              : { id, customer: { id: "gid://shopify/Customer/77" }, purchasingEntity: null },
+              : id.includes("DraftOrder")
+                ? {
+                    id,
+                    customer: { id: "gid://shopify/Customer/78" },
+                    purchasingEntity: {
+                      __typename: "PurchasingCompany",
+                      contact: { id: "gid://shopify/CompanyContact/501" },
+                      location: { id: "gid://shopify/CompanyLocation/102" },
+                    },
+                  }
+                : { id, customer: { id: "gid://shopify/Customer/77" }, purchasingEntity: { __typename: "Customer" } },
         ),
       },
     }));
-    const result = await fetchRequesterIds(DOMAIN, TOKEN, ids, shop.impl);
+    const result = await fetchRequesterIds(DOMAIN, TOKEN, ids, { companies: true }, shop.impl);
     expect(shop.calls).toHaveLength(2);
     expect(shop.calls[0].query).toContain("nodes(ids: $ids)");
+    expect(shop.calls[0].query).toContain("... on PurchasingCompany { contact { id } location { id } }");
     expect((shop.calls[0].variables.ids as string[]).length).toBe(REQUESTER_CHUNK);
     expect(result.kind).toBe("ok");
     if (result.kind === "ok") {
-      expect(result.ids.get("gid://shopify/Order/1")).toEqual({ customerId: "77", contactId: "" });
+      expect(result.ids.get("gid://shopify/Order/1")).toEqual({ customerId: "77", contactId: "", locationId: null });
       expect(result.ids.has("gid://shopify/Order/2")).toBe(false);
-      expect(result.ids.get("gid://shopify/DraftOrder/12")).toEqual({ customerId: "78", contactId: "501" });
+      expect(result.ids.get("gid://shopify/Order/3")).toEqual({ customerId: "77", contactId: "500", locationId: "101" });
+      expect(result.ids.get("gid://shopify/DraftOrder/12")).toEqual({ customerId: "78", contactId: "501", locationId: "102" });
     }
+  });
+
+  // The purchasing entity's company fields need read_companies: a store
+  // without a companies scope would get a refusal for every chunk.
+  it("asks a store without a companies scope for the customer only", async () => {
+    const shop = stub((call) =>
+      call.query.includes("purchasingEntity")
+        ? { errors: [{ message: "Access denied for purchasingEntity field. Required access: `read_companies` access scope." }] }
+        : { data: { nodes: (call.variables.ids as string[]).map((id) => ({ id, customer: { id: "gid://shopify/Customer/77" } })) } },
+    );
+    const result = await fetchRequesterIds(DOMAIN, TOKEN, ["gid://shopify/Order/1", "gid://shopify/DraftOrder/12"], { companies: false }, shop.impl);
+    expect(shop.calls).toHaveLength(1);
+    expect(shop.calls[0].query).not.toContain("purchasingEntity");
+    expect(shop.calls[0].query).toContain("customer { id }");
+    expect(result).toEqual({
+      kind: "ok",
+      ids: new Map([
+        ["gid://shopify/Order/1", { customerId: "77", contactId: "", locationId: null }],
+        ["gid://shopify/DraftOrder/12", { customerId: "77", contactId: "", locationId: null }],
+      ]),
+    });
+  });
+
+  it("keeps the location of a card whose customer Shopify no longer has", async () => {
+    const shop = stub((call) => ({
+      data: {
+        nodes: (call.variables.ids as string[]).map((id) => ({
+          id,
+          customer: null,
+          purchasingEntity: { __typename: "PurchasingCompany", contact: null, location: { id: "gid://shopify/CompanyLocation/101" } },
+        })),
+      },
+    }));
+    const result = await fetchRequesterIds(DOMAIN, TOKEN, ["gid://shopify/Order/1"], { companies: true }, shop.impl);
+    expect(result).toEqual({ kind: "ok", ids: new Map([["gid://shopify/Order/1", { customerId: "", contactId: "", locationId: "101" }]]) });
   });
 
   it("reports a failed chunk as the AdminFailure kinds, and a gone card as no entry", async () => {
     const busy = stub(() => new Response("busy", { status: 503 }));
-    expect((await fetchRequesterIds(DOMAIN, TOKEN, ["gid://shopify/Order/1"], busy.impl)).kind).toBe("transient");
+    expect((await fetchRequesterIds(DOMAIN, TOKEN, ["gid://shopify/Order/1"], { companies: true }, busy.impl)).kind).toBe("transient");
     const gone = stub(() => ({ data: { nodes: [null] } }));
-    const result = await fetchRequesterIds(DOMAIN, TOKEN, ["gid://shopify/Order/1"], gone.impl);
+    const result = await fetchRequesterIds(DOMAIN, TOKEN, ["gid://shopify/Order/1"], { companies: true }, gone.impl);
     expect(result).toEqual({ kind: "ok", ids: new Map() });
     const none = stub(() => ({ data: { nodes: [] } }));
-    expect(await fetchRequesterIds(DOMAIN, TOKEN, [], none.impl)).toEqual({ kind: "ok", ids: new Map() });
+    expect(await fetchRequesterIds(DOMAIN, TOKEN, [], { companies: true }, none.impl)).toEqual({ kind: "ok", ids: new Map() });
     expect(none.calls).toHaveLength(0);
   });
 });

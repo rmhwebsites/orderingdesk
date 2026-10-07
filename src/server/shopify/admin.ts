@@ -350,45 +350,70 @@ export async function fetchDraftLinks(
 // ---------------------------------------------------------------------------
 // Requester ids of cards stored before snapshots kept them (Wave 1c search
 // backfill): the Shopify customer and, for a B2B purchase, the company
-// contact, read live by id.
+// contact and the company location, read live by id. Orders stored before
+// Wave 1b read the purchasing entity carry no location, and their shipping
+// company names rarely equal a location name, so this read is how they get
+// one. The purchasing entity's company fields need a companies scope
+// (companiesEnabled): a store without one is asked for the customer only.
 
-export const REQUESTER_IDS_QUERY = `query RequesterIds($ids: [ID!]!) {
+const REQUESTER_ENTITY = "purchasingEntity { __typename ... on PurchasingCompany { contact { id } location { id } } }";
+
+function requesterIdsDocument(companies: boolean): string {
+  const fields = companies ? `id customer { id } ${REQUESTER_ENTITY}` : "id customer { id }";
+  return `query RequesterIds($ids: [ID!]!) {
   nodes(ids: $ids) {
-    ... on Order { id customer { id } purchasingEntity { __typename ... on PurchasingCompany { contact { id } } } }
-    ... on DraftOrder { id customer { id } purchasingEntity { __typename ... on PurchasingCompany { contact { id } } } }
+    ... on Order { ${fields} }
+    ... on DraftOrder { ${fields} }
   }
 }`;
+}
+
+// The full document (with a companies scope), priced in client.test.ts.
+export const REQUESTER_IDS_QUERY = requesterIdsDocument(true);
+const REQUESTER_IDS_CUSTOMER_QUERY = requesterIdsDocument(false);
+
+export function requesterIdsQueryFor(companies: boolean): string {
+  return companies ? REQUESTER_IDS_QUERY : REQUESTER_IDS_CUSTOMER_QUERY;
+}
+
 export const REQUESTER_CHUNK = 50;
 
-export type RequesterIds = { customerId: string; contactId: string };
+// customerId and contactId are "" when Shopify names none; locationId is the
+// company location's legacy id (the value orders.location_id holds), or
+// null for a customer's own purchase or without a companies scope.
+export type RequesterIds = { customerId: string; contactId: string; locationId: string | null };
 
 function requesterIdsOf(node: unknown): RequesterIds | null {
   if (!isRecord(node)) {
     return null;
   }
   const customer = isRecord(node.customer) && typeof node.customer.id === "string" ? legacyIdOf(node.customer.id) : "";
-  if (customer.length === 0) {
-    return null;
-  }
   const entity = isRecord(node.purchasingEntity) ? node.purchasingEntity : null;
   const contact = entity && isRecord(entity.contact) && typeof entity.contact.id === "string" ? legacyIdOf(entity.contact.id) : "";
-  return { customerId: customer, contactId: contact };
+  const location = entity && isRecord(entity.location) ? companyLocationIdOf(entity.location.id) : null;
+  if (customer.length === 0 && location === null) {
+    return null;
+  }
+  return { customerId: customer, contactId: contact, locationId: location };
 }
 
-// By order or draft gid, REQUESTER_CHUNK ids per request. A card with no
-// customer (or one Shopify no longer has) is left out of the map. Any
-// failed chunk fails the whole lookup.
+// By order or draft gid, REQUESTER_CHUNK ids per request. A card with
+// neither a customer nor a company location (or one Shopify no longer has)
+// is left out of the map. Any failed chunk fails the whole lookup.
+// companies: the stored grant holds a companies scope (companiesEnabled).
 export async function fetchRequesterIds(
   shopDomain: string,
   token: string,
   gids: readonly string[],
+  opts: { companies: boolean },
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ kind: "ok"; ids: Map<string, RequesterIds> } | AdminFailure> {
   const ids = new Map<string, RequesterIds>();
   const unique = [...new Set(gids)];
+  const query = requesterIdsQueryFor(opts.companies);
   for (let i = 0; i < unique.length; i += REQUESTER_CHUNK) {
     const chunk = unique.slice(i, i + REQUESTER_CHUNK);
-    const result = await shopifyGraphql(shopDomain, token, REQUESTER_IDS_QUERY, { ids: chunk }, fetchImpl);
+    const result = await shopifyGraphql(shopDomain, token, query, { ids: chunk }, fetchImpl);
     if (result.kind !== "ok") {
       return failed(result);
     }
