@@ -1741,3 +1741,201 @@ request, never a real employee's first.
   load average 60 (a stuck Gemini crash handler, stopped with Ryan's OK);
   the lead ran the gates, read the migration proof and reviewed the
   screenshots under the scratchpad's wave-1a/ui.
+
+## STATE UPDATE, 2026-10-07 WAVE 1B locations, editing requests, cancel (supersedes above)
+
+- Branch build/m1-core on top of 6f71063 (Wave 1a's state update, which
+  is origin/main and production). Commits a8954f0 through cbca287 (34),
+  plus this docs commit, built batch by batch from
+  docs/plans/2026-10-05-wave-1b-locations-edit-cancel.md, each batch
+  reviewed for spec compliance and then code quality. NOT pushed, NOT
+  deployed. Gates at the end: 1862 tests in 174 files, `npx tsc --noEmit
+  --incremental false` clean, `npm run build` clean.
+- Commits: a8954f0 formatter; e337e40, c2d99e6 migration 0012 and the
+  Cancelled status; 479d2f9, 11df5a5 snapshots carry location and
+  cancelledAt; 1acb7a9, b7a22a3, 9bead1c, 2aafa56, 92bcbd3, 3fb36a7
+  location reads, sync, triggers, webhooks, backfill, the sync stamp;
+  70e41a7, ee9fbc4, 49fec8a, f62cb0d, 6b7ec55 cards, drawer ship-to,
+  Branch column, purchase orders; 3259fc0, 4e948e9, afc740e, 94654dc
+  status rules and the two Wave 1a review findings; 06b250c Shopify to
+  app cancellations; 1492f14, 3219abc, 9e66afd, 2517968, 0e6ca25 Cancel
+  order; 14df9e9, d40ad6d, c2e5b9b, d5879d4, b9219bd, 628a208, 6566d11
+  Edit request; cbca287 final verification fix (below).
+- NEW MIGRATION 0012 (drizzle/0012_locations_edit_cancel.sql): `locations`
+  table (unique on workspace and Shopify location id), `orders.location_id`,
+  `store_connections.locations_synced_at`, and a closed slate Cancelled
+  status (link `cancelled`) appended to every workspace with fewer than 20
+  statuses and no cancelled key or link. New event types `draft_edited`
+  and `order_cancelled` (TypeScript only, no CHECK). Additive. No new
+  dependency, binding, secret or wrangler change. The sync test pin is now
+  0012 (inserts name `orders.location_id`).
+- Proven on production-shaped data (newest backup,
+  orderingdesk-before-0011-2026-10-06.sql, applied through 0010, in a
+  throwaway local D1 under the scratchpad; 42 data rows): 0000 to 0010,
+  the rows, then 0011 and 0012. Every table keeps its row count except
+  statuses 8 to 9 (IMPACT's Cancelled: slate, sort 8, link cancelled,
+  closed 1, a UUID-shaped id); `locations` exists with 0 rows and its
+  unique index; `orders.location_id` is the last column and set on no
+  row; `locations_synced_at` is null; orders, events, purchase orders,
+  the old store_connections columns and the old status rows are identical
+  by digest; foreign_key_check is empty; open plus closed equals the 12
+  cards; the app's read model opens all 12 with their timelines (12
+  events) and counts 3 in Needs approval.
+- What shipped:
+  - Locations: `src/server/sync/locations.ts` (reading through
+    `src/server/shopify/locations.ts`) syncs Shopify company locations
+    (50 a page) on connection save, Refresh connection, the cron once a
+    day (timed by `locations_synced_at`, stamped by every sync that is not
+    skipped, failed ones too) and `company_locations/*` webhooks. A
+    complete sync marks rows it did not see `active = 0` (kept, never
+    deleted, since cards still name them). After each sync and location
+    webhook, one UPDATE gives every card still without a location the
+    location whose name exactly one location of the workspace has.
+  - Every snapshot writer records `orders.location_id` from the purchasing
+    entity (orders only with a companies scope; drafts always, as draft
+    sync already needs `read_companies`).
+  - Addresses: one formatter (`src/lib/address.ts`) and one component
+    (`AddressBlock`). With a location: the location name in bold, then the
+    order's street lines (falling back to the location's synced address),
+    phone last; without one, the lines as before. Used by the drawer's Ship
+    to, the PO modal prefill, the PO send step, the vendor email and the
+    PO PDF. The desktop list has a Branch column from 1280 px (location
+    name, else the request's branch, else a muted "No branch") in place of
+    the total; below that the branch rides in the customer line, as on the
+    phone cards.
+  - Edit request (managers and platform admins, drafts only, needs
+    `write_draft_orders` and `read_products`): quantities 1 to 999, remove
+    lines (one stays), move the ship-to to another active location of the
+    same company that has a shipping address. Refused for custom lines,
+    item discounts or price overrides, bundles, more than 50 lines and
+    lines whose variant is gone. GET reads the draft fresh; POST reads
+    again and refuses with the fresh editor when Shopify's `updatedAt`
+    moved, then sends `draftOrderUpdate` once with the full line list
+    (every custom attribute exactly as just read), the purchasing entity,
+    and a shipping address only when the location changes. Tags, note,
+    cart attributes and the order discount are untouched. A total above $0
+    afterwards comes back as a warning (Approve needs $0). Opening the
+    editor replaces the Approve buttons, and a change to the request's
+    content closes an open Approve confirmation with a notice.
+  - Cancel order (managers and platform admins, orders only, $0 orders
+    only, a reason required): `orderCancel` once with reason OTHER,
+    `notifyCustomer` false, `restock` false, no `refundMethod` (no
+    refund), and "Ordering Desk: <reason>" cut to 255 as the staff note.
+    The accepted cancel is read back up to 3 times; the card moves either
+    way and the drawer says "not confirmed yet" until the snapshot carries
+    `cancelledAt`. The reason note and the `order_cancelled` entry are kept
+    even when the orders/cancelled webhook moves the card first.
+  - Cancelled status rules: nothing moves a card into the status linked to
+    `cancelled` except Cancel order and Shopify (the status control and
+    the bulk list leave it out); only a manager moves a card out, and only
+    to a status with no Shopify link.
+  - Shopify to app: an order snapshot that newly carries `cancelledAt`
+    moves the card to Cancelled from any status ("Cancelled in Shopify")
+    and wins over a tag, a fulfillment or a draft completion in the same
+    change; an order first seen cancelled starts there.
+  - The orders page query is at 798 of the 800 budget with a companies
+    scope (783 without); any new field must give points back.
+- The id convention: `orders.location_id` and
+  `locations.shopify_location_id` both hold the Shopify company location's
+  legacy id (the numeric tail of its gid); join on workspace and that id.
+  `locations.id` is an internal UUID.
+- Owner decisions (2026-10-07, they win over the plan):
+  - Cancel order after approval (and Edit request) follow Approve and
+    Reject: staff get 403 with a plain sentence (they can already see the
+    order), outsiders 404.
+  - Vendor goods default to the requester's company location on purchase
+    orders. Wave 4 builds the PO ship-to switch; this wave only formats PO
+    ship-to through the address formatter.
+  - Every address shows the location name in bold with the address below.
+  - `read_products` and `read_companies` are granted on the IMPACT
+    connection.
+  - The two Wave 1a final review findings are fixed here (4e948e9,
+    afc740e): the first status, where new orders and requests land, can
+    never be closed (the statuses service refuses it in plain words and
+    Settings > Statuses disables that row's Closed switch with the reason);
+    Needs approval leaves out requests whose status links to
+    draft_rejected, closed or not, with one SQL fragment for the view and
+    its count (src/server/desk/read.ts) and the same rule on the client
+    (src/lib/desk-state.ts).
+- Final verification fix (cbca287): "Cancelled in Shopify" in full was
+  wider than the 10rem Order column and ran over the Date column (worse
+  beside a price chip). The list mark now reads Cancelled (the rest for
+  screen readers and on hover, like Deleted), and the Order cell clips
+  its marks at its edge. The drawer keeps the full words.
+- Deploy order (operator, after review):
+  1. At the final commit the three gates are green (above).
+  2. Backup and bookmark: `npx wrangler d1 export orderingdesk --remote
+     --output ../backups/orderingdesk-before-0012-<date>.sql` and record a
+     time-travel bookmark (`npx wrangler d1 time-travel info
+     orderingdesk`).
+  3. Production must be at 0011. `npm run db:migrate:remote` FIRST
+     (applies 0012), THEN `npm run deploy`. Code deployed before 0012
+     fails every sync and every order insert.
+  4. Ryan: Settings > Store connection > Refresh connection once
+     (registers `company_locations/*` and runs the first location sync).
+     If Edit request still says `read_products` is missing, add it in the
+     Dev Dashboard, release the version, then Refresh connection again.
+  5. Read-only check: `npx wrangler d1 execute orderingdesk --remote
+     --command "SELECT name, active, company_id FROM locations"` lists
+     IMPACT's branches. Watch `npx wrangler tail` for no
+     `MAX_COST_EXCEEDED` on the orders page, no 401 on
+     `/api/webhooks/shopify/...` for `company_locations/*`, and a
+     `[locations]` line from the cron once a day.
+  6. Pages loaded before the deploy lack Edit request, Cancel order and
+     the Branch column: managers reload once.
+  7. Rollback: 0012 is additive, so `npx wrangler rollback` alone undoes a
+     bad deploy (the Cancelled status stays as an ordinary closed status).
+     Use the time-travel bookmark only for damaged data.
+- Stage 0 live checks with Ryan, on test requests and test orders only:
+  - [ ] Edit a test request (one quantity, one removal, one location
+    switch), then in Shopify check the lines, every personalization
+    attribute and proof link, the $0 total, the company location and the
+    shipping address; approve it from the desk.
+  - [ ] Cancel a test $0 order from the desk and check in Shopify:
+    cancelled, no email to the customer, nothing restocked, nothing
+    refunded, staff note present.
+  - [ ] Cancel another test order in Shopify admin and see its card move
+    with "Cancelled in Shopify".
+  - [ ] Add a company location in Shopify and see it appear (webhook) and
+    stay after the next day's cron pass.
+  - [ ] The Branch column and the bold location name on the desk, the
+    drawer and a purchase order.
+- Known limits:
+  - The company location on orders, the location sync and the location
+    webhooks need `read_companies` or `write_companies`; a store without
+    one keeps syncing, without locations.
+  - The edit uses the location's synced address (refreshed daily and by
+    webhook); a location without a shipping address is not offered.
+  - Edits are refused for custom lines, item discounts or price
+    overrides, bundles and more than 50 lines.
+  - Shopify's cancel job could fail after accepting; the drawer keeps
+    saying "not confirmed yet" until the snapshot carries `cancelledAt`.
+  - An order cancelled in Shopify and then moved out of Cancelled by a
+    manager still offers Cancel order; the service reads Shopify first,
+    sends nothing, moves the card back to Cancelled and keeps the reason
+    as a note.
+  - The orders query budget is used up (798 of 800).
+  - Orders cancelled in Shopify before this deploy move only when Shopify
+    next updates them.
+  - A priced card whose Order cell holds a long mark (Draft or Cancelled
+    beside a long CA$ price) clips the price chip at the column edge; the
+    drawer shows the price. Prices show only on priced cards on IMPACT's
+    $0 store.
+- Local verification (screenshots under the scratchpad's wave-1b/ui, 1440
+  by 900 and 375 by 812, light and dark): Branch column and "No branch";
+  drawer Ship to with the location name in bold; PO modal prefill and send
+  step starting with the location; Cancel order through reason and review;
+  request drawer as manager (Edit request offered, the Approve
+  confirmation and the editor never open together) and as staff (no Edit
+  request, no Cancel order); the editor through a browser stand-in for its
+  GET (40 px steppers and Remove, the last item's Remove disabled with its
+  reason, location cards with a focus ring, the review's question focused
+  first, Before and After stacked on a phone, a refusal shown in the
+  step); Settings > Statuses with the first row's Closed switch disabled.
+  Contrast, all AA: "No branch" 9.6 (light) and 9.6 (dark), location labels
+  17.5 and 15.5, their addresses 9.6 and 9.6, the Cancelled chip 7.8 and
+  8.4 at 12 px, the not-confirmed note 6.5 and 8.6. Not exercised locally:
+  the final Cancel order press against the server (the session's
+  permission check refused a press that sends a Shopify write, even to the
+  unreachable sample store) and the 400 ms Save guard; both are covered by
+  the route, service and confirmArmed tests.
