@@ -8,6 +8,7 @@ import type { Db } from "@/db";
 import { applyBatch, rowsAffected } from "@/db/batch";
 import { inviteSends, pendingInvites, shopifyRoster, user, workspaceMembers, workspaces } from "@/db/schema";
 import { isWorkspaceRole, type WorkspaceRole } from "@/lib/roles";
+import { revokeGrants } from "@/mcp/grants";
 import { isRecord } from "./desk/shapes";
 import { listRosterRequests, rosterGrants, type RosterRequests } from "./roster";
 import { normalizeEmail } from "./desk/validate";
@@ -220,6 +221,8 @@ export async function removeMember(
       );
     }
     await applyBatch(db, statements);
+    // Their AI connections stop at once (every MCP call checks D1).
+    await revokeGrants(db, { workspaceId: ctx.workspaceId, userId: targetUserId }, { userId: ctx.actorUserId, reason: "member_removed" }, opts?.now ?? Date.now());
     return { kind: "removed", userId: targetUserId };
   }
 

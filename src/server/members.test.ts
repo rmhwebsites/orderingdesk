@@ -315,6 +315,27 @@ describe("removeMember", () => {
     expect((await membersOf(db)).map((member) => member.userId)).toEqual(["u_lead", "u_tagged"]);
   });
 
+  // Wave 2: removing a member ends their AI connections at once.
+  it("revokes the removed member's AI connections", async () => {
+    const db = await setup();
+    await db.insert(schema.aiGrants).values({
+      id: "g_crew",
+      workspaceId: WS,
+      userId: "u_crew",
+      host: "orders.example.com",
+      clientId: "https://claude.ai/oauth/mcp-client",
+      client: "claude",
+      clientDomain: "claude.ai",
+      redirectHost: "claude.ai",
+      scopes: ["desk.read"],
+      createdAt: 1,
+      expiresAt: 4_000_000_000_000,
+    });
+    expect(await removeMember(db, ctx, { userId: "u_crew" }, { now: 77 })).toEqual({ kind: "removed", userId: "u_crew" });
+    const [grant] = await db.select().from(schema.aiGrants).where(eq(schema.aiGrants.id, "g_crew"));
+    expect(grant).toMatchObject({ revokedAt: 77, revokedBy: "u_lead", revokeReason: "member_removed" });
+  });
+
   it("lets a manager remove another manager", async () => {
     const db = await setup();
     await seedMember(db, WS, "u_free", "manager");
