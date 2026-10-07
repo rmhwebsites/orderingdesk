@@ -3,7 +3,7 @@ import { and, eq } from "drizzle-orm";
 import type { Db } from "@/db";
 import * as schema from "@/db/schema";
 import { encryptSecret } from "@/server/crypto";
-import { openTestDb, seedUser, seedWorkspace } from "@/server/desk/test-helpers";
+import { openTestDb, seedCancelledStatus, seedUser, seedWorkspace } from "@/server/desk/test-helpers";
 import { claimAccessOnSignIn } from "@/server/invites";
 import { approveRosterEntry } from "@/server/roster";
 import type { LiveEvent } from "@/lib/live-events";
@@ -812,5 +812,42 @@ describe("company location webhooks", () => {
     const receipt = await deliver(db, env, { topic: "company_locations/create", payload: { id: 102 } });
     await receipt.work?.();
     expect(await db.select().from(schema.locations)).toEqual([]);
+  });
+});
+
+// Comprehensive design section 2: an order cancelled in Shopify moves its
+// card to Cancelled from any status, with a timeline entry.
+describe("orders/cancelled", () => {
+  it("moves the card to the cancelled status, whatever status it had", async () => {
+    const db = await setup();
+    await seedCancelledStatus(db, WS);
+    await db.insert(schema.orders).values({
+      id: "o_c",
+      workspaceId: WS,
+      shopifyOrderId: "8101",
+      name: "#8101",
+      shopify: normalizeOrders([orderNode()])[0],
+      statusKey: "shipped",
+      createdAt: 1,
+      syncedAt: 1,
+    });
+    const { env } = fakeEnv();
+    const shop = store({ node: orderNode({ cancelledAt: "2026-10-02T11:59:30Z" }) });
+    const receipt = await deliver(
+      db,
+      env,
+      { topic: "orders/cancelled", payload: { id: 8101, admin_graphql_api_id: "gid://shopify/Order/8101" } },
+      shop.impl,
+    );
+    await receipt.work?.();
+    const [row] = await db.select().from(schema.orders).where(eq(schema.orders.id, "o_c"));
+    expect(row.statusKey).toBe("cancelled");
+    const moves = await db
+      .select()
+      .from(schema.events)
+      .where(and(eq(schema.events.orderId, "o_c"), eq(schema.events.type, "status")));
+    expect(moves.map((event) => [event.text, event.source, event.actorId])).toEqual([
+      ["Cancelled in Shopify. Status set to Cancelled", "shopify", null],
+    ]);
   });
 });

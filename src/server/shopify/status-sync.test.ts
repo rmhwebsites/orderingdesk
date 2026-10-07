@@ -3,7 +3,14 @@ import { and, eq } from "drizzle-orm";
 import type { Db } from "@/db";
 import * as schema from "@/db/schema";
 import { encryptSecret } from "@/server/crypto";
-import { openTestDb, seedOrder, seedWorkspace, snapshotOf } from "@/server/desk/test-helpers";
+import {
+  draftSnapshotOf,
+  openTestDb,
+  seedCancelledStatus,
+  seedOrder,
+  seedWorkspace,
+  snapshotOf,
+} from "@/server/desk/test-helpers";
 import { SHOPIFY_TAG_MAX, STATUS_LABEL_MAX } from "@/lib/status-label";
 import {
   ECHO_WINDOW_MS,
@@ -303,6 +310,53 @@ describe("evaluateShopifyTransitions", () => {
       ),
     ).toEqual([]);
     expect(select).not.toHaveBeenCalled();
+  });
+});
+
+// Comprehensive design section 2: an order cancelled in Shopify moves its
+// card to the cancelled status from any status.
+describe("cancellations from Shopify", () => {
+  const WITH_CANCELLED: StatusRow[] = [...STATUSES, { key: "cancelled", label: "Cancelled", sort: 9, shopifyLink: "cancelled" }];
+  const cancelled = (tags = "") => snapshotOf({ fulfillmentStatus: "unfulfilled", delivered: false, tags, cancelledAt: 5000 });
+
+  it("moves an order Shopify newly reports cancelled to the cancelled status, from any status", () => {
+    expect(decide(unfulfilled(), cancelled(), "delivered", none, WITH_CANCELLED)).toEqual({ to: WITH_CANCELLED[5], reason: "cancelled" });
+    expect(decide(unfulfilled(), cancelled(), "new", none, WITH_CANCELLED)).toEqual({ to: WITH_CANCELLED[5], reason: "cancelled" });
+  });
+
+  it("wins over a tag or a fulfillment in the same change, and acts once", () => {
+    const both = snapshotOf({ fulfillmentStatus: "fulfilled", delivered: false, tags: "Ordering Desk: Approved", cancelledAt: 5000 });
+    expect(decide(unfulfilled(), both, "new", none, WITH_CANCELLED)).toMatchObject({ reason: "cancelled" });
+    expect(decide(cancelled(), cancelled("vip"), "processing", none, WITH_CANCELLED)).toBeNull();
+    expect(decide(unfulfilled(), cancelled(), "cancelled", none, WITH_CANCELLED)).toBeNull();
+    expect(decide(unfulfilled(), cancelled(), "new", none, STATUSES)).toBeNull();
+  });
+
+  it("never moves a card into the cancelled status by a tag", () => {
+    expect(decide(unfulfilled(), unfulfilled("Ordering Desk: Cancelled"), "new", none, WITH_CANCELLED)).toBeNull();
+  });
+
+  it("follows a draft completed and cancelled in one change to the cancelled status", () => {
+    const rows: StatusRow[] = [...WITH_CANCELLED, { key: "done", label: "Done", sort: 10, shopifyLink: "draft_completed" }];
+    expect(decide(draftSnapshotOf(), cancelled(), "new", none, rows)).toMatchObject({ reason: "cancelled", to: { key: "cancelled" } });
+  });
+
+  it("starts an order Shopify already cancelled in the cancelled status, never by a tag alone", () => {
+    expect(initialStatusFor(cancelled(), WITH_CANCELLED, "new")).toBe("cancelled");
+    expect(initialStatusFor(unfulfilled("Ordering Desk: Cancelled"), WITH_CANCELLED, "new")).toBe("new");
+  });
+
+  it("words the move for the timeline", async () => {
+    const { db } = await setup();
+    await seedCancelledStatus(db, WS);
+    await seedOrder(db, WS, { id: "o1", statusKey: "shipped" });
+    const change = await applyShopifyMove(db, WS, "o1", "shipped", WITH_CANCELLED[5], "cancelled", NOW);
+    expect(change?.event).toMatchObject({
+      text: "Cancelled in Shopify. Status set to Cancelled",
+      meta: { from: "shipped", to: "cancelled", reason: "cancelled" },
+      source: "shopify",
+      actorId: null,
+    });
   });
 });
 

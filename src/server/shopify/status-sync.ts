@@ -34,6 +34,11 @@
 //   sorts after the current one (never backward past a later status). With
 //   no status linked to delivered, a delivered order counts as fulfilled.
 //   A tag edit in the same change wins over the fulfillment.
+// - Cancellation (comprehensive design section 2): the fresh order snapshot
+//   carries cancelledAt and the stored one did not: the card moves to the
+//   status linked to cancelled FROM ANY STATUS, and nothing else in the same
+//   change counts. A tag never moves a card into that status. An order first
+//   seen already cancelled starts there.
 // - The Shopify state mapping (shopifyStateOf, over the stored snapshot):
 //     delivered: displayFulfillmentStatus FULFILLED, and every fulfillment
 //       that was not canceled shows DELIVERED or PICKED_UP (see deliveredOf
@@ -109,7 +114,7 @@ export type StatusRow = {
 };
 
 export type ShopifyState = "fulfilled" | "delivered" | null;
-export type MoveReason = "tag" | "fulfilled" | "delivered" | "completed";
+export type MoveReason = "tag" | "fulfilled" | "delivered" | "completed" | "cancelled";
 export type StatusChange = { event: EventView; order: LiveOrderStatus };
 // A move decided from Shopify. completedAs: set when the move follows a
 // draft's completion, the name of the order it became ("" when unknown).
@@ -184,8 +189,12 @@ function statusForState(state: ShopifyState, rows: readonly StatusRow[]): Status
 // Whether a card of this kind may sit in this status by a tag (or start in
 // it): a draft never in a status linked to fulfilled, delivered or
 // draft_completed (Approve and completion put it there); an order never in
-// the draft_rejected status.
+// the draft_rejected status; and no card by a tag into the status linked to
+// cancelled (only Shopify's cancellation puts it there).
 function allowedFor(kind: "draft" | "order", row: StatusRow): boolean {
+  if (row.shopifyLink === "cancelled") {
+    return false;
+  }
   if (kind === "draft") {
     return row.shopifyLink === null || row.shopifyLink === "draft_rejected";
   }
@@ -204,6 +213,26 @@ export function completedNow(before: unknown, after: unknown): boolean {
     draftOpen(before) &&
     (snapshotKind(after) === "order" || (isRecord(after) && after.status === "completed"))
   );
+}
+
+// An order snapshot Shopify reports cancelled (comprehensive design section
+// 2). Drafts are never cancelled (Shopify deletes them).
+export function cancelledIn(snapshot: unknown): boolean {
+  return (
+    snapshotKind(snapshot) === "order" &&
+    isRecord(snapshot) &&
+    typeof snapshot.cancelledAt === "number" &&
+    snapshot.cancelledAt > 0
+  );
+}
+
+// The change is Shopify's cancellation: not cancelled before, cancelled now.
+export function cancelledNow(before: unknown, after: unknown): boolean {
+  return cancelledIn(after) && !cancelledIn(before);
+}
+
+function linkedToCancelled(rows: readonly StatusRow[]): StatusRow | undefined {
+  return [...rows].sort((a, b) => a.sort - b.sort).find((row) => row.shopifyLink === "cancelled");
 }
 
 // The name of the order a completed draft became: the order snapshot's own
@@ -233,7 +262,16 @@ export function initialStatusFor(snapshot: unknown, rows: readonly StatusRow[], 
     }
     return [...rows].sort((a, b) => a.sort - b.sort).find((row) => row.shopifyLink === null)?.key ?? defaultKey;
   }
-  const named = statusesNamed(tagsOf(snapshot), rows);
+  if (cancelledIn(snapshot)) {
+    const cancelled = linkedToCancelled(rows);
+    if (cancelled) {
+      return cancelled.key;
+    }
+  }
+  const named = statusesNamed(
+    tagsOf(snapshot),
+    rows.filter((row) => row.shopifyLink !== "cancelled"),
+  );
   if (named.size === 1) {
     return [...named][0];
   }
@@ -249,6 +287,13 @@ export function decideShopifyMove(input: {
   recentlyHeld: ReadonlySet<string>;
 }): ShopifyMove | null {
   const byKey = new Map(input.statuses.map((row) => [row.key, row]));
+
+  // A cancellation, from any status; it wins over everything else in the
+  // same change (a tag, a fulfillment, a draft's completion).
+  if (cancelledNow(input.before, input.after)) {
+    const to = linkedToCancelled(input.statuses);
+    return to && to.key !== input.currentKey ? { to, reason: "cancelled" } : null;
+  }
 
   // A draft's completion, from any status (see the header). Nothing else in
   // the same change counts.
@@ -289,14 +334,17 @@ export function decideShopifyMove(input: {
 
 // A cheap first look, with no database read: whether this snapshot change
 // could move a status at all (a status tag changed, Shopify's state rose,
-// or a draft was completed).
+// a draft was completed, or the order was cancelled).
 function mightMove(before: unknown, after: unknown): boolean {
   const statusTags = (snapshot: unknown) => new Set(tagsOf(snapshot).filter(isStatusTag).map(tagKey));
   const was = statusTags(before);
   const now = statusTags(after);
   const tagsChanged = was.size !== now.size || [...now].some((tag) => !was.has(tag));
   return (
-    tagsChanged || rankOf(shopifyStateOf(after)) > rankOf(shopifyStateOf(before)) || completedNow(before, after)
+    tagsChanged ||
+    rankOf(shopifyStateOf(after)) > rankOf(shopifyStateOf(before)) ||
+    completedNow(before, after) ||
+    cancelledNow(before, after)
   );
 }
 
@@ -317,6 +365,8 @@ function moveText(to: StatusRow, reason: MoveReason, completedAs: string | undef
       return `Status set to ${to.label}: Shopify reports the order delivered`;
     case "completed":
       return `Status set to ${to.label}: the draft was completed in Shopify`;
+    case "cancelled":
+      return `Cancelled in Shopify. Status set to ${to.label}`;
   }
 }
 
