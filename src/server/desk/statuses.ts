@@ -45,9 +45,9 @@ const LINK_NAMES: Record<ShopifyLink, string> = {
   cancelled: "Shopify's cancelled state",
 };
 
-// Statuses whose cards are finished when they are new: a delivered order
-// and a rejected request. Wave 1b adds "cancelled" here.
-const CLOSED_LINKS: readonly string[] = ["delivered", "draft_rejected"];
+// Statuses whose cards are finished when they are new: a delivered order,
+// a rejected request and a cancelled order (Wave 1b).
+const CLOSED_LINKS: readonly string[] = ["delivered", "draft_rejected", "cancelled"];
 
 export function closedByDefault(link: string | null): boolean {
   return link !== null && CLOSED_LINKS.includes(link);

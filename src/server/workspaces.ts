@@ -17,7 +17,10 @@ export const WORKSPACE_NAME_MAX = 80;
 // Reject puts it (draft orders spec section 2.3; migration 0010 did the
 // same for existing workspaces). Delivered and Rejected are closed: their
 // cards leave the Open view (migration 0011 did the same for existing
-// workspaces).
+// workspaces). Cancelled is where Cancel order and Shopify's own
+// cancellations put an order (comprehensive design section 2; migration
+// 0012 did the same for existing workspaces). Nine rows of nine columns
+// bind 81 parameters, under D1's 100 per statement.
 export const DEFAULT_STATUSES = [
   { key: "new", label: "New", color: "lime", triggersPo: false, shopifyLink: null, closed: false },
   { key: "processing", label: "Processing", color: "blue", triggersPo: false, shopifyLink: null, closed: false },
@@ -27,6 +30,7 @@ export const DEFAULT_STATUSES = [
   { key: "delivered", label: "Delivered", color: "slate", triggersPo: false, shopifyLink: "delivered", closed: true },
   { key: "issue", label: "Issue", color: "red", triggersPo: false, shopifyLink: null, closed: false },
   { key: "rejected", label: "Rejected", color: "pink", triggersPo: false, shopifyLink: "draft_rejected", closed: true },
+  { key: "cancelled", label: "Cancelled", color: "slate", triggersPo: false, shopifyLink: "cancelled", closed: true },
 ] as const;
 
 // The workspaces a viewer may see, by name. Shared by the hub page and GET

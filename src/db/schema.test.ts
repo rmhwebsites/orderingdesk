@@ -436,28 +436,36 @@ describe("platform migration of existing rows", () => {
   });
 
   // 0004 links the shipped and delivered keys; 0010 (draft orders) links
-  // the approved key to draft_completed and adds a Rejected status last.
+  // the approved key to draft_completed and adds a Rejected status last;
+  // 0011 closes Delivered and Rejected; 0012 adds a closed Cancelled last.
   it("links the shipped and delivered status keys to their Shopify states, and the draft outcomes", () => {
     expect(
-      db.prepare("SELECT workspace_id, key, label, sort, shopify_link FROM statuses ORDER BY workspace_id, sort").all(),
+      db
+        .prepare("SELECT workspace_id, key, label, sort, shopify_link, closed FROM statuses ORDER BY workspace_id, sort")
+        .all(),
     ).toEqual([
-      { workspace_id: "ws_custom", key: "sent", label: "Shipped", sort: 0, shopify_link: null },
-      { workspace_id: "ws_custom", key: "rejected", label: "Rejected", sort: 1, shopify_link: "draft_rejected" },
-      { workspace_id: "ws_impact", key: "new", label: "New", sort: 0, shopify_link: null },
-      { workspace_id: "ws_impact", key: "processing", label: "Processing", sort: 1, shopify_link: null },
-      { workspace_id: "ws_impact", key: "on_hold", label: "On Hold", sort: 2, shopify_link: null },
-      { workspace_id: "ws_impact", key: "approved", label: "Approved", sort: 3, shopify_link: "draft_completed" },
-      { workspace_id: "ws_impact", key: "shipped", label: "Shipped", sort: 4, shopify_link: "fulfilled" },
-      { workspace_id: "ws_impact", key: "delivered", label: "Delivered", sort: 5, shopify_link: "delivered" },
-      { workspace_id: "ws_impact", key: "issue", label: "Issue", sort: 6, shopify_link: null },
-      { workspace_id: "ws_impact", key: "rejected", label: "Rejected", sort: 7, shopify_link: "draft_rejected" },
+      { workspace_id: "ws_custom", key: "sent", label: "Shipped", sort: 0, shopify_link: null, closed: 0 },
+      { workspace_id: "ws_custom", key: "rejected", label: "Rejected", sort: 1, shopify_link: "draft_rejected", closed: 1 },
+      { workspace_id: "ws_custom", key: "cancelled", label: "Cancelled", sort: 2, shopify_link: "cancelled", closed: 1 },
+      { workspace_id: "ws_impact", key: "new", label: "New", sort: 0, shopify_link: null, closed: 0 },
+      { workspace_id: "ws_impact", key: "processing", label: "Processing", sort: 1, shopify_link: null, closed: 0 },
+      { workspace_id: "ws_impact", key: "on_hold", label: "On Hold", sort: 2, shopify_link: null, closed: 0 },
+      { workspace_id: "ws_impact", key: "approved", label: "Approved", sort: 3, shopify_link: "draft_completed", closed: 0 },
+      { workspace_id: "ws_impact", key: "shipped", label: "Shipped", sort: 4, shopify_link: "fulfilled", closed: 0 },
+      { workspace_id: "ws_impact", key: "delivered", label: "Delivered", sort: 5, shopify_link: "delivered", closed: 1 },
+      { workspace_id: "ws_impact", key: "issue", label: "Issue", sort: 6, shopify_link: null, closed: 0 },
+      { workspace_id: "ws_impact", key: "rejected", label: "Rejected", sort: 7, shopify_link: "draft_rejected", closed: 1 },
+      { workspace_id: "ws_impact", key: "cancelled", label: "Cancelled", sort: 8, shopify_link: "cancelled", closed: 1 },
     ]);
   });
 
-  // 0011 (work queue) closes Delivered and Rejected.
+  // 0011 (work queue) closes Delivered and Rejected; 0012 adds a closed
+  // Cancelled.
   it("closes the delivered and rejected statuses", () => {
     expect(db.prepare("SELECT workspace_id, key FROM statuses WHERE closed = 1 ORDER BY workspace_id, key").all()).toEqual([
+      { workspace_id: "ws_custom", key: "cancelled" },
       { workspace_id: "ws_custom", key: "rejected" },
+      { workspace_id: "ws_impact", key: "cancelled" },
       { workspace_id: "ws_impact", key: "delivered" },
       { workspace_id: "ws_impact", key: "rejected" },
     ]);

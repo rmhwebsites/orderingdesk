@@ -16,12 +16,14 @@ import { QueueSettingsPanel } from "./queue-settings";
 // The nine status colors (STATUS_COLORS in src/server/desk/statuses.ts),
 // each a semantic token pair in globals.css.
 const COLORS = ["lime", "blue", "amber", "green", "teal", "violet", "red", "slate", "pink"] as const;
-const LINKS = [
+// Every Shopify link the server accepts (SHOPIFY_LINK_VALUES), with "none".
+export const STATUS_LINK_OPTIONS = [
   { value: "", label: "No Shopify link" },
   { value: "fulfilled", label: "Fulfilled in Shopify" },
   { value: "delivered", label: "Delivered in Shopify" },
   { value: "draft_completed", label: "Draft approved (order created)" },
   { value: "draft_rejected", label: "Draft rejected" },
+  { value: "cancelled", label: "Cancelled in Shopify" },
 ] as const;
 const LIST_MAX = 20;
 
@@ -268,7 +270,7 @@ export function StatusesSection({
                       value={row.shopifyLink ?? ""}
                       onChange={(event) => update(row.uid, { shopifyLink: (event.target.value || null) as Row["shopifyLink"] })}
                     >
-                      {LINKS.map((link) => (
+                      {STATUS_LINK_OPTIONS.map((link) => (
                         <option key={link.value} value={link.value}>
                           {link.label}
                         </option>

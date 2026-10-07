@@ -451,4 +451,19 @@ describe("replaceStatuses", () => {
       error: "Status 1: closed must be true or false",
     });
   });
+
+  // A new status that follows Shopify's cancelled state starts closed, like
+  // Delivered and Rejected (comprehensive design section 2).
+  it("closes a new status linked to cancelled by default", async () => {
+    const { db } = await setup();
+    const result = await replaceStatuses(db, WS, [
+      { key: "new", label: "New", color: "lime", triggersPo: false },
+      entry("Cancelled", { shopifyLink: "cancelled" }),
+    ]);
+    if (result.kind !== "ok") throw new Error(result.kind);
+    expect(result.statuses.map((s) => [s.key, s.closed])).toEqual([
+      ["new", false],
+      ["cancelled", true],
+    ]);
+  });
 });

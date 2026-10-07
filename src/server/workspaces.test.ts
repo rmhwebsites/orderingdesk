@@ -101,16 +101,18 @@ describe("createWorkspace", () => {
     expect(statuses.find((s) => s.key === "shipped")?.shopifyLink).toBe("fulfilled");
     expect(statuses.find((s) => s.key === "delivered")?.shopifyLink).toBe("delivered");
     // Draft orders (spec section 2.3): Approve uses Approved, Reject uses a
-    // pink Rejected status at the end.
+    // pink Rejected status; Cancel order uses a closed Cancelled status at
+    // the end (comprehensive design section 2).
     expect(statuses.find((s) => s.key === "approved")?.shopifyLink).toBe("draft_completed");
+    expect(statuses[statuses.length - 2]).toMatchObject({ key: "rejected", label: "Rejected", shopifyLink: "draft_rejected" });
     expect(statuses[statuses.length - 1]).toEqual({
-      key: "rejected",
-      label: "Rejected",
+      key: "cancelled",
+      label: "Cancelled",
       sort: statuses.length - 1,
       triggersPo: false,
-      shopifyLink: "draft_rejected",
+      shopifyLink: "cancelled",
     });
-    expect(statuses.filter((s) => s.shopifyLink !== null)).toHaveLength(4);
+    expect(statuses.filter((s) => s.shopifyLink !== null)).toHaveLength(5);
     expect(statuses.find((s) => s.key === "approved")?.triggersPo).toBe(true);
   });
 
@@ -121,7 +123,7 @@ describe("createWorkspace", () => {
     expect(second).toMatchObject({ kind: "created", workspace: { slug: "impact-2" } });
   });
 
-  it("starts every new workspace with Delivered and Rejected closed", async () => {
+  it("starts every new workspace with Delivered, Rejected and Cancelled closed", async () => {
     const { db } = openTestDb();
     const result = await createWorkspace(db, "user_admin", { name: "Closed Check" });
     if (result.kind !== "created") throw new Error(result.kind);
@@ -129,7 +131,7 @@ describe("createWorkspace", () => {
       .select({ key: schema.statuses.key, closed: schema.statuses.closed })
       .from(schema.statuses)
       .where(eq(schema.statuses.workspaceId, result.workspace.id));
-    expect(rows.filter((row) => row.closed).map((row) => row.key).sort()).toEqual(["delivered", "rejected"]);
+    expect(rows.filter((row) => row.closed).map((row) => row.key).sort()).toEqual(["cancelled", "delivered", "rejected"]);
   });
 
   it("refuses a missing, blank or overlong name", async () => {

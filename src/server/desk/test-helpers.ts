@@ -299,3 +299,19 @@ export async function seedLocation(
     updatedAt: opts.updatedAt ?? 1,
   });
 }
+
+// The Cancelled status migration 0012 adds to an existing workspace: closed,
+// linked to Shopify's cancelled state, after the statuses already there.
+// (closed as Wave 1a declared it: true in boolean mode, 1 in number mode.)
+export async function seedCancelledStatus(db: Db, workspaceId: string, sort = 9) {
+  await db.insert(schema.statuses).values({
+    id: `${workspaceId}_st_cancelled`,
+    workspaceId,
+    key: "cancelled",
+    label: "Cancelled",
+    color: "slate",
+    sort,
+    shopifyLink: "cancelled",
+    closed: true,
+  });
+}
