@@ -2496,3 +2496,28 @@ describe("runSync against a lagging search index (seeded fuzz)", () => {
     });
   }
 });
+
+// Comprehensive design section 2: the orders page names the purchasing
+// entity's company location only when the stored grant holds a companies
+// scope, so a store without read_companies keeps syncing.
+describe("runSync and the companies scope", () => {
+  it("asks for the company location only with read_companies or write_companies", async () => {
+    const { db, env } = openDb();
+    await seedWorkspace(db, WS);
+    const sim = shopifySim([]);
+    const queries: string[] = [];
+    const spy = (async (url: RequestInfo | URL, init?: RequestInit) => {
+      queries.push(simRequest(init).query);
+      return sim.impl(url, init);
+    }) as typeof fetch;
+    const T = Date.parse("2026-10-06T12:00:00.000Z");
+    expect((await runSync(db, env, WS, { fetchImpl: spy, now: () => T })).error).toBeUndefined();
+    expect(queries.at(-1)).not.toContain("PurchasingCompany");
+    await db
+      .update(schema.storeConnections)
+      .set({ scopes: ["read_orders", "write_orders", "read_customers", "read_companies"] })
+      .where(eq(schema.storeConnections.workspaceId, WS));
+    expect((await runSync(db, env, WS, { fetchImpl: spy, now: () => T + 600000 })).error).toBeUndefined();
+    expect(queries.at(-1)).toContain("... on PurchasingCompany { location { id } }");
+  });
+});

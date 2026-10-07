@@ -8,7 +8,7 @@
 // purpose: the cron path bundles this into the custom worker entrypoint.
 // Callers always get a typed result, never an exception.
 
-import { DRAFT_FIELDS, ORDER_FIELDS, shopifyGraphql, type GraphqlResult } from "./client";
+import { DRAFT_FIELDS, orderFieldsFor, shopifyGraphql, type GraphqlResult } from "./client";
 import { normalizeLineItems, type NormalizedOrder } from "./normalize";
 
 export type AdminFailure =
@@ -69,6 +69,16 @@ export function missingDraftScopes(granted: readonly string[] | null | undefined
 
 export function draftsEnabled(granted: readonly string[] | null | undefined): boolean {
   return Array.isArray(granted) && missingDraftScopes(granted).length === 0;
+}
+
+// Company locations (comprehensive design section 2): the location sync,
+// the location webhooks and the purchasing entity's location on orders
+// need a companies scope (the B2B company fields need it). Optional, like
+// drafts.
+export const COMPANY_SCOPES = ["read_companies", "write_companies"] as const;
+
+export function companiesEnabled(granted: readonly string[] | null | undefined): boolean {
+  return Array.isArray(granted) && COMPANY_SCOPES.some((scope) => granted.includes(scope));
 }
 
 // ---------------------------------------------------------------------------
@@ -191,13 +201,16 @@ export async function replaceWebhookSubscriptions(
 // ---------------------------------------------------------------------------
 // One order, re-fetched for a webhook
 
-// The same selection as the sync's page query (ORDER_FIELDS), so the node
-// normalizes to exactly the snapshot shape the sync stores. One order costs
-// about 157 points by the client.test.ts estimator.
-const ORDER_QUERY = `query OrderById($id: ID!) {
-  order(id: $id) {${ORDER_FIELDS}
+// The same selection as the sync's page query, so the node normalizes to
+// exactly the snapshot shape the sync stores. One order costs about 160
+// points by the client.test.ts estimator (157 without the company
+// location). companies: the stored grant holds a companies scope.
+function orderQuery(companies: boolean): string {
+  return `query OrderById($id: ID!) {
+  order(id: $id) {${orderFieldsFor(companies)}
   }
 }`;
+}
 
 // The raw order node, or null when Shopify has no such order.
 export async function fetchOrderNode(
@@ -205,8 +218,9 @@ export async function fetchOrderNode(
   token: string,
   orderGid: string,
   fetchImpl: typeof fetch = fetch,
+  opts?: { companies?: boolean },
 ): Promise<{ kind: "ok"; node: Record<string, unknown> | null } | AdminFailure> {
-  const result = await shopifyGraphql(shopDomain, token, ORDER_QUERY, { id: orderGid }, fetchImpl);
+  const result = await shopifyGraphql(shopDomain, token, orderQuery(opts?.companies === true), { id: orderGid }, fetchImpl);
   if (result.kind !== "ok") {
     return failed(result);
   }

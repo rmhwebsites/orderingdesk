@@ -6,7 +6,7 @@ import { and, desc, eq, inArray, lt, lte, sql } from "drizzle-orm";
 import type { Db } from "../../db";
 import { applyBatch, rowsAffected } from "../../db/batch";
 import { events, orders, storeConnections } from "../../db/schema";
-import { draftsEnabled } from "../shopify/admin";
+import { companiesEnabled, draftsEnabled } from "../shopify/admin";
 import { fetchOrdersUpdatedSince } from "../shopify/client";
 import { accessTokenFor } from "../shopify/token";
 import { normalizeOrders, type NormalizedOrder } from "../shopify/normalize";
@@ -671,13 +671,10 @@ export async function runSync(
         : Math.max(connection.lastSyncAt - OVERLAP_MS, 0);
     const sinceIso = new Date(sinceMs).toISOString();
 
-    const fetched = await fetchOrdersUpdatedSince(
-      connection.shopDomain,
-      token,
-      sinceIso,
-      fetchImpl,
-      resuming ? { startCursor: resume.cursor } : undefined,
-    );
+    const fetched = await fetchOrdersUpdatedSince(connection.shopDomain, token, sinceIso, fetchImpl, {
+      ...(resuming ? { startCursor: resume.cursor } : {}),
+      companies: companiesEnabled(connection.scopes),
+    });
 
     if (fetched.kind === "auth") {
       return finish({ status: "error", lastError: TOKEN_REJECTED, runningUntil: 0 }, { error: TOKEN_REJECTED });

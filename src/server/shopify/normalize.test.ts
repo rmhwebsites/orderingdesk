@@ -5,6 +5,7 @@ import {
   ATTRIBUTE_KEY_MAX,
   ATTRIBUTE_VALUE_MAX,
   ATTRIBUTES_MAX,
+  companyLocationIdOf,
   ITEM_PROPS_MAX,
   normalizeDrafts,
   normalizeOrders,
@@ -354,6 +355,8 @@ describe("normalizeOrders", () => {
       "note",
       "sourceName",
       "attributes",
+      "cancelledAt",
+      "locationId",
     ]);
     const [bare] = normalizeOrders([{ id: "gid://shopify/Order/7802" }]);
     expect(bare.sourceName).toBe("");
@@ -385,6 +388,32 @@ describe("normalizeOrders", () => {
     ]);
     expect(result).toHaveLength(1);
     expect(result[0].shopifyOrderId).toBe("7003");
+  });
+
+  // Comprehensive design section 2: an order Shopify cancelled, and the B2B
+  // company location the order ships to (the purchasing entity).
+  it("reads the cancellation time and the purchasing entity's company location", () => {
+    const [order] = normalizeOrders([
+      {
+        id: "gid://shopify/Order/7901",
+        legacyResourceId: "7901",
+        name: "#1041",
+        cancelledAt: "2026-10-05T16:00:00Z",
+        purchasingEntity: { __typename: "PurchasingCompany", location: { id: "gid://shopify/CompanyLocation/101" } },
+      },
+    ]);
+    expect(order.cancelledAt).toBe(Date.parse("2026-10-05T16:00:00Z"));
+    expect(order.locationId).toBe("101");
+    const [plain] = normalizeOrders([
+      { id: "gid://shopify/Order/7902", purchasingEntity: { __typename: "Customer" }, cancelledAt: null },
+    ]);
+    expect(plain.cancelledAt).toBeNull();
+    expect(plain.locationId).toBeNull();
+    const [odd] = normalizeOrders([
+      { id: "gid://shopify/Order/7903", purchasingEntity: { location: { id: "gid://shopify/Location/5" } }, cancelledAt: "soon" },
+    ]);
+    expect(odd.locationId).toBeNull();
+    expect(odd.cancelledAt).toBeNull();
   });
 });
 
@@ -458,6 +487,7 @@ describe("normalizeDrafts", () => {
       tags: "Ordering Desk: New, staff",
       note: "Needed before the Monday crew meeting",
       poNumber: "PO-77",
+      locationId: "2",
     });
   });
 
@@ -560,6 +590,11 @@ describe("normalizeDrafts", () => {
     expect(normalizeDrafts(null)).toEqual([]);
     expect(normalizeDrafts({ data: { orders: { nodes: draftNodes } } })).toEqual([]);
   });
+
+  it("reads no location for a customer's own draft", () => {
+    const [draft] = normalizeDrafts([{ id: "gid://shopify/DraftOrder/9", purchasingEntity: { __typename: "Customer" } }]);
+    expect(draft.locationId).toBeNull();
+  });
 });
 
 describe("snapshotKind", () => {
@@ -570,5 +605,15 @@ describe("snapshotKind", () => {
     expect(snapshotKind({ shopifyOrderId: "1", name: "#1001" })).toBe("order");
     expect(snapshotKind(null)).toBe("order");
     expect(snapshotKind("draft")).toBe("order");
+  });
+});
+
+describe("companyLocationIdOf", () => {
+  it("reads the legacy id of a company location gid and nothing else", () => {
+    expect(companyLocationIdOf("gid://shopify/CompanyLocation/101")).toBe("101");
+    expect(companyLocationIdOf("gid://shopify/Location/101")).toBeNull();
+    expect(companyLocationIdOf("gid://shopify/CompanyLocation/0")).toBeNull();
+    expect(companyLocationIdOf("gid://shopify/CompanyLocation/1x")).toBeNull();
+    expect(companyLocationIdOf(101)).toBeNull();
   });
 });

@@ -41,6 +41,7 @@ import type { Db } from "../../db";
 import { applyBatch, rowsAffected } from "../../db/batch";
 import { orders, storeConnections } from "../../db/schema";
 import { NEW_ORDER_MAX_AGE_MS } from "../notify";
+import { companiesEnabled } from "../shopify/admin";
 import { fetchOrderHistory, ORDERS_PER_PAGE } from "../shopify/client";
 import { normalizeOrders } from "../shopify/normalize";
 import { loadStatusRows } from "../shopify/status-sync";
@@ -395,7 +396,11 @@ export async function runBackfillTick(
       access.token,
       { sinceIso: since === null ? null : new Date(since).toISOString(), untilIso: new Date(until).toISOString() },
       opts?.fetchImpl ?? fetch,
-      { startCursor: connection.backfillCursor ?? undefined, maxPages: BACKFILL_PAGES_PER_TICK },
+      {
+        startCursor: connection.backfillCursor ?? undefined,
+        maxPages: BACKFILL_PAGES_PER_TICK,
+        companies: companiesEnabled(connection.scopes),
+      },
     );
     if (fetched.kind === "auth") {
       return await end({ status: "failed", error: CREDENTIALS_REJECTED }, { finished: "failed", error: CREDENTIALS_REJECTED });

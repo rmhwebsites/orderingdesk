@@ -882,6 +882,9 @@ export async function ensureOrderSnapshots(
       access.token,
       `gid://shopify/Order/${row.shopifyOrderId}`,
       access.fetchImpl,
+      // Only reached after a draft read, and every draft read names the B2B
+      // company (DRAFT_FIELDS), which already needs read_companies.
+      { companies: true },
     );
     if (fetched.kind !== "ok") {
       logIds({ workspaceId, orderRowId: row.id, ensure: failureText(fetched).slice(0, 200) });

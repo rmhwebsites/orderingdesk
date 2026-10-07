@@ -60,6 +60,12 @@ export type NormalizedOrder = {
   sourceName: string;
   // The order's cart attributes (customAttributes).
   attributes: Attribute[];
+  // When Shopify cancelled the order (ms), or null (comprehensive design
+  // section 2: the Shopify to app rule in status-sync.ts moves the card).
+  cancelledAt: number | null;
+  // The B2B purchasing entity's company location, as a legacy id (the
+  // value of orders.location_id and locations.shopify_location_id), or null.
+  locationId: string | null;
 };
 
 export type DraftStatus = "open" | "invoice_sent" | "completed";
@@ -98,6 +104,8 @@ export type NormalizedDraft = {
   // note2
   note: string;
   poNumber: string;
+  // The purchasing entity's company location, as a legacy id, or null.
+  locationId: string | null;
 };
 
 // Caps on what a snapshot keeps from Shopify's free-form attributes.
@@ -109,6 +117,15 @@ export const ATTRIBUTE_VALUE_MAX = 2000;
 // A snapshot stored before snapshots carried a kind reads as an order.
 export function snapshotKind(snapshot: unknown): "draft" | "order" {
   return isDict(snapshot) && snapshot.kind === "draft" ? "draft" : "order";
+}
+
+const COMPANY_LOCATION_GID = /^gid:\/\/shopify\/CompanyLocation\/([1-9]\d{0,19})$/;
+
+// The legacy id of a company location gid ("gid://shopify/CompanyLocation/
+// 101" -> "101"), or null for anything else. Shared with
+// src/server/shopify/locations.ts and the edit service.
+export function companyLocationIdOf(gid: unknown): string | null {
+  return typeof gid === "string" ? (gid.match(COMPANY_LOCATION_GID)?.[1] ?? null) : null;
 }
 
 type Dict = Record<string, unknown>;
@@ -282,6 +299,14 @@ function shippingOf(order: Dict): Shipping | null {
   };
 }
 
+// The purchasing entity's company location as a legacy id; null for a
+// customer's own (D2C) order or draft, or a shape this code does not know.
+function purchasingLocationIdOf(raw: Dict): string | null {
+  const entity = isDict(raw.purchasingEntity) ? raw.purchasingEntity : undefined;
+  const location = entity && isDict(entity.location) ? entity.location : undefined;
+  return companyLocationIdOf(location?.id);
+}
+
 function normalizeOne(raw: unknown): NormalizedOrder | null {
   if (!isDict(raw)) {
     return null;
@@ -315,6 +340,8 @@ function normalizeOne(raw: unknown): NormalizedOrder | null {
     note: str(raw.note),
     sourceName: str(raw.sourceName),
     attributes: attributesOf(raw.customAttributes, ATTRIBUTES_MAX),
+    cancelledAt: timeOf(raw.cancelledAt),
+    locationId: purchasingLocationIdOf(raw),
   };
 }
 
@@ -406,6 +433,7 @@ function normalizeDraftOne(raw: unknown): NormalizedDraft | null {
     tags: tagsOf(raw.tags),
     note: str(raw.note2),
     poNumber: str(raw.poNumber),
+    locationId: purchasingLocationIdOf(raw),
   };
 }
 

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   BASE_WEBHOOK_TOPICS,
+  companiesEnabled,
   completeDraft,
   DRAFT_LINK_CHUNK,
   DRAFT_SCOPES,
@@ -280,5 +281,16 @@ describe("webhook topics", () => {
       "ORDERS_CREATE",
       "DRAFT_ORDERS_DELETE",
     ]);
+  });
+});
+
+// Company locations and the purchasing entity's location (comprehensive
+// design section 2) need a companies scope, like the drafts need theirs.
+describe("companiesEnabled", () => {
+  it("needs read_companies or write_companies", () => {
+    expect(companiesEnabled(["read_orders", "read_companies"])).toBe(true);
+    expect(companiesEnabled(["write_companies"])).toBe(true);
+    expect(companiesEnabled(["read_orders", "read_customers"])).toBe(false);
+    expect(companiesEnabled(null)).toBe(false);
   });
 });

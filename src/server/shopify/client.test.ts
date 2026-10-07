@@ -9,7 +9,9 @@ import {
   fetchOrderHistory,
   fetchOrdersUpdatedSince,
   MAX_PAGES,
+  ORDER_FIELDS,
   ORDERS_PER_PAGE,
+  orderFieldsFor,
   SHOPIFY_API_VERSION,
 } from "./client";
 import {
@@ -208,9 +210,21 @@ describe("fetchOrdersUpdatedSince", () => {
     expect(query).toContain("sourceName");
     expect(query).toContain("customAttributes { key value }");
     expect(query).toContain("countryCodeV2");
+    // Comprehensive design section 2: cancellations always; the company
+    // location only when the caller says the grant holds a companies scope.
+    expect(query).toContain("cancelledAt");
+    expect(query).not.toContain("purchasingEntity");
     expect(query).not.toMatch(/countryCode\b/);
     expect(variablesOf(calls[0]).cursor).toBeNull();
     expect(variablesOf(calls[0]).search).toBe(SEARCH);
+  });
+
+  it("asks for the purchasing entity's company location only with a companies scope", async () => {
+    const { impl, calls } = stubFetch([ordersPage([], { hasNextPage: false, endCursor: null })]);
+    await fetchOrdersUpdatedSince(DOMAIN, TOKEN, SINCE, impl, { companies: true });
+    expect(String(calls[0].body.query)).toContain("... on PurchasingCompany { location { id } }");
+    expect(orderFieldsFor(false)).not.toContain("purchasingEntity");
+    expect(orderFieldsFor(true)).toBe(ORDER_FIELDS);
   });
 
   it("paginates, passes the cursor on the second call, and tracks the max updatedAt", async () => {
@@ -466,19 +480,26 @@ describe("fetchOrdersUpdatedSince", () => {
   });
 
   it("keeps the orders query inside Shopify's single query cost limit", async () => {
-    const { impl, calls } = stubFetch([ordersPage([], { hasNextPage: false, endCursor: null })]);
+    const { impl, calls } = stubFetch([
+      ordersPage([], { hasNextPage: false, endCursor: null }),
+      ordersPage([], { hasNextPage: false, endCursor: null }),
+    ]);
+    await fetchOrdersUpdatedSince(DOMAIN, TOKEN, SINCE, impl, { companies: true });
     await fetchOrdersUpdatedSince(DOMAIN, TOKEN, SINCE, impl);
     const cost = requestedQueryCost(String(calls[0].body.query));
     // Per order: the order itself, its cart attribute list, two price sets
     // of two objects each, the customer, the shipping address, the line item
-    // connection and its pageInfo make 11 points, the fulfillment list (3
-    // slots, priced like a connection) 5 more, plus 4 per line item slot (the
-    // item, its property list and its price set). On top come 2 for the
-    // orders connection and 1 for pageInfo. Was 798 with 48 line items and
-    // no properties.
-    expect(cost).toBe(3 + 5 * (16 + 4 * 35));
-    expect(cost).toBe(783);
+    // connection and its pageInfo make 11 points, the purchasing entity and
+    // its company location (3, the company fragment priced as an object by
+    // this estimator) and the fulfillment list (3 slots, priced like a
+    // connection, 5) make 19, plus 4 per line item slot (the item, its
+    // property list and its price set). On top come 2 for the orders
+    // connection and 1 for pageInfo. 798 of the 800 budget: a new field must
+    // give points back. Without a companies scope the page is 783.
+    expect(cost).toBe(3 + 5 * (19 + 4 * 35));
+    expect(cost).toBe(798);
     expect(cost).toBeLessThanOrEqual(QUERY_COST_BUDGET);
+    expect(requestedQueryCost(String(calls[1].body.query))).toBe(783);
   });
 
   it("reports a query Shopify refuses as too expensive as fatal, in Shopify's own words", async () => {

@@ -50,7 +50,7 @@ import { decryptSecret } from "../crypto";
 import { notifyActivity, notifyNewOrders } from "../notify";
 import { ensureOrderSnapshots, markDraftDeleted, upsertFetchedDraft } from "../sync/drafts";
 import { upsertFetchedOrder } from "../sync/run";
-import { draftsEnabled, failureText, fetchCustomer, fetchDraftNode, fetchOrderNode, legacyIdOf } from "./admin";
+import { companiesEnabled, draftsEnabled, failureText, fetchCustomer, fetchDraftNode, fetchOrderNode, legacyIdOf } from "./admin";
 import { shareShopifyMoves } from "./fanout";
 import { normalizeDrafts, normalizeOrders } from "./normalize";
 import { applyRosterCustomer } from "./roster-sync";
@@ -276,14 +276,23 @@ export async function receiveShopifyWebhook(
 }
 
 // Whether draft orders sync for the store (the stored grant holds the
-// draft scopes), and whether the first draft sync is still pending.
-async function draftState(db: Db, workspaceId: string): Promise<{ enabled: boolean; firstPending: boolean }> {
+// draft scopes), and whether the first draft sync is still pending. Also
+// whether the grant holds a companies scope (the order re-fetch then names
+// the purchasing entity's company location).
+async function draftState(
+  db: Db,
+  workspaceId: string,
+): Promise<{ enabled: boolean; firstPending: boolean; companies: boolean }> {
   const rows = await db
     .select({ scopes: storeConnections.scopes, draftLastSyncAt: storeConnections.draftLastSyncAt })
     .from(storeConnections)
     .where(eq(storeConnections.workspaceId, workspaceId))
     .limit(1);
-  return { enabled: draftsEnabled(rows[0]?.scopes), firstPending: (rows[0]?.draftLastSyncAt ?? 0) === 0 };
+  return {
+    enabled: draftsEnabled(rows[0]?.scopes),
+    firstPending: (rows[0]?.draftLastSyncAt ?? 0) === 0,
+    companies: companiesEnabled(rows[0]?.scopes),
+  };
 }
 
 // A draft card marked deleted: open desks refresh it and hear the timeline
@@ -419,7 +428,7 @@ async function runJob(
     }
   }
 
-  const fetched = await fetchOrderNode(token.shopDomain, token.token, job.orderGid, fetchImpl);
+  const fetched = await fetchOrderNode(token.shopDomain, token.token, job.orderGid, fetchImpl, { companies: drafts.companies });
   if (fetched.kind !== "ok") {
     logFailure(workspaceId, topic, failureText(fetched));
     return;

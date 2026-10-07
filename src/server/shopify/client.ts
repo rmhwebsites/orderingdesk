@@ -62,6 +62,10 @@ export type ShopifyFetchResult =
 export type FetchOrdersOptions = {
   // Resume pagination from a cursor persisted by an earlier truncated run.
   startCursor?: string;
+  // The stored grant holds a companies scope (companiesEnabled in
+  // src/server/shopify/admin.ts): the page then names the purchasing
+  // entity's company location, which needs read_companies. Default false.
+  companies?: boolean;
 };
 
 export type FetchHistoryOptions = FetchOrdersOptions & {
@@ -84,14 +88,17 @@ const REQUEST_TIMEOUT_MS = 90000;
 // a query whose requested cost is above 1,000 points before running it, on
 // every plan. Scalars are free, an object costs 1 point and a connection 2,
 // and everything selected under a connection is multiplied by its page size.
-// One order therefore costs 11 points (the order, its cart attribute list,
-// two price sets of two objects each, customer, shipping address, the line
-// item connection and its pageInfo), 5 for its fulfillment list (3 slots; a
-// sized list of objects is not a connection and Shopify does not document
-// its price, so client.test.ts prices it like one, which can only overstate
-// it), plus 4 per line item slot (the item, its property list and its price
-// set), which makes orders x line items the whole budget. Five orders of up
-// to 35 line items request 3 + 5 x (16 + 4 x 35) = 783. client.test.ts
+// One order therefore costs 14 points (the order, its cart attribute list,
+// two price sets of two objects each, customer, shipping address, the
+// purchasing entity and its company location (3 as client.test.ts prices
+// the fragment, sent only with a companies scope), the line item connection
+// and its pageInfo), 5 for its fulfillment list (3 slots; a sized list of
+// objects is not a connection and Shopify does not document its price, so
+// client.test.ts prices it like one, which can only overstate it), plus 4
+// per line item slot (the item, its property list and its price set), which
+// makes orders x line items the whole budget. Five orders of up to 35 line
+// items request 3 + 5 x (19 + 4 x 35) = 798 (783 without the company
+// location). client.test.ts
 // prices the query that is actually sent and fails above 800, and raising
 // any of these numbers means lowering another. An order with more line
 // items keeps its first 35 and is stored with itemsTruncated set (from the
@@ -113,12 +120,13 @@ export const MAX_PAGES = 100;
 // The order selection, shared by the page query below and the single-order
 // query a webhook uses (src/server/shopify/admin.ts), so both store exactly
 // the same snapshot shape through normalizeOrders.
-export const ORDER_FIELDS = `
+const ORDER_BASE_FIELDS = `
       id
       legacyResourceId
       name
       createdAt
       updatedAt
+      cancelledAt
       email
       tags
       note
@@ -135,6 +143,23 @@ export const ORDER_FIELDS = `
         nodes { title quantity sku variantTitle customAttributes { key value } originalUnitPriceSet { shopMoney { amount } } }
         pageInfo { hasNextPage }
       }`;
+
+// The purchasing entity's company location (comprehensive design section
+// 2). Needs read_companies, so it is sent only when the stored grant holds
+// a companies scope (read_companies is not one of REQUIRED_SCOPES).
+const ORDER_COMPANY_FIELDS = `
+      purchasingEntity {
+        __typename
+        ... on PurchasingCompany { location { id } }
+      }`;
+
+// The full selection (the costlier one, priced in client.test.ts), and the
+// one a store without a companies scope gets. normalizeOrders reads both.
+export const ORDER_FIELDS = ORDER_BASE_FIELDS + ORDER_COMPANY_FIELDS;
+
+export function orderFieldsFor(companies: boolean): string {
+  return companies ? ORDER_FIELDS : ORDER_BASE_FIELDS;
+}
 
 // Draft orders (draft orders spec section 3.3): one draft costs 19 points
 // (the draft, its cart attribute list, the order it became, customer, the
@@ -191,14 +216,16 @@ export const FIRST_DRAFT_SEARCH = "status:open OR status:invoice_sent";
 // Both the cursor and the updated_at search ride as GraphQL variables, so no
 // runtime value is ever spliced into the query document itself (the page
 // sizes are the module constants above).
-const ORDERS_QUERY = `
+function ordersQuery(companies: boolean): string {
+  return `
 query OrdersUpdatedSince($cursor: String, $search: String) {
   orders(first: ${ORDERS_PER_PAGE}, after: $cursor, sortKey: UPDATED_AT, query: $search) {
-    nodes {${ORDER_FIELDS}
+    nodes {${orderFieldsFor(companies)}
     }
     pageInfo { hasNextPage endCursor }
   }
 }`;
+}
 
 const DRAFTS_QUERY = `
 query DraftOrdersUpdatedSince($cursor: String, $search: String) {
@@ -213,14 +240,16 @@ query DraftOrdersUpdatedSince($cursor: String, $search: String) {
 // size and order fields as the sync, so the same cost, but sorted by
 // creation date, newest first. Creation dates never change, so a cursor
 // held across many cron ticks keeps its place.
-const ORDER_HISTORY_QUERY = `
+function orderHistoryQuery(companies: boolean): string {
+  return `
 query OrderHistory($cursor: String, $search: String) {
   orders(first: ${ORDERS_PER_PAGE}, after: $cursor, sortKey: CREATED_AT, reverse: true, query: $search) {
-    nodes {${ORDER_FIELDS}
+    nodes {${orderFieldsFor(companies)}
     }
     pageInfo { hasNextPage endCursor }
   }
 }`;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -254,7 +283,7 @@ export async function fetchOrdersUpdatedSince(
   if (!SINCE_ISO.test(sinceIso)) {
     return { kind: "fatal", detail: "invalid since timestamp" };
   }
-  return fetchPages(shopDomain, token, ORDERS_FEED, `updated_at:>='${sinceIso}'`, fetchImpl, {
+  return fetchPages(shopDomain, token, ordersFeed(opts?.companies === true), `updated_at:>='${sinceIso}'`, fetchImpl, {
     startCursor: opts?.startCursor,
     maxPages: MAX_PAGES,
   });
@@ -311,7 +340,7 @@ export async function fetchOrderHistory(
   ]
     .filter((part) => part !== null)
     .join(" ");
-  return fetchPages(shopDomain, token, ORDER_HISTORY_FEED, search, fetchImpl, {
+  return fetchPages(shopDomain, token, orderHistoryFeed(opts.companies === true), search, fetchImpl, {
     startCursor: opts.startCursor,
     maxPages: Math.max(1, Math.min(Math.trunc(opts.maxPages), MAX_PAGES)),
   });
@@ -320,8 +349,8 @@ export async function fetchOrderHistory(
 // One paginated feed: its query document and the root field its pages
 // arrive under.
 type Feed = { query: string; rootField: "orders" | "draftOrders" };
-const ORDERS_FEED: Feed = { query: ORDERS_QUERY, rootField: "orders" };
-const ORDER_HISTORY_FEED: Feed = { query: ORDER_HISTORY_QUERY, rootField: "orders" };
+const ordersFeed = (companies: boolean): Feed => ({ query: ordersQuery(companies), rootField: "orders" });
+const orderHistoryFeed = (companies: boolean): Feed => ({ query: orderHistoryQuery(companies), rootField: "orders" });
 const DRAFTS_FEED: Feed = { query: DRAFTS_QUERY, rootField: "draftOrders" };
 
 // The page loop every feed shares. shopDomain and the search string are
