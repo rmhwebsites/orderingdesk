@@ -12,9 +12,11 @@ import { FilePdfIcon } from "@phosphor-icons/react/FilePdf";
 import { LinkSimpleIcon } from "@phosphor-icons/react/LinkSimple";
 import { formatMoney } from "@/lib/format";
 import { classifyProperty, clipText, type PropertyView } from "@/lib/item-properties";
-import { itemsSubtotal, shippingLines, type OrderSnapshot, type SnapshotItem } from "@/lib/order-snapshot";
+import { addressBlock, type LocationAddress } from "@/lib/address";
+import { itemsSubtotal, type OrderSnapshot, type SnapshotItem } from "@/lib/order-snapshot";
 import { isPriced } from "@/lib/queue-settings";
 import type { RequestFields } from "@/lib/request-fields";
+import { AddressBlock } from "@/components/address-block";
 import { Chip, DetailRow, InlineMessage } from "@/components/kit";
 import { CopyButton, Section } from "./drawer-kit";
 
@@ -305,21 +307,17 @@ export function RequestSection({
   );
 }
 
-export function ShipToSection({ shipping }: { shipping: OrderSnapshot["shipping"] }) {
+// The card's synced company location (src/server/sync/locations.ts), or
+// null when it has none or it is not synced yet.
+export type ShipToLocation = { name: string; address: LocationAddress | null };
+
+export function ShipToSection({ shipping, location }: { shipping: OrderSnapshot["shipping"]; location: ShipToLocation | null }) {
   return (
     <Section title="Ship to">
-      {shipping ? (
-        <address className="text-sm not-italic leading-relaxed text-ink">
-          {shippingLines(shipping).map((line, index) => (
-            <span key={index} className="block">
-              {line}
-            </span>
-          ))}
-          {shipping.phone ? <span className="mt-1 block font-mono text-ink-2">{shipping.phone}</span> : null}
-        </address>
-      ) : (
-        <p className="text-sm text-ink-2">No shipping address.</p>
-      )}
+      <AddressBlock
+        block={addressBlock({ locationName: location?.name, locationAddress: location?.address ?? null, shipping })}
+        empty="No shipping address."
+      />
     </Section>
   );
 }

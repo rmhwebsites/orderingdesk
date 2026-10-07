@@ -32,7 +32,7 @@ import type { PoView } from "@/server/po/service";
 import { PurchaseOrders } from "./po-history";
 import { Chip, Spinner } from "@/components/kit";
 import { CopyButton, Section } from "./drawer-kit";
-import { ItemsSection, RequestSection, ShipToSection } from "./request-parts";
+import { ItemsSection, RequestSection, ShipToSection, type ShipToLocation } from "./request-parts";
 import { ReviewActions, ReviewSummary, type NextRequest } from "./review-panel";
 
 export type DrawerOrder = {
@@ -49,12 +49,13 @@ export type DrawerOrder = {
   draftName: string | null;
   draftSnapshot: unknown;
   draftDeletedAt: number | null;
+  locationId: string | null;
 };
 
 export type DrawerDetail =
   | { status: "loading" }
   | { status: "error"; message: string; missing: boolean }
-  | { status: "ready"; order: DrawerOrder; itemsTruncated: boolean };
+  | { status: "ready"; order: DrawerOrder; itemsTruncated: boolean; location: ShipToLocation | null };
 
 export type MemberView = { userId: string; role: string; email: string | null; name: string | null };
 
@@ -711,7 +712,7 @@ export function OrderDrawerContent({
 
             <ItemsSection snapshot={snapshot} itemsTruncated={itemsTruncated} shopifyUrl={shopifyUrl} showPrices={showPrices} />
 
-            <ShipToSection shipping={snapshot.shipping} />
+            <ShipToSection shipping={snapshot.shipping} location={detail.status === "ready" ? detail.location : null} />
 
             <Section title={showsDraft ? "Tags" : "Tags and checkout note"}>
               {snapshot.tags.length === 0 && (showsDraft || !snapshot.note) ? (

@@ -32,6 +32,7 @@ function draftCard(overrides: Partial<DrawerOrder> = {}): DrawerOrder {
     draftName: "#D12",
     draftSnapshot: null,
     draftDeletedAt: null,
+    locationId: null,
     ...overrides,
   };
 }
@@ -64,7 +65,7 @@ function render(
         labelId: "drawer-title",
         orderId: "d1",
         summary: undefined,
-        detail: { status: "ready", order: opts.order ?? draftCard(), itemsTruncated: false },
+        detail: { status: "ready", order: opts.order ?? draftCard(), itemsTruncated: false, location: null },
         timeline: opts.timeline ?? [],
         timelineStatus: "ready",
         statuses: STATUSES,

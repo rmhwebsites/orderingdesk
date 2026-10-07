@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { readSnapshot } from "@/lib/order-snapshot";
 import { snapshotOf } from "@/server/desk/test-helpers";
-import { ItemsSection, PropertyList, RequestSection } from "./request-parts";
+import { ItemsSection, PropertyList, RequestSection, ShipToSection } from "./request-parts";
 
 // Personalization and request fields as the drawer renders them (draft
 // orders spec sections 11.3 and 11.4 with section 18).
@@ -78,5 +78,31 @@ describe("ItemsSection prices", () => {
     const snapshot = readSnapshot(snapshotOf({ items: [{ title: "Insulated Work Jacket", qty: 1, price: "0.00", sku: "EX-JKT-CH-XL", variant: "XL" }] }));
     const html = renderToStaticMarkup(createElement(ItemsSection, { snapshot, itemsTruncated: false, shopifyUrl: null }));
     expect(html).toContain('class="whitespace-nowrap font-mono">SKU EX-JKT-CH-XL<');
+  });
+});
+
+describe("ShipToSection", () => {
+  const shipping = {
+    name: "Casey Lin",
+    company: "Example Rentals",
+    phone: "",
+    a1: "100 Example Way",
+    a2: "",
+    city: "Buford",
+    prov: "GA",
+    zip: "30518",
+    country: "US",
+  };
+
+  it("names the company location first, in bold, then the street lines", () => {
+    const html = renderToStaticMarkup(createElement(ShipToSection, { shipping, location: { name: "Buford HQ", address: null } }));
+    expect(html).toContain('<span class="block font-semibold">Buford HQ</span>');
+    expect(html).toContain("100 Example Way");
+    expect(html).not.toContain("Casey Lin");
+  });
+
+  it("shows the address alone without a location, and says when there is none", () => {
+    expect(renderToStaticMarkup(createElement(ShipToSection, { shipping, location: null }))).toContain(">Casey Lin<");
+    expect(renderToStaticMarkup(createElement(ShipToSection, { shipping: null, location: null }))).toContain("No shipping address.");
   });
 });

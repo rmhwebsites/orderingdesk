@@ -53,6 +53,7 @@ import {
 } from "./order-drawer";
 import { OrderList } from "./order-list";
 import { PoModal } from "./po-modal";
+import type { ShipToLocation } from "./request-parts";
 import { Toolbar } from "./toolbar";
 import { useDeskFilter } from "./use-desk-filter";
 import { ui } from "@/components/ui";
@@ -381,8 +382,12 @@ export function Desk() {
       }
 
       if (detailResult.status === "fulfilled" && detailResult.value.ok) {
-        const body = (await detailResult.value.json()) as { order: DrawerOrder; itemsTruncated: boolean };
-        setDetail({ status: "ready", order: body.order, itemsTruncated: body.itemsTruncated });
+        const body = (await detailResult.value.json()) as {
+          order: DrawerOrder;
+          itemsTruncated: boolean;
+          location?: ShipToLocation | null;
+        };
+        setDetail({ status: "ready", order: body.order, itemsTruncated: body.itemsTruncated, location: body.location ?? null });
       } else if (detailResult.status === "fulfilled" && detailResult.value.status === 404) {
         setDetail({ status: "error", message: "Not found", missing: true });
       } else if (!quiet) {
