@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import * as z from "zod";
 import * as schema from "@/db/schema";
 import { runTool, toolsFor } from "./registry";
+import { ALL_TOOLS } from "./tools";
 import { CONFIRM_DESTRUCTIVE, READ, defineTool, fail, ok, type ToolDeps } from "./tools/define";
 import { MANAGER, NOW, WS, principalFor, setupMcp, testEnv } from "./test-helpers";
 
@@ -106,5 +107,37 @@ describe("runTool", () => {
     const d = await deps();
     await runTool(managerWrite, {}, d);
     expect(await d.db.select().from(schema.aiUsage)).toEqual([]);
+  });
+});
+
+describe("the tool catalog", () => {
+  it("lists every tool once, with the annotations and roles the plan fixes", () => {
+    const names = ALL_TOOLS.map((tool) => tool.name);
+    expect(new Set(names).size).toBe(names.length);
+    expect(names).toHaveLength(23);
+    for (const tool of ALL_TOOLS) {
+      const prepareOrRead = !tool.name.startsWith("confirm_");
+      expect(tool.annotations.readOnlyHint, tool.name).toBe(prepareOrRead);
+      expect(tool.annotations.openWorldHint, tool.name).toBe(false);
+      expect(tool.counts, tool.name).toBe(prepareOrRead ? "read" : "self");
+      expect(tool.needsWrite, tool.name).toBe(tool.name.startsWith("prepare_") || tool.name.startsWith("confirm_") || tool.name === "find_products");
+    }
+    const destructive = ALL_TOOLS.filter((tool) => tool.annotations.destructiveHint).map((tool) => tool.name).sort();
+    expect(destructive).toEqual(["confirm_approve", "confirm_cancel", "confirm_edit_request", "confirm_reject", "confirm_status_change"]);
+    expect(toolsFor(principalFor("staff"), ALL_TOOLS).map((tool) => tool.name)).toEqual([
+      "get_my_access",
+      "search_orders",
+      "get_order",
+      "list_statuses",
+      "find_people",
+      "get_person",
+      "list_locations",
+      "get_location",
+      "prepare_status_change",
+      "confirm_status_change",
+      "prepare_add_note",
+      "confirm_add_note",
+    ]);
+    expect(toolsFor(principalFor("manager", { scopes: ["desk.read"] }), ALL_TOOLS)).toHaveLength(8);
   });
 });

@@ -258,7 +258,7 @@ export async function loadRequestEditor(db: Db, ctx: ReviewContext, deps: Review
 
 // Shopify's mailing address input from the location's synced address, with
 // the current recipient's name (the employee the box is for).
-function mailingAddress(address: LocationAddress, recipient: DraftForEdit["recipient"]): Record<string, string> {
+export function mailingAddress(address: LocationAddress, recipient: DraftForEdit["recipient"]): Record<string, string> {
   const fields: Record<string, string> = {
     address1: address.address1,
     address2: address.address2,
