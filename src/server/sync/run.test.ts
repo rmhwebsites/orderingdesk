@@ -2009,7 +2009,7 @@ describe("runSync", () => {
     expect((await connectionOf(db, WS)).lastSyncAt).toBe(T + 1200000);
   });
 
-  it("runs a whole cursor chain on the schema as of migration 0013", async () => {
+  it("runs a whole cursor chain on the schema as of migration 0014", async () => {
     // The sync engine reads and writes whole store_connections rows (and
     // writes events.source), so a column it needs from a migration that has
     // not been applied yet fails every run. This pins that the engine needs
@@ -2032,7 +2032,11 @@ describe("runSync", () => {
     // every pass; on an older schema the index silently goes stale). DEPLOY
     // NOTE, run `npm run db:migrate:remote` (applies 0013) BEFORE the code
     // that needs it reaches production.
-    const { db, env } = openDb({ through: "0013" });
+    // Then by the MCP server (0014: every workspace_settings insert names the
+    // AI switch and the daily limit columns; the engine itself reads
+    // neither). DEPLOY NOTE, run `npm run db:migrate:remote` (applies 0014)
+    // BEFORE the code that needs it reaches production.
+    const { db, env } = openDb({ through: "0014" });
     await seedWorkspace(db, WS);
     const T = Date.parse("2026-09-25T12:00:00.000Z");
     const previousSync = T - 3600000;

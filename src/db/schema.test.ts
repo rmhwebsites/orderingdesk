@@ -16,7 +16,11 @@ import * as schema from "./schema";
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "../../drizzle");
 
 const APP_TABLES = [
+  "ai_actions",
+  "ai_grants",
+  "ai_sign_in_codes",
   "ai_usage",
+  "audit_log",
   "events",
   "locations",
   "notification_prefs",
@@ -279,8 +283,9 @@ describe("schema migrations", () => {
     );
     // 17 app tables (invite_sends since 0005, locations since 0012) +
     // user/session/account/verification + rate_limit + order_search, people
-    // and ai_usage (0013).
-    expect(tables.length).toBe(25);
+    // and ai_usage (0013) + ai_grants, ai_actions, ai_sign_in_codes and
+    // audit_log (0014).
+    expect(tables.length).toBe(29);
     const orm = drizzle(db);
     for (const table of tables) {
       expect(() => orm.select().from(table).all()).not.toThrow();
@@ -388,6 +393,49 @@ describe("schema migrations", () => {
         .prepare("SELECT time_zone, ai_search, search_indexed_at, search_backfill_cursor FROM workspace_settings WHERE workspace_id = 'ws_tz'")
         .get(),
     ).toEqual({ time_zone: "America/New_York", ai_search: 1, search_indexed_at: null, search_backfill_cursor: null });
+  });
+
+  // Migration 0014 (Wave 2): the MCP server's grant mirror, prepared
+  // actions, sign-in codes and audit log, and the workspace's AI settings.
+  it("creates the MCP tables with their indexes", () => {
+    const indexes = (table: string) =>
+      (db.prepare(`PRAGMA index_list("${table}")`).all() as { name: string }[])
+        .map((row) => row.name)
+        .filter((name) => !name.startsWith("sqlite_autoindex"))
+        .sort();
+    expect(indexes("ai_grants")).toEqual(["ai_grants_user", "ai_grants_ws_user"]);
+    expect(indexes("ai_actions")).toEqual(["ai_actions_expires", "ai_actions_grant"]);
+    expect(indexes("ai_sign_in_codes")).toEqual(["ai_codes_email", "ai_codes_expires", "ai_codes_ip"]);
+    expect(indexes("audit_log")).toEqual(["audit_grant", "audit_ws_created"]);
+  });
+
+  // The AI switch for team members starts off in every workspace (owner
+  // decision, Oct 7): nothing is reachable until a platform admin turns it on.
+  it("gives every workspace AI off with the default daily limits, and new actions start pending", () => {
+    db.prepare("INSERT INTO workspaces (id, name, slug, created_by, created_at) VALUES ('w14', 'W14', 'w14', 'u', 1)").run();
+    db.prepare("INSERT INTO workspace_settings (workspace_id) VALUES ('w14')").run();
+    expect(
+      db
+        .prepare(
+          "SELECT ai_team, ai_reads_per_day, ai_staff_changes_per_day, ai_manager_changes_per_day FROM workspace_settings WHERE workspace_id = 'w14'",
+        )
+        .get(),
+    ).toEqual({ ai_team: 0, ai_reads_per_day: 1000, ai_staff_changes_per_day: 50, ai_manager_changes_per_day: 100 });
+    db.prepare(
+      "INSERT INTO ai_actions (id, workspace_id, grant_id, user_id, tool, target_id, payload, content_hash, created_at, expires_at) VALUES ('a1', 'w14', 'g1', 'u1', 'note', 'o1', '{}', 'h', 1, 2)",
+    ).run();
+    expect(db.prepare("SELECT status FROM ai_actions WHERE id = 'a1'").get()).toEqual({ status: "pending" });
+  });
+
+  // Owner decision 3 (Oct 7): a platform admin's hub connection covers every
+  // workspace, so its mirror row and the audit rows of calls that named no
+  // usable workspace carry no workspace; prepared actions always have one.
+  it("lets a connection for every workspace and its audit rows name no workspace", () => {
+    const notNull = (table: string, column: string) =>
+      (db.prepare(`PRAGMA table_info("${table}")`).all() as { name: string; notnull: number }[]).find((row) => row.name === column)?.notnull;
+    expect(notNull("ai_grants", "workspace_id")).toBe(0);
+    expect(notNull("audit_log", "workspace_id")).toBe(0);
+    expect(notNull("ai_actions", "workspace_id")).toBe(1);
   });
 });
 
@@ -547,6 +595,12 @@ describe("platform migration of existing rows", () => {
         ai_search: 1,
         search_indexed_at: null,
         search_backfill_cursor: null,
+        // 0014: the AI switch for team members starts off in an existing
+        // workspace too, with the default daily limits.
+        ai_team: 0,
+        ai_reads_per_day: 1000,
+        ai_staff_changes_per_day: 50,
+        ai_manager_changes_per_day: 100,
       },
     ]);
   });

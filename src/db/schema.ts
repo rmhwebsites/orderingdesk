@@ -262,17 +262,21 @@ export const events = sqliteTable("events", {
       // from the desk (comprehensive design section 2).
       "draft_edited",
       "order_cancelled",
+      // A manager placed a request through their AI app (Wave 2).
+      "request_placed",
     ],
   }).notNull(),
   text: text("text").notNull(),
   actorId: text("actor_id"),
   meta: text("meta", { mode: "json" }),
   createdAt: integer("created_at").notNull(),
-  // Where the change came from: a person in the app, Shopify (sync or
-  // webhook), or the system itself (sync failures and similar). Declared
-  // last, matching the physical column order (migration 0004 appended it),
-  // because changeOrderStatus inserts with a positional insert-select.
-  source: text("source", { enum: ["app", "shopify", "system"] }).notNull().default("app"),
+  // Where the change came from: a person in the app, a person through their
+  // AI app (Wave 2: meta.ai.client names the app, src/lib/via.ts), Shopify
+  // (sync or webhook), or the system itself (sync failures and similar).
+  // Declared last, matching the physical column order (migration 0004
+  // appended it), because changeOrderStatus inserts with a positional
+  // insert-select. TypeScript-only enum: the column has no CHECK.
+  source: text("source", { enum: ["app", "ai", "shopify", "system"] }).notNull().default("app"),
 }, (t) => [index("events_ws_created").on(t.workspaceId, t.createdAt), index("events_order").on(t.orderId)]);
 
 export const vendors = sqliteTable("vendors", {
@@ -358,6 +362,14 @@ export const workspaceSettings = sqliteTable("workspace_settings", {
   // pass finished, the same position for the tick's rolling verify pass
   // (null: start from the oldest card).
   searchBackfillCursor: text("search_backfill_cursor"),
+  // Migration 0014 (Wave 2). Team members may connect AI apps while this is
+  // on (platform admins switch it on the hub). Off in every workspace until
+  // a platform admin turns it on (owner decision, Oct 7). Daily limits per
+  // person (src/mcp/usage.ts); platform admins use the manager limit.
+  aiTeam: integer("ai_team", { mode: "boolean" }).notNull().default(false),
+  aiReadsPerDay: integer("ai_reads_per_day").notNull().default(1000),
+  aiStaffChangesPerDay: integer("ai_staff_changes_per_day").notNull().default(50),
+  aiManagerChangesPerDay: integer("ai_manager_changes_per_day").notNull().default(100),
 });
 
 export const notificationPrefs = sqliteTable("notification_prefs", {
@@ -517,3 +529,114 @@ export const aiUsage = sqliteTable("ai_usage", {
   kind: text("kind").notNull(),
   count: integer("count").notNull().default(0),
 }, (t) => [primaryKey({ columns: [t.workspaceId, t.principalId, t.day, t.kind] })]);
+
+// ---------------------------------------------------------------------------
+// MCP server for team members (comprehensive desk design section 4,
+// migration 0014).
+
+// One row per AI connection: an OAuth grant issued on the authorize page
+// (src/mcp/oauth/authorize.ts). The OAuth library keeps the grant itself in
+// OAUTH_KV; this mirror is what every MCP call checks (src/mcp/principal.ts),
+// because D1 is consistent at once while a KV delete can take a minute to
+// reach every location, so a revoke here is instant. id is the app's own
+// id, carried in the grant's props and metadata. client is one of
+// src/lib/via.ts's AI_CLIENTS, picked from the verified client domain or
+// redirect host, never from the app's own name. workspace_id is null for a
+// platform admin's hub connection for every workspace with AI on (owner
+// decision 3, Oct 7: src/mcp/every-workspace.ts); every tool call on it
+// names the workspace.
+export const aiGrants = sqliteTable("ai_grants", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").references(() => workspaces.id),
+  userId: text("user_id").notNull(),
+  // The host the connection was made on; its tokens work only there.
+  host: text("host").notNull(),
+  clientId: text("client_id").notNull(),
+  client: text("client").notNull(),
+  clientDomain: text("client_domain"),
+  redirectHost: text("redirect_host").notNull(),
+  scopes: text("scopes", { mode: "json" }).$type<string[]>().notNull(),
+  createdAt: integer("created_at").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+  lastUsedAt: integer("last_used_at"),
+  revokedAt: integer("revoked_at"),
+  // The user who revoked it, or null for the system.
+  revokedBy: text("revoked_by"),
+  // person, manager, platform_admin, member_removed or replaced.
+  revokeReason: text("revoke_reason"),
+  // When the cron revoked the grant in OAUTH_KV too (src/mcp/prune.ts);
+  // the D1 revoke above already blocks every call.
+  kvRevokedAt: integer("kv_revoked_at"),
+}, (t) => [index("ai_grants_ws_user").on(t.workspaceId, t.userId), index("ai_grants_user").on(t.userId)]);
+
+// The writes a prepare tool stores and its confirm tool carries out once
+// (src/mcp/actions.ts). Single use: confirm claims the row with a
+// conditional UPDATE. content_hash covers the payload and the target's
+// state at preview time. unknown: a request whose create timed out; the same
+// confirmation may only look it up again, never send it again.
+export const AI_ACTION_TOOLS = ["status", "note", "approve", "reject", "cancel", "edit", "place_request"] as const;
+export type AiActionTool = (typeof AI_ACTION_TOOLS)[number];
+
+export const aiActions = sqliteTable("ai_actions", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id),
+  grantId: text("grant_id").notNull(),
+  userId: text("user_id").notNull(),
+  tool: text("tool", { enum: AI_ACTION_TOOLS }).notNull(),
+  // The card, or null for a request not placed yet.
+  targetId: text("target_id"),
+  payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
+  contentHash: text("content_hash").notNull(),
+  status: text("status", { enum: ["pending", "executing", "done", "failed", "unknown"] }).notNull().default("pending"),
+  // A short outcome code (ok, changed, refused, limit_reached, ...).
+  outcome: text("outcome"),
+  createdAt: integer("created_at").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+  usedAt: integer("used_at"),
+}, (t) => [index("ai_actions_grant").on(t.grantId), index("ai_actions_expires").on(t.expiresAt)]);
+
+// The 6-digit codes of the authorize page (src/mcp/oauth/codes.ts). The
+// code itself is never stored: code_hash is SHA-256 of the origin, the row
+// id and the code. user_id is null when the email may not connect (the row
+// exists anyway, so every email gets the same page and timing; no code is
+// sent then). verified_at: the code was right; consumed_at: the consent
+// that followed used the sign-in. Emails are lowercased; ip_hash is SHA-256
+// of the client IP and the origin.
+export const aiSignInCodes = sqliteTable("ai_sign_in_codes", {
+  id: text("id").primaryKey(),
+  origin: text("origin").notNull(),
+  email: text("email").notNull(),
+  userId: text("user_id"),
+  clientId: text("client_id").notNull(),
+  codeHash: text("code_hash").notNull(),
+  ipHash: text("ip_hash").notNull(),
+  attempts: integer("attempts").notNull().default(0),
+  createdAt: integer("created_at").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+  verifiedAt: integer("verified_at"),
+  consumedAt: integer("consumed_at"),
+}, (t) => [
+  index("ai_codes_email").on(t.origin, t.email, t.createdAt),
+  index("ai_codes_ip").on(t.ipHash, t.createdAt),
+  index("ai_codes_expires").on(t.expiresAt),
+]);
+
+// One row per MCP tool call (src/mcp/audit.ts): who, through which
+// connection and app, which tool, on what, and how it ended. Never
+// arguments, payloads or text. Kept 400 days (src/mcp/prune.ts).
+// workspace_id is null only for an every-workspace connection's
+// list_workspaces call and for a call naming a workspace that does not exist.
+export const auditLog = sqliteTable("audit_log", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").references(() => workspaces.id),
+  actorId: text("actor_id").notNull(),
+  grantId: text("grant_id"),
+  client: text("client"),
+  tool: text("tool").notNull(),
+  // order, person, location or product.
+  targetKind: text("target_kind"),
+  targetId: text("target_id"),
+  // ok, or the tool error code.
+  outcome: text("outcome").notNull(),
+  createdAt: integer("created_at").notNull(),
+}, (t) => [index("audit_ws_created").on(t.workspaceId, t.createdAt), index("audit_grant").on(t.grantId, t.createdAt)]);
