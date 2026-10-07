@@ -99,13 +99,48 @@ describe("the grant mirror", () => {
     const helpers = { listUserGrants, revokeGrant } as unknown as GrantHelpers;
     const owner = providerUserId(WS, MANAGER);
     expect(owner).toBe(encodeURIComponent(`${WS}.${MANAGER}`));
-    expect(await revokeInKv(helpers, [{ id: "g1", workspaceId: WS, userId: MANAGER }, { id: "g2", workspaceId: WS, userId: MANAGER }])).toBe(2);
+    expect(await revokeInKv(helpers, [{ id: "g1", workspaceId: WS, userId: MANAGER }, { id: "g2", workspaceId: WS, userId: MANAGER }])).toEqual({ revoked: 2, done: ["g1", "g2"] });
     expect(revokeGrant.mock.calls).toEqual([["kv1", owner], ["kv2", owner]]);
     const failing = { listUserGrants: vi.fn(async () => { throw new Error("kv down"); }), revokeGrant } as unknown as GrantHelpers;
-    expect(await revokeInKv(failing, [{ id: "g1", workspaceId: WS, userId: MANAGER }])).toBe(0);
+    expect(await revokeInKv(failing, [{ id: "g1", workspaceId: WS, userId: MANAGER }])).toEqual({ revoked: 0, done: [] });
     const everyOwner = vi.fn(async (owner: string) => ({ items: [{ id: "kv5", clientId: "c", userId: owner, scope: [], metadata: { aiGrantId: "e1" }, createdAt: 1 }] }));
     const everyHelpers = { listUserGrants: everyOwner, revokeGrant } as unknown as GrantHelpers;
-    expect(await revokeInKv(everyHelpers, [{ id: "e1", workspaceId: null, userId: ADMIN }])).toBe(1);
+    expect(await revokeInKv(everyHelpers, [{ id: "e1", workspaceId: null, userId: ADMIN }])).toEqual({ revoked: 1, done: ["e1"] });
     expect(everyOwner.mock.calls[0][0]).toBe(providerUserId(null, ADMIN));
+  });
+
+  // done lists the mirror rows whose owner's KV grants were all listed and
+  // revoked; an owner with no matching KV grant left is done too. A failure
+  // part way (the listing or a revoke) leaves all of that owner's rows out.
+  it("says which connections' KV revoke finished, owner by owner", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const manager = providerUserId(WS, MANAGER);
+    const staff = providerUserId(WS, STAFF);
+    const listUserGrants = vi.fn(async (owner: string) => ({
+      items:
+        owner === manager
+          ? [
+              { id: "kv1", clientId: "c", userId: owner, scope: [], metadata: { aiGrantId: "g1" }, createdAt: 1 },
+              { id: "kv2", clientId: "c", userId: owner, scope: [], metadata: { aiGrantId: "g2" }, createdAt: 1 },
+            ]
+          : owner === staff
+            ? [{ id: "kv3", clientId: "c", userId: owner, scope: [], metadata: { aiGrantId: "g3" }, createdAt: 1 }]
+            : [],
+    }));
+    const revokeGrant = vi.fn(async (id: string) => {
+      if (id === "kv2") {
+        throw new Error("kv write failed");
+      }
+    });
+    const helpers = { listUserGrants, revokeGrant } as unknown as GrantHelpers;
+    const rows = [
+      { id: "g1", workspaceId: WS, userId: MANAGER },
+      { id: "g2", workspaceId: WS, userId: MANAGER },
+      { id: "g3", workspaceId: WS, userId: STAFF },
+      { id: "g4", workspaceId: WS, userId: ADMIN },
+    ];
+    expect(await revokeInKv(helpers, rows)).toEqual({ revoked: 2, done: ["g3", "g4"] });
+    expect(warn).toHaveBeenCalledWith('[oauth] {"kvRevoke":"Error"}');
+    warn.mockRestore();
   });
 });

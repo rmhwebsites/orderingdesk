@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
 import * as schema from "@/db/schema";
 import { openTestDb } from "@/server/desk/test-helpers";
-import type { GrantHelpers } from "./grants";
+import { providerUserId, type GrantHelpers } from "./grants";
 import { pruneDeletes, pruneMcpTables, sweepKvRevokes } from "./prune";
-import { GRANT, MANAGER, NOW, WS, seedGrant, setupMcp } from "./test-helpers";
+import { GRANT, MANAGER, NOW, STAFF, WS, seedGrant, setupMcp } from "./test-helpers";
 
 const DAY = 86400000;
 
@@ -71,5 +71,62 @@ describe("the MCP prune", () => {
     expect((await db.select().from(schema.aiGrants)).find((row) => row.id === "g_gone")?.kvRevokedAt).toBe(NOW);
     expect(await sweepKvRevokes(db, helpers, NOW + 1)).toBe(0);
     expect(helpers).toHaveBeenCalledTimes(1);
+  });
+
+  // A KV revoke that failed stays pending, so the next cron tick tries it
+  // again; only the owners whose revoke worked are marked, and the log line
+  // counts the rest.
+  it("marks only the connections whose KV revoke worked, and tries a failed one again on the next tick", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const db = await setupMcp();
+    await seedGrant(db, { id: "g_ok", userId: MANAGER, revokedAt: NOW - 1000 });
+    await seedGrant(db, { id: "g_down", userId: STAFF, revokedAt: NOW - 1000 });
+    let kvDown = true;
+    const listUserGrants = vi.fn(async (owner: string) => {
+      if (owner === providerUserId(WS, STAFF) && kvDown) {
+        throw new Error("kv down");
+      }
+      const aiGrantId = owner === providerUserId(WS, STAFF) ? "g_down" : "g_ok";
+      return { items: [{ id: "kv_" + aiGrantId, clientId: "c", userId: owner, scope: [], metadata: { aiGrantId }, createdAt: 1 }] };
+    });
+    const revokeGrant = vi.fn(async () => undefined);
+    const helpers = vi.fn(() => ({ listUserGrants, revokeGrant }) as unknown as GrantHelpers);
+    const kvRevokedAt = async () =>
+      Object.fromEntries((await db.select().from(schema.aiGrants)).map((row) => [row.id, row.kvRevokedAt]));
+
+    expect(await sweepKvRevokes(db, helpers, NOW)).toBe(1);
+    expect(await kvRevokedAt()).toEqual({ g_ok: NOW, g_down: null });
+    expect(log).toHaveBeenLastCalledWith('[oauth] {"kvSwept":2,"kvRevoked":1,"kvFailed":1}');
+
+    kvDown = false;
+    expect(await sweepKvRevokes(db, helpers, NOW + 1)).toBe(1);
+    expect(await kvRevokedAt()).toEqual({ g_ok: NOW, g_down: NOW + 1 });
+    expect(revokeGrant.mock.calls.map((args) => (args as unknown[])[0])).toEqual(["kv_g_ok", "kv_g_down"]);
+    expect(log).toHaveBeenLastCalledWith('[oauth] {"kvSwept":1,"kvRevoked":1,"kvFailed":0}');
+
+    expect(await sweepKvRevokes(db, helpers, NOW + 2)).toBe(0);
+    expect(helpers).toHaveBeenCalledTimes(2);
+    log.mockRestore();
+    warn.mockRestore();
+  });
+
+  // A revoke that fails after the listing (the KV write) is no different.
+  it("leaves a connection pending when revoking its KV grant fails", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const db = await setupMcp();
+    await seedGrant(db, { id: "g_gone", revokedAt: NOW - 1000 });
+    const listUserGrants = vi.fn(async () => ({ items: [{ id: "kv1", clientId: "c", userId: "x", scope: [], metadata: { aiGrantId: "g_gone" }, createdAt: 1 }] }));
+    const revokeGrant = vi.fn(async () => {
+      throw new Error("kv write failed");
+    });
+    const helpers = () => ({ listUserGrants, revokeGrant }) as unknown as GrantHelpers;
+    expect(await sweepKvRevokes(db, helpers, NOW)).toBe(0);
+    expect((await db.select().from(schema.aiGrants))[0].kvRevokedAt).toBeNull();
+    expect(log).toHaveBeenLastCalledWith('[oauth] {"kvSwept":1,"kvRevoked":0,"kvFailed":1}');
+    expect(warn).toHaveBeenCalledWith('[oauth] {"kvRevoke":"Error"}');
+    log.mockRestore();
+    warn.mockRestore();
   });
 });

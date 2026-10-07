@@ -113,9 +113,15 @@ export async function revokeGrants(
 export type GrantHelpers = Pick<OAuthHelpers, "listUserGrants" | "revokeGrant">;
 
 // Revokes the KV grants behind these mirror rows (matched by the app id the
-// authorize page put in each grant's metadata). Returns how many it
-// revoked; never throws.
-export async function revokeInKv(helpers: GrantHelpers, rows: Pick<GrantRow, "id" | "workspaceId" | "userId">[]): Promise<number> {
+// authorize page put in each grant's metadata). Returns how many KV grants
+// it revoked and the mirror rows that are done: their owner's grants were
+// all listed and every match revoked (an owner with no match left is done
+// too). A failure for an owner, in the listing or in a revoke, leaves that
+// owner's rows out, so the caller can try them again. Never throws.
+export async function revokeInKv(
+  helpers: GrantHelpers,
+  rows: Pick<GrantRow, "id" | "workspaceId" | "userId">[],
+): Promise<{ revoked: number; done: string[] }> {
   const byOwner = new Map<string, Set<string>>();
   for (const row of rows) {
     const owner = providerUserId(row.workspaceId, row.userId);
@@ -124,6 +130,7 @@ export async function revokeInKv(helpers: GrantHelpers, rows: Pick<GrantRow, "id
     byOwner.set(owner, ids);
   }
   let revoked = 0;
+  const done: string[] = [];
   for (const [owner, ids] of byOwner) {
     try {
       let cursor: string | undefined;
@@ -138,11 +145,12 @@ export async function revokeInKv(helpers: GrantHelpers, rows: Pick<GrantRow, "id
         }
         cursor = page.cursor;
       } while (cursor);
+      done.push(...ids);
     } catch (e) {
       console.warn("[oauth] " + JSON.stringify({ kvRevoke: e instanceof Error ? e.name : "failed" }));
     }
   }
-  return revoked;
+  return { revoked, done };
 }
 
 // Revoked connections whose KV grant the cron has not revoked yet.

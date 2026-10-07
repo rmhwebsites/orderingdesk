@@ -36,13 +36,18 @@ export async function pruneMcpTables(db: Db, now: number): Promise<void> {
   }
 }
 
+// Marks only the connections whose KV revoke finished (revokeInKv's done);
+// one that failed (KV down, a write refused) stays pending, so the next tick
+// (10 minutes) tries it again, and the log line counts it as kvFailed until
+// then. The D1 revoke already refuses every call, so a retry costs nothing
+// but a KV listing. Returns how many it marked.
 export async function sweepKvRevokes(db: Db, helpers: () => GrantHelpers, now: number): Promise<number> {
   const rows = await pendingKvRevokes(db, KV_SWEEP_MAX);
   if (rows.length === 0) {
     return 0;
   }
-  const revoked = await revokeInKv(helpers(), rows);
-  await markKvRevoked(db, rows.map((row) => row.id), now);
-  console.log("[oauth] " + JSON.stringify({ kvSwept: rows.length, kvRevoked: revoked }));
-  return rows.length;
+  const { revoked, done } = await revokeInKv(helpers(), rows);
+  await markKvRevoked(db, done, now);
+  console.log("[oauth] " + JSON.stringify({ kvSwept: rows.length, kvRevoked: revoked, kvFailed: rows.length - done.length }));
+  return done.length;
 }
