@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  DRAFT_FIELDS,
   DRAFTS_PER_PAGE,
   FIRST_DRAFT_SEARCH,
   FULFILLMENTS_PER_ORDER,
@@ -784,7 +785,7 @@ describe("fetchDraftsUpdatedSince", () => {
     expect(query).toContain("sortKey: UPDATED_AT");
     expect(query).toContain("query: $search");
     expect(query).toContain("lineItems(first: 35)");
-    expect(query).toContain("... on PurchasingCompany { company { id name } location { id name } }");
+    expect(query).toContain("... on PurchasingCompany { company { id name } contact { id } location { id name } }");
     expect(query).toContain("countryCodeV2");
     expect(query).not.toContain("paymentTerms");
     expect(query).not.toMatch(/\bready\b/);
@@ -884,9 +885,10 @@ describe("fetchDraftsUpdatedSince", () => {
     // the customer, the purchasing entity (1, plus 3 for the company
     // fragment as this estimator prices it), the shipping address, the
     // applied discount, three price sets of two objects each, the line item
-    // connection and its pageInfo make 19, plus 4 per line item slot.
-    expect(cost).toBe(3 + 4 * (19 + 4 * 35));
-    expect(cost).toBe(639);
+    // connection and its pageInfo make 20 (the company fragment's contact
+    // since Wave 1c), plus 4 per line item slot.
+    expect(cost).toBe(3 + 4 * (20 + 4 * 35));
+    expect(cost).toBe(643);
     expect(cost).toBeLessThanOrEqual(QUERY_COST_BUDGET);
   });
 });
@@ -894,15 +896,21 @@ describe("fetchDraftsUpdatedSince", () => {
 // The single draft, the link lookup, the tag read and the approve documents
 // (src/server/shopify/admin.ts) under the same estimate and budget.
 describe("draft order documents", () => {
+  it("asks for the requester's customer id on orders and drafts, and the company contact on drafts", () => {
+    expect(ORDER_FIELDS).toContain("customer { id firstName lastName displayName email }");
+    expect(DRAFT_FIELDS).toContain("customer { id firstName lastName displayName email }");
+    expect(DRAFT_FIELDS).toContain("contact { id }");
+  });
+
   it("prices the single draft like one draft of the page", () => {
-    expect(requestedQueryCost(DRAFT_ORDER_QUERY)).toBe(1 + 18 + 4 * 35);
+    expect(requestedQueryCost(DRAFT_ORDER_QUERY)).toBe(1 + 19 + 4 * 35);
     expect(requestedQueryCost(DRAFT_ORDER_QUERY)).toBeLessThanOrEqual(QUERY_COST_BUDGET);
   });
 
   it("keeps the approve mutation and its pre-check under budget", () => {
     // Shopify adds a base cost for a mutation; the selection is the draft
     // once more plus userErrors.
-    expect(requestedQueryCost(APPROVE_DRAFT_MUTATION)).toBe(1 + (1 + 18 + 4 * 35) + 1);
+    expect(requestedQueryCost(APPROVE_DRAFT_MUTATION)).toBe(1 + (1 + 19 + 4 * 35) + 1);
     expect(requestedQueryCost(APPROVE_DRAFT_MUTATION) + 10).toBeLessThanOrEqual(QUERY_COST_BUDGET);
     expect(requestedQueryCost(DRAFT_BEFORE_APPROVE_QUERY)).toBe(1 + 1 + 2);
     expect(requestedQueryCost(STATUS_TAGS_QUERY)).toBeLessThanOrEqual(10);
@@ -924,7 +932,7 @@ describe("draft order documents", () => {
     // line, its variant, attributes, discount, price override and bundle
     // components) with the connection and its pageInfo.
     expect(requestedQueryCost(DRAFT_FOR_EDIT_QUERY)).toBe(1 + 5 + 1 + (3 + 50 * 6));
-    expect(requestedQueryCost(EDIT_DRAFT_MUTATION)).toBe(1 + (1 + 18 + 4 * 35) + 1);
+    expect(requestedQueryCost(EDIT_DRAFT_MUTATION)).toBe(1 + (1 + 19 + 4 * 35) + 1);
     expect(requestedQueryCost(DRAFT_FOR_EDIT_QUERY)).toBeLessThanOrEqual(QUERY_COST_BUDGET);
   });
 });

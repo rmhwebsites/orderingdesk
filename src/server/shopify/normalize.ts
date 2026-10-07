@@ -41,6 +41,8 @@ export type NormalizedOrder = {
   createdAt: number;
   customerName: string;
   email: string;
+  // The customer's legacy id: the requester (design section 3), or "".
+  customerId: string;
   total: string;
   currency: string;
   financialStatus: string;
@@ -86,9 +88,13 @@ export type NormalizedDraft = {
   customerName: string;
   // The draft's email, else the customer's, lowercased.
   email: string;
+  // The customer's legacy id: the requester (design section 3), or "".
+  customerId: string;
   // The B2B purchasing company and location, else "".
   company: string;
   location: string;
+  // The B2B company contact who placed it (legacy id), else "".
+  contactId: string;
   attributes: Attribute[];
   discountCodes: string[];
   discount: { title: string; value: string; valueType: string } | null;
@@ -328,6 +334,7 @@ function normalizeOne(raw: unknown): NormalizedOrder | null {
     createdAt: timeOf(raw.createdAt) ?? 0,
     customerName,
     email: (str(raw.email) || str(customer?.email)).toLowerCase(),
+    customerId: customer ? legacyIdOf(customer) : "",
     total: amountOf(money) ?? "0",
     currency: str(money?.currencyCode) || "USD",
     financialStatus: statusText(raw.displayFinancialStatus, ""),
@@ -393,6 +400,7 @@ function normalizeDraftOne(raw: unknown): NormalizedDraft | null {
   const entity = isDict(raw.purchasingEntity) ? raw.purchasingEntity : undefined;
   const company = entity && isDict(entity.company) ? entity.company : undefined;
   const location = entity && isDict(entity.location) ? entity.location : undefined;
+  const contact = entity && isDict(entity.contact) ? entity.contact : undefined;
   const applied = isDict(raw.appliedDiscount) ? raw.appliedDiscount : undefined;
   const total = shopMoneyOf(raw.totalPriceSet);
   const lineItems = isDict(raw.lineItems) ? nodesOrEdges(raw.lineItems) : [];
@@ -409,8 +417,10 @@ function normalizeDraftOne(raw: unknown): NormalizedDraft | null {
     customerName:
       str(customer?.displayName) || fullName(customer?.firstName, customer?.lastName) || (shipping?.name ?? ""),
     email: (str(raw.email) || str(customer?.email)).toLowerCase(),
+    customerId: customer ? legacyIdOf(customer) : "",
     company: str(company?.name),
     location: str(location?.name),
+    contactId: contact ? legacyIdOf(contact) : "",
     attributes: attributesOf(raw.customAttributes, ATTRIBUTES_MAX),
     discountCodes: Array.isArray(raw.discountCodes)
       ? raw.discountCodes.filter((code): code is string => typeof code === "string")

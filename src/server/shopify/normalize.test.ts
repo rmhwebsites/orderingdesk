@@ -343,6 +343,7 @@ describe("normalizeOrders", () => {
       "createdAt",
       "customerName",
       "email",
+      "customerId",
       "total",
       "currency",
       "financialStatus",
@@ -439,8 +440,10 @@ describe("normalizeDrafts", () => {
       orderName: null,
       customerName: "Jordan Vale",
       email: "jordan.vale@example.com",
+      customerId: "",
       company: "Impact Rentals",
       location: "Buford, GA",
+      contactId: "",
       attributes: [
         { key: "Ship to Branch", value: "Buford HQ" },
         { key: "For Employee Name", value: "Casey Lin" },
@@ -615,5 +618,44 @@ describe("companyLocationIdOf", () => {
     expect(companyLocationIdOf("gid://shopify/CompanyLocation/0")).toBeNull();
     expect(companyLocationIdOf("gid://shopify/CompanyLocation/1x")).toBeNull();
     expect(companyLocationIdOf(101)).toBeNull();
+  });
+});
+
+describe("requester ids", () => {
+  it("keeps the customer's legacy id on orders and drafts, and the company contact on drafts", () => {
+    const [order] = normalizeOrders([
+      {
+        id: "gid://shopify/Order/1",
+        legacyResourceId: "1",
+        name: "#1001",
+        customer: { id: "gid://shopify/Customer/77", displayName: "Riley Oakes", email: "Riley@Example.com" },
+      },
+    ]);
+    expect(order.customerId).toBe("77");
+    const [draft] = normalizeDrafts([
+      {
+        id: "gid://shopify/DraftOrder/12",
+        legacyResourceId: "12",
+        name: "#D12",
+        status: "OPEN",
+        customer: { id: "gid://shopify/Customer/78", displayName: "Jordan Vale" },
+        purchasingEntity: {
+          __typename: "PurchasingCompany",
+          company: { id: "gid://shopify/Company/1", name: "Example Co" },
+          contact: { id: "gid://shopify/CompanyContact/501" },
+          location: { id: "gid://shopify/CompanyLocation/9", name: "North Yard" },
+        },
+      },
+    ]);
+    expect(draft.customerId).toBe("78");
+    expect(draft.contactId).toBe("501");
+  });
+
+  it("reads a missing customer or contact as empty", () => {
+    const [order] = normalizeOrders([{ id: "gid://shopify/Order/2", legacyResourceId: "2", name: "#1002", customer: null }]);
+    expect(order.customerId).toBe("");
+    const [draft] = normalizeDrafts([{ id: "gid://shopify/DraftOrder/13", legacyResourceId: "13", name: "#D13", status: "OPEN" }]);
+    expect(draft.customerId).toBe("");
+    expect(draft.contactId).toBe("");
   });
 });

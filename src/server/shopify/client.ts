@@ -136,7 +136,7 @@ const ORDER_BASE_FIELDS = `
       customAttributes { key value }
       currentTotalPriceSet { shopMoney { amount currencyCode } }
       totalPriceSet { shopMoney { amount currencyCode } }
-      customer { firstName lastName displayName email }
+      customer { id firstName lastName displayName email }
       shippingAddress { name firstName lastName address1 address2 city provinceCode zip countryCodeV2 }
       fulfillments(first: ${FULFILLMENTS_PER_ORDER}) { displayStatus }
       lineItems(first: ${LINE_ITEMS}) {
@@ -161,14 +161,15 @@ export function orderFieldsFor(companies: boolean): string {
   return companies ? ORDER_FIELDS : ORDER_BASE_FIELDS;
 }
 
-// Draft orders (draft orders spec section 3.3): one draft costs 19 points
+// Draft orders (draft orders spec section 3.3): one draft costs 20 points
 // (the draft, its cart attribute list, the order it became, customer, the
-// purchasing entity (1, plus 3 for the company fragment as the estimator
-// prices it, which overstates Shopify's "maximum of possible selections"
-// rule by 1), shipping address, applied discount, three price sets of two
-// objects each, the line item connection and its pageInfo) plus 4 per line
-// item slot, so four drafts of up to 35 lines request 3 + 4 x (19 + 4 x 35)
-// = 639. Five would be 798, at the edge; drafts are far fewer than orders.
+// purchasing entity (1, plus 4 for the company fragment with its company,
+// contact and location as the estimator prices it, which overstates
+// Shopify's "maximum of possible selections" rule by 1), shipping address,
+// applied discount, three price sets of two objects each, the line item
+// connection and its pageInfo) plus 4 per line item slot, so four drafts of
+// up to 35 lines request 3 + 4 x (20 + 4 x 35) = 643. Five would be 803,
+// over the edge; drafts are far fewer than orders.
 // Left out on purpose: product and variant (need read_products),
 // paymentTerms (needs read_payment_terms, not granted), images and per-line
 // discounted totals (cost), ready (it changes while Shopify calculates and
@@ -193,10 +194,10 @@ export const DRAFT_FIELDS = `
       discountCodes
       customAttributes { key value }
       order { id legacyResourceId name }
-      customer { firstName lastName displayName email }
+      customer { id firstName lastName displayName email }
       purchasingEntity {
         __typename
-        ... on PurchasingCompany { company { id name } location { id name } }
+        ... on PurchasingCompany { company { id name } contact { id } location { id name } }
       }
       shippingAddress { name firstName lastName company address1 address2 city provinceCode zip countryCodeV2 phone }
       appliedDiscount { title value valueType }
