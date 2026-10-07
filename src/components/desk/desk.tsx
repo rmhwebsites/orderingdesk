@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { XIcon } from "@phosphor-icons/react/X";
 import {
   DESK_QUERY_MAX,
-  SEARCH_DEFAULTS,
+  clearAllPatch,
   deskParams,
   filterChips,
   listScope,
@@ -516,16 +516,20 @@ export function Desk() {
     },
     [stopTyping, writeWords, aiSearch, workspace.id, updateDeskQuery],
   );
+  // Clear all: every filter goes and the view goes back to the one the
+  // person was on; an AI answer still in force loses every part, its sort
+  // included (clearAllPatch).
   const clearFilters = useCallback(() => {
     stopTyping();
     asked.current = "";
+    const answer = ai.status === "understood" ? ai.answer : null;
     setAi(AI_IDLE);
     writtenQ.current = "";
-    const view = viewBeforeAi.current;
+    const fromView = viewBeforeAi.current;
     viewBeforeAi.current = null;
-    updateDeskQuery({ ...SEARCH_DEFAULTS, q: "", status: null, kind: "all", ...(view ? { view } : {}) });
+    updateDeskQuery(clearAllPatch(answer, parseDeskQuery(new URLSearchParams(window.location.search)), fromView));
     setSearchReset((count) => count + 1);
-  }, [stopTyping, updateDeskQuery]);
+  }, [ai, stopTyping, updateDeskQuery]);
   useEffect(() => {
     if (searchText !== writtenQ.current) {
       writtenQ.current = searchText;

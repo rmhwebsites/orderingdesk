@@ -371,6 +371,21 @@ export function understoodChips(
   return chips;
 }
 
+// The change Clear all makes: every search filter, the words, the status
+// and the kind go, and the view goes back to the one the person was on
+// (fromView, null once they picked a view themselves). While an AI answer
+// holds (answer, null when none), the sort it set goes too, as its chip
+// does (understoodChips), to the default of the view the person lands on;
+// a sort the person picked themselves stays.
+export function clearAllPatch(answer: DeskQuery | null, current: DeskQuery, fromView: DeskView | null): Partial<DeskQuery> {
+  const view = fromView ?? current.view;
+  const patch: Partial<DeskQuery> = { ...SEARCH_DEFAULTS, q: "", status: null, kind: "all", view };
+  if (answer !== null && answer.sort !== querySortDefault(answer) && current.sort === answer.sort) {
+    patch.sort = querySortDefault({ view, q: "" });
+  }
+  return patch;
+}
+
 // The search box's text after the address's q changes. The box keeps its
 // own text (an input controlled by the router's transition drops typed keys
 // and moves the cursor), so it keeps that text while the address still

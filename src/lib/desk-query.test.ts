@@ -6,6 +6,7 @@ import {
   EMPTY_QUERY,
   FILTER_TEXT_MAX,
   SEARCH_DEFAULTS,
+  clearAllPatch,
   deskParams,
   deskSearch,
   filterChips,
@@ -325,5 +326,32 @@ describe("understoodChips", () => {
     expect(understoodChips({ ...EMPTY_QUERY, view: "all", kind: "orders" }, { ...EMPTY_QUERY, view: "all", kind: "orders" }, "all", statuses).map((chip) => chip.key)).toEqual(["kind"]);
     // A status with no label left keeps its key.
     expect(understoodChips({ ...EMPTY_QUERY, status: "gone" }, { ...EMPTY_QUERY, status: "gone" }, "open", statuses)[0].label).toBe("Status: gone");
+  });
+});
+
+describe("clearAllPatch", () => {
+  const after = (search: string, answer: DeskQuery | null, fromView: DeskQuery["view"] | null) =>
+    mergeDeskSearch(search, clearAllPatch(answer, parseDeskQuery(new URLSearchParams(search)), fromView));
+
+  it("undoes every part of an AI answer, the sort it set included", () => {
+    const search = "?view=all&kind=orders&sort=oldest&location=loc_north";
+    const answer = parseDeskQuery(new URLSearchParams(search));
+    expect(after(search, answer, "open")).toBe("");
+    // Asked from the approval queue: back to the queue and its own sort.
+    expect(after(search, answer, "approval")).toBe("?view=approval");
+    expect(parseDeskQuery(new URLSearchParams(after(search, answer, "approval"))).sort).toBe("waiting");
+    // The person picked a view since: it stays, at its own sort.
+    expect(after("?view=closed&kind=orders&sort=oldest", answer, null)).toBe("?view=closed");
+  });
+
+  it("keeps a sort the person picked themselves", () => {
+    // No AI answer in force: the sort has its own control and stays.
+    expect(after("?sort=oldest&location=loc_north", null, null)).toBe("?sort=oldest");
+    // The person changed the answer's sort since: theirs stays.
+    const answer = parseDeskQuery(new URLSearchParams("?view=all&sort=oldest&location=loc_north"));
+    expect(after("?view=all&sort=waiting&location=loc_north", answer, "open")).toBe("?sort=waiting");
+    // An answer that left the sort at its default changes nothing about it.
+    const plain = parseDeskQuery(new URLSearchParams("?view=all&location=loc_north"));
+    expect(after("?view=all&sort=oldest&location=loc_north", plain, "open")).toBe("?sort=oldest");
   });
 });
