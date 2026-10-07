@@ -315,3 +315,17 @@ export async function seedCancelledStatus(db: Db, workspaceId: string, sort = 9)
     closed: true,
   });
 }
+
+// Marks a status closed or open (Wave 1a's statuses.closed).
+export async function setStatusClosed(db: Db, workspaceId: string, key: string, closed: boolean) {
+  await db
+    .update(schema.statuses)
+    .set({ closed })
+    .where(and(eq(schema.statuses.workspaceId, workspaceId), eq(schema.statuses.key, key)));
+}
+
+// Puts a card at a company location: the Shopify location id, as Wave 1b's
+// snapshot writers store it in orders.location_id.
+export async function setOrderLocation(db: Db, orderId: string, shopifyLocationId: string | null) {
+  await db.update(schema.orders).set({ locationId: shopifyLocationId }).where(eq(schema.orders.id, orderId));
+}
