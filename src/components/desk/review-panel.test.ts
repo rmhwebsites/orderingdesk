@@ -16,6 +16,10 @@ const base: ReviewPanelProps = {
   completeInShopify: null,
   onApprove: async () => null,
   onReject: async () => null,
+  canEdit: true,
+  editBlock: null,
+  contentKey: "k1",
+  editor: () => null,
 };
 const render = (overrides: Partial<ReviewPanelProps> = {}) =>
   renderToStaticMarkup(createElement(ReviewPanel, { ...base, ...overrides }));
@@ -81,5 +85,16 @@ describe("ReviewPanel", () => {
     expect(html).toContain(">Deleted in Shopify</h3>");
     expect(html).not.toContain("Waiting for review");
     expect(html).toContain("Reject still records a decision.");
+  });
+
+  // Comprehensive design section 2: managers edit a request before approval.
+  it("offers managers Edit request, with its reason when it cannot be used", () => {
+    expect(render()).toContain(">Edit request<");
+    const blocked = render({ editBlock: "Shopify no longer has this draft.", approveBlock: "Shopify no longer has this draft." });
+    const editButton = blocked.match(/<button[^>]*>(?:(?!<\/button>).)*Edit request<\/button>/)?.[0] ?? "";
+    expect(editButton).toContain('disabled=""');
+    expect(blocked.match(/Shopify no longer has this draft\./g)).toHaveLength(1);
+    expect(render({ canEdit: false })).not.toContain("Edit request");
+    expect(render({ canReview: false })).not.toContain("Edit request");
   });
 });

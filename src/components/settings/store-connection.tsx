@@ -137,7 +137,8 @@ function Instructions() {
           Give it these Admin API access scopes, then release the version: read_orders and write_orders,
           read_customers, read_merchant_managed_fulfillment_orders and write_merchant_managed_fulfillment_orders.
           Add read_all_orders too if you will import orders older than 60 days (Order history, below), and
-          read_draft_orders, write_draft_orders and read_companies to bring draft orders (requests) onto the desk.
+          read_draft_orders, write_draft_orders and read_companies to bring draft orders (requests) onto the desk,
+          and read_products so managers can edit requests.
         </li>
         <li>Install the app on the store and approve those permissions there.</li>
         <li>In the app&apos;s settings, copy its Client ID and Client secret.</li>

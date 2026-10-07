@@ -79,6 +79,7 @@ function render(
         onApprove: none,
         onReject: none,
         onCancelOrder: none,
+        onEditRequest: async () => ({ warning: null }),
         onClose: noop,
         onRetry: noop,
         canManagePos: true,

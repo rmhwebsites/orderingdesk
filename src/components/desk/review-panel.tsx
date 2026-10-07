@@ -19,10 +19,15 @@
 //
 // Reject opens a small form: the reason is required (it becomes a note),
 // focus starts in it, and Escape or Cancel returns focus to Reject.
+//
+// Edit request (managers) opens the request editor in place of the
+// buttons; opening it closes an open Approve confirmation, and a change to
+// the request's content closes one too.
 
 import { useEffect, useId, useRef, useState } from "react";
 import { ArrowRightIcon } from "@phosphor-icons/react/ArrowRight";
 import { CheckCircleIcon } from "@phosphor-icons/react/CheckCircle";
+import { PencilSimpleIcon } from "@phosphor-icons/react/PencilSimple";
 import { XCircleIcon } from "@phosphor-icons/react/XCircle";
 import { formatDateTime } from "@/lib/format";
 import { NOTE_MAX } from "@/lib/limits";
@@ -307,9 +312,20 @@ export type ReviewActionsProps = {
   onReject: (reason: string) => Promise<string | null>;
   // Where focus goes once a reject is saved.
   afterReject?: () => HTMLElement | null;
+  // Managers edit a request before approval (comprehensive design section
+  // 2). editBlock: why Edit request cannot be used now, or null.
+  canEdit: boolean;
+  editBlock: string | null;
+  // Changes when the request's content changes (requestContentKey in
+  // src/lib/request-edit.ts): an open Approve confirmation closes, so
+  // nobody approves what they did not see.
+  contentKey: string;
+  // The editor (src/components/desk/edit-request.tsx). close takes the
+  // warning a save left (a total above $0), if any.
+  editor: (close: (warning?: string | null) => void) => React.ReactNode;
 };
 
-type Mode = "idle" | "approve" | "approve-next" | "reject";
+type Mode = "idle" | "approve" | "approve-next" | "reject" | "edit";
 
 export function ReviewActions({
   name,
@@ -323,16 +339,33 @@ export function ReviewActions({
   onApproveAndNext,
   onReject,
   afterReject,
+  canEdit,
+  editBlock,
+  contentKey,
+  editor,
 }: ReviewActionsProps) {
   const id = useId();
   const [mode, setMode] = useState<Mode>("idle");
+  const [notice, setNotice] = useState<string | null>(null);
+  const [shownKey, setShownKey] = useState(contentKey);
   const approveRef = useRef<HTMLButtonElement>(null);
   const nextRef = useRef<HTMLButtonElement>(null);
   const rejectRef = useRef<HTMLButtonElement>(null);
+  const editRef = useRef<HTMLButtonElement>(null);
+  // The request changed (an edit here or by someone else, a sync): an open
+  // Approve confirmation (with or without "and next") closes and says why.
+  if (shownKey !== contentKey) {
+    setShownKey(contentKey);
+    if (mode === "approve" || mode === "approve-next") {
+      setMode("idle");
+      setNotice("This request changed. Review it again before approving.");
+    }
+  }
   const approveWhyShown = approveBlock !== null && !completeInShopify;
   // One reason line when both buttons are blocked for the same reason.
   const rejectWhyId = approveWhyShown && rejectBlock === approveBlock ? `${id}-approve-why` : `${id}-reject-why`;
   const rejectWhyShown = rejectBlock !== null && !rejected && rejectWhyId === `${id}-reject-why`;
+  const editWhyId = approveWhyShown && editBlock === approveBlock ? `${id}-approve-why` : `${id}-edit-why`;
   const andNext = !completeInShopify && next !== null && onApproveAndNext !== undefined ? { next, run: onApproveAndNext } : null;
 
   if (mode === "approve" || (mode === "approve-next" && andNext)) {
@@ -379,6 +412,18 @@ export function ReviewActions({
     );
   }
 
+  if (mode === "edit") {
+    return (
+      <div>
+        {editor((warning) => {
+          setMode("idle");
+          setNotice(warning ?? null);
+          focusSoon(() => editRef.current);
+        })}
+      </div>
+    );
+  }
+
   return (
     <div>
       <div className="flex flex-wrap gap-2">
@@ -386,7 +431,10 @@ export function ReviewActions({
           <button
             ref={approveRef}
             type="button"
-            onClick={() => setMode("approve")}
+            onClick={() => {
+              setNotice(null);
+              setMode("approve");
+            }}
             disabled={approveBlock !== null}
             aria-describedby={approveBlock ? `${id}-approve-why` : undefined}
             className={ui.buttonPrimary}
@@ -399,7 +447,10 @@ export function ReviewActions({
           <button
             ref={nextRef}
             type="button"
-            onClick={() => setMode("approve-next")}
+            onClick={() => {
+              setNotice(null);
+              setMode("approve-next");
+            }}
             disabled={approveBlock !== null}
             aria-describedby={approveBlock ? `${id}-approve-why` : `${id}-next`}
             className={ui.buttonSecondary}
@@ -412,7 +463,10 @@ export function ReviewActions({
           <button
             ref={rejectRef}
             type="button"
-            onClick={() => setMode("reject")}
+            onClick={() => {
+              setNotice(null);
+              setMode("reject");
+            }}
             disabled={rejectBlock !== null}
             aria-describedby={rejectBlock ? rejectWhyId : undefined}
             className={ui.buttonDangerSecondary}
@@ -421,6 +475,22 @@ export function ReviewActions({
             Reject
           </button>
         )}
+        {canEdit ? (
+          <button
+            ref={editRef}
+            type="button"
+            onClick={() => {
+              setNotice(null);
+              setMode("edit");
+            }}
+            disabled={editBlock !== null}
+            aria-describedby={editBlock ? editWhyId : undefined}
+            className={ui.buttonSecondary}
+          >
+            <PencilSimpleIcon size={16} aria-hidden />
+            Edit request
+          </button>
+        ) : null}
       </div>
       {andNext && approveBlock === null ? (
         <p id={`${id}-next`} className="sr-only">
@@ -436,6 +506,16 @@ export function ReviewActions({
         <p id={`${id}-reject-why`} className="mt-2 text-sm text-ink-2">
           {rejectBlock}
         </p>
+      ) : null}
+      {canEdit && editBlock && editWhyId === `${id}-edit-why` ? (
+        <p id={`${id}-edit-why`} className="mt-2 text-sm text-ink-2">
+          {editBlock}
+        </p>
+      ) : null}
+      {notice ? (
+        <div className="mt-3">
+          <InlineMessage tone="warn">{notice}</InlineMessage>
+        </div>
       ) : null}
     </div>
   );

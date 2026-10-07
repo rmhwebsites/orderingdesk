@@ -31,6 +31,7 @@ import {
 } from "@/lib/desk-state";
 import { DEFAULT_QUEUE_SETTINGS, pricesShown, type QueueSettingsView } from "@/lib/queue-settings";
 import { roleAtLeast } from "@/lib/roles";
+import type { EditRequestBody, RequestEditor } from "@/lib/request-edit";
 import { selectAll, toggleSelection, type Selection } from "@/lib/selection";
 import { BULK_STATUS_MAX, type BulkCard } from "@/lib/status-rules";
 import { DESK_MEDIA, useMediaQuery } from "@/lib/use-media-query";
@@ -43,6 +44,7 @@ import { useWorkspace } from "@/components/shell/workspace-provider";
 import { useToast } from "@/components/toasts";
 import { BulkBar, type BulkResult } from "./bulk-bar";
 import { DeskSkeleton } from "./desk-skeleton";
+import type { EditSaveOutcome } from "./edit-request";
 import { DeskLoadError, EmptyDesk, NoMatches } from "./empty-states";
 import {
   DrawerShell,
@@ -675,6 +677,48 @@ export function Desk() {
     [applyEvent, toast, canManagePos, reload, refreshQueue, loadDrawer],
   );
 
+  // Edit a request before approval (comprehensive design section 2). A 409
+  // that carries the fresh editor reloads it in place.
+  const editRequestAction = useCallback(
+    async (orderId: string, body: EditRequestBody): Promise<EditSaveOutcome> => {
+      let response: Response;
+      try {
+        response = await fetch(`/api/orders/${encodeURIComponent(orderId)}/edit`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+      } catch {
+        return { error: "Could not reach the server. Your changes are still here; check the request before saving again." };
+      }
+      const result = (await response.json().catch(() => null)) as {
+        error?: string;
+        editor?: RequestEditor;
+        kind?: "edited" | "unchanged";
+        event?: EventView;
+        warning?: string | null;
+      } | null;
+      if (!response.ok || !result?.kind) {
+        return {
+          error: result?.error ?? `Not saved (the server answered ${response.status}). Try again.`,
+          ...(result?.editor ? { editor: result.editor } : {}),
+        };
+      }
+      if (result.kind === "edited" && result.event) {
+        applyEvent({ kind: "order.activity", event: result.event });
+        toast({ title: "Request updated in Shopify.", tone: "good" });
+      } else {
+        toast({ title: "Nothing changed on this request.", tone: "info" });
+      }
+      void reload();
+      if (openRef.current === orderId) {
+        void loadDrawer(orderId, true);
+      }
+      return { warning: result.warning ?? null };
+    },
+    [applyEvent, toast, reload, loadDrawer],
+  );
+
   // Reject a request with its reason (draft orders spec section 9.2).
   const reject = useCallback(
     async (orderId: string, reason: string): Promise<string | null> => {
@@ -1118,6 +1162,7 @@ export function Desk() {
             onApprove={() => approve(drawerOrderId)}
             onReject={(reason) => reject(drawerOrderId, reason)}
             onCancelOrder={(reason) => cancelOrderAction(drawerOrderId, reason)}
+            onEditRequest={(body) => editRequestAction(drawerOrderId, body)}
             nextRequest={nextRequest}
             onApproveAndNext={nextRequest ? () => approveAndNext(drawerOrderId, nextRequest.id) : undefined}
             onClose={closeOrder}

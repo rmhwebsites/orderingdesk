@@ -17,6 +17,7 @@ import { NOTE_MAX } from "@/lib/limits";
 import { financialTone, fulfillmentTone, readSnapshot } from "@/lib/order-snapshot";
 import { rejectionOf } from "@/lib/rejection";
 import { requestFieldsOf } from "@/lib/request-fields";
+import { requestContentKey, type EditRequestBody } from "@/lib/request-edit";
 import { roleAtLeast, type Role } from "@/lib/roles";
 import { statusOptionsFor } from "@/lib/status-options";
 import { eventLook } from "@/lib/event-look";
@@ -35,6 +36,7 @@ import { CopyButton, Section } from "./drawer-kit";
 import { ItemsSection, RequestSection, ShipToSection, type ShipToLocation } from "./request-parts";
 import { ReviewActions, ReviewSummary, type NextRequest } from "./review-panel";
 import { CancelOrderPanel } from "./cancel-order";
+import { EditRequest, type EditSaveOutcome } from "./edit-request";
 
 export type DrawerOrder = {
   id: string;
@@ -425,6 +427,7 @@ export function OrderDrawerContent({
   onApprove,
   onReject,
   onCancelOrder,
+  onEditRequest,
   nextRequest,
   onApproveAndNext,
   onClose,
@@ -457,6 +460,8 @@ export function OrderDrawerContent({
   onReject: (reason: string) => Promise<string | null>;
   // Cancel an order after approval: the error to show, or null.
   onCancelOrder: (reason: string) => Promise<string | null>;
+  // Edit a request before approval (src/components/desk/edit-request.tsx).
+  onEditRequest: (body: EditRequestBody) => Promise<EditSaveOutcome>;
   // Approve and next: the next request waiting, and the approval that then
   // opens it (comprehensive desk design section 1).
   nextRequest?: NextRequest | null;
@@ -527,6 +532,7 @@ export function OrderDrawerContent({
     : !rejectedStatus
       ? "Set a status to follow Draft rejected in Settings > Statuses."
       : null;
+  const editBlock = deleted ? "Shopify no longer has this draft." : !drafts.draftsEnabled ? draftsOff : null;
   const zeroTotal = snapshot ? Number(snapshot.total) === 0 && snapshot.total.trim().length > 0 : true;
   // A status set with no person behind it came from Shopify (a fulfillment,
   // a delivery, a completion or the Ordering Desk tag edited there).
@@ -833,6 +839,10 @@ export function OrderDrawerContent({
                 }
                 onReject={onReject}
                 afterReject={() => document.getElementById(`${labelId}-review`)}
+                canEdit={canReview}
+                editBlock={editBlock}
+                contentKey={requestContentKey(summary)}
+                editor={(close) => <EditRequest orderId={orderId} name={name} onSave={onEditRequest} onClose={close} />}
               />
             </div>
           ) : null}
