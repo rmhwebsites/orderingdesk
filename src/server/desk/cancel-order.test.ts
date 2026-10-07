@@ -5,6 +5,7 @@ import * as schema from "@/db/schema";
 import { encryptSecret } from "@/server/crypto";
 import { NOTE_MAX } from "@/lib/limits";
 import { CANCEL_COPY, cancelOrder, followCancellation } from "./cancel-order";
+import { applyShopifyMove, loadStatusRows } from "@/server/shopify/status-sync";
 import { REVIEW_READY_TRIES, type ReviewDeps } from "./review";
 import { openTestDb, seedCancelledStatus, seedDraft, seedWorkspace, snapshotOf } from "./test-helpers";
 
@@ -137,6 +138,35 @@ const timeout = (): Response => {
   throw new DOMException("The operation timed out.", "TimeoutError");
 };
 
+const accepted = (done: boolean) =>
+  Response.json({ data: { orderCancel: { job: { id: "gid://shopify/Job/1", done }, orderCancelUserErrors: [] } } });
+
+// What applyShopifyMove does for the orders/cancelled webhook or a sync.
+async function moveFromShopify(db: Db, at: number) {
+  const to = (await loadStatusRows(db, WS)).find((row) => row.shopifyLink === "cancelled");
+  if (!to) {
+    throw new Error("no cancelled status");
+  }
+  await applyShopifyMove(db, WS, "o1", "approved", to, "cancelled", at);
+}
+
+// An env whose workspace room records every broadcast, as "kind:entry type".
+function liveEnv() {
+  const sent: { kind: string; event?: { type: string } }[] = [];
+  const room = {
+    fetch: async (_url: string, init?: RequestInit) => {
+      sent.push(JSON.parse(String(init?.body)) as { kind: string; event?: { type: string } });
+      return new Response(null, { status: 204 });
+    },
+  };
+  const live = { ...env, ROOM: { idFromName: (name: string) => name, get: () => room } } as unknown as CloudflareEnv;
+  return { live, kinds: () => sent.map((item) => (item.event ? `${item.kind}:${item.event.type}` : item.kind)) };
+}
+
+function entriesOf(rows: Awaited<ReturnType<typeof timeline>>) {
+  return rows.map((event) => [event.type, event.text, event.actorId]).sort();
+}
+
 describe("cancelOrder", () => {
   it("needs a reason, a manager, an order and a cancelled status, asking Shopify nothing otherwise", async () => {
     const db = await setup();
@@ -214,16 +244,129 @@ describe("cancelOrder", () => {
     expect((await card(db)).statusKey).toBe("approved");
   });
 
-  it("follows an order already cancelled in Shopify without sending anything", async () => {
+  it("follows an order already cancelled in Shopify without sending anything, keeping the reason as a note", async () => {
     const db = await setup();
     const shop = fakeShop({ cancelledAt: "2026-10-06T14:00:00Z" });
-    expect(await cancelOrder(db, ctx(), { reason: "Duplicate order" }, deps(shop.impl))).toMatchObject({
+    expect(await cancelOrder(db, ctx(), { reason: " Duplicate order " }, deps(shop.impl))).toMatchObject({
       kind: "cancelled-in-shopify",
-      message: "Order #1234 was already cancelled in Shopify. The card is now Cancelled.",
+      message: "Order #1234 was already cancelled in Shopify. The card is now Cancelled, and your reason is saved as a note.",
     });
     expect(shop.ops()).toEqual(["OrderCancelState"]);
     expect(await card(db)).toMatchObject({ statusKey: "cancelled", statusSetBy: null });
-    expect((await timeline(db)).map((event) => event.text)).toEqual(["Cancelled in Shopify. Status set to Cancelled"]);
+    const entries = await timeline(db);
+    expect(entriesOf(entries)).toEqual([
+      ["note", "Duplicate order", MANAGER],
+      ["status", "Cancelled in Shopify. Status set to Cancelled", null],
+    ]);
+    expect(entries.find((event) => event.type === "note")?.meta).toEqual({ cancelReason: true });
+  });
+
+  it("records the reason and the cancellation when Shopify's own move lands first", async () => {
+    // Shopify finishes its job and the orders/cancelled webhook moves the
+    // card while this cancel is still waiting on Shopify.
+    const db = await setup();
+    const shop = fakeShop(
+      {},
+      {
+        handle: {
+          CancelOrder: async () => {
+            shop.state.cancelledAt = "2026-10-06T15:00:01Z";
+            await moveFromShopify(db, NOW - 1);
+            return accepted(false);
+          },
+        },
+      },
+    );
+    const result = await cancelOrder(db, ctx(), { reason: "Duplicate order" }, deps(shop.impl));
+    expect(result).toMatchObject({
+      kind: "cancelled",
+      confirmed: true,
+      statusEvent: null,
+      order: { id: "o1", statusKey: "cancelled", statusSetBy: null, statusSetAt: NOW - 1 },
+    });
+    if (result.kind !== "cancelled") {
+      throw new Error("expected a cancel");
+    }
+    expect(result.events.map((event) => [event.type, event.text, event.actorId])).toEqual([
+      ["note", "Duplicate order", MANAGER],
+      ["order_cancelled", "Shopify cancelled the order: no email to the customer, no restock, no refund.", MANAGER],
+    ]);
+    expect(shop.ops()).toEqual(["OrderCancelState", "CancelOrder", "OrderCancelState"]);
+    expect(entriesOf(await timeline(db))).toEqual([
+      ["note", "Duplicate order", MANAGER],
+      ["order_cancelled", "Shopify cancelled the order: no email to the customer, no restock, no refund.", MANAGER],
+      ["status", "Cancelled in Shopify. Status set to Cancelled", null],
+    ]);
+  });
+
+  it("records a cancellation once when a second cancel lands after the first", async () => {
+    const db = await setup();
+    const first = fakeShop();
+    const second = fakeShop(
+      {},
+      {
+        handle: {
+          // The first cancel runs to the end while the second waits on Shopify.
+          CancelOrder: async () => {
+            await cancelOrder(db, ctx(), { reason: "Duplicate order" }, { ...deps(first.impl), now: () => NOW - 5 });
+            second.state.cancelledAt = "2026-10-06T15:00:01Z";
+            return accepted(true);
+          },
+        },
+      },
+    );
+    expect(await cancelOrder(db, ctx(), { reason: "Ordered twice" }, deps(second.impl))).toEqual({ kind: "already-cancelled" });
+    expect(entriesOf(await timeline(db))).toEqual([
+      ["note", "Duplicate order", MANAGER],
+      ["order_cancelled", "Shopify cancelled the order: no email to the customer, no restock, no refund.", MANAGER],
+      ["status", "Cancelled the order in Shopify. Status set to Cancelled", MANAGER],
+    ]);
+  });
+
+  it("keeps the reason and the cancellation when Shopify cancelled but the card cannot move", async () => {
+    const db = await setup();
+    const shop = fakeShop(
+      {},
+      {
+        handle: {
+          // The cancelled status goes away while Shopify works.
+          CancelOrder: async () => {
+            await db.delete(schema.statuses).where(eq(schema.statuses.key, "cancelled"));
+            shop.state.cancelledAt = "2026-10-06T15:00:01Z";
+            return accepted(true);
+          },
+        },
+      },
+    );
+    expect(await cancelOrder(db, ctx(), { reason: "Duplicate order" }, deps(shop.impl))).toEqual({
+      kind: "refused",
+      status: 409,
+      error: CANCEL_COPY.moveFailed,
+    });
+    expect(CANCEL_COPY.moveFailed).toContain("The reason is saved as a note.");
+    expect((await card(db)).statusKey).toBe("approved");
+    expect(entriesOf(await timeline(db))).toEqual([
+      ["note", "Duplicate order", MANAGER],
+      ["order_cancelled", "Shopify cancelled the order: no email to the customer, no restock, no refund.", MANAGER],
+    ]);
+  });
+
+  it("keeps the reason when a retry finds the order Shopify cancelled after a lost answer", async () => {
+    const db = await setup();
+    const shop = fakeShop({}, { handle: { CancelOrder: timeout } });
+    expect(await cancelOrder(db, ctx(), { reason: "Duplicate order" }, deps(shop.impl))).toEqual({
+      kind: "refused",
+      status: 502,
+      error: CANCEL_COPY.notConfirmed,
+    });
+    // Shopify's job finished after the read that followed the timeout.
+    shop.state.cancelledAt = "2026-10-06T15:00:05Z";
+    expect(await cancelOrder(db, ctx(), { reason: "Duplicate order" }, deps(shop.impl))).toMatchObject({ kind: "cancelled-in-shopify" });
+    expect(shop.ops().filter((op) => op === "CancelOrder")).toHaveLength(1);
+    expect(entriesOf(await timeline(db))).toEqual([
+      ["note", "Duplicate order", MANAGER],
+      ["status", "Cancelled in Shopify. Status set to Cancelled", null],
+    ]);
   });
 
   it("changes nothing when Shopify refuses, and says why in plain words", async () => {
@@ -293,10 +436,50 @@ describe("followCancellation", () => {
     if (result.kind !== "cancelled") {
       throw new Error("expected a cancel");
     }
-    await followCancellation(db, env, WS, "o1", result, { fetchImpl: shop.impl, now: () => NOW + 1000 });
+    const { live, kinds } = liveEnv();
+    await followCancellation(db, live, WS, "o1", result, { fetchImpl: shop.impl, now: () => NOW + 1000 });
     const snapshot = (await card(db)).shopify as Record<string, unknown>;
     expect(snapshot.cancelledAt).toBe(Date.parse("2026-10-06T15:00:01Z"));
     expect(shop.state.tags).toEqual(["Ordering Desk: Cancelled"]);
     expect((await card(db)).statusKey).toBe("cancelled");
+    expect(kinds()).toEqual(expect.arrayContaining(["order.status:status", "order.note:note", "order.activity:order_cancelled"]));
+  });
+
+  it("shares only the reason and the cancellation when Shopify's own move landed first", async () => {
+    const db = await setup();
+    const shop = fakeShop(
+      {},
+      {
+        handle: {
+          CancelOrder: async () => {
+            shop.state.cancelledAt = "2026-10-06T15:00:01Z";
+            await moveFromShopify(db, NOW - 1);
+            return accepted(true);
+          },
+        },
+      },
+    );
+    const result = await cancelOrder(db, ctx(), { reason: "Duplicate order" }, deps(shop.impl));
+    if (result.kind !== "cancelled") {
+      throw new Error("expected a cancel");
+    }
+    const { live, kinds } = liveEnv();
+    await followCancellation(db, live, WS, "o1", result, { fetchImpl: shop.impl, now: () => NOW + 1000 });
+    // The webhook already shared its own move; this cancel adds its entries.
+    expect(kinds()).toEqual(expect.arrayContaining(["order.note:note", "order.activity:order_cancelled"]));
+    expect(kinds().filter((kind) => kind.startsWith("order.status"))).toEqual([]);
+    expect(shop.state.tags).toEqual(["Ordering Desk: Cancelled"]);
+  });
+
+  it("shares the reason note with the move when the order was already cancelled in Shopify", async () => {
+    const db = await setup();
+    const shop = fakeShop({ cancelledAt: "2026-10-06T14:00:00Z" });
+    const result = await cancelOrder(db, ctx(), { reason: "Duplicate order" }, deps(shop.impl));
+    if (result.kind !== "cancelled-in-shopify") {
+      throw new Error("expected Shopify's cancellation");
+    }
+    const { live, kinds } = liveEnv();
+    await followCancellation(db, live, WS, "o1", result, { fetchImpl: shop.impl, now: () => NOW + 1000 });
+    expect(kinds()).toEqual(expect.arrayContaining(["order.status:status", "order.note:note"]));
   });
 });

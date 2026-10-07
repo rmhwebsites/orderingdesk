@@ -4036,6 +4036,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- src/server/shopify/a
 - Create: `src/server/desk/cancel-order.ts`
 - Create: `src/server/desk/cancel-order.test.ts`
 
+Review amendment (after the Cancel batch review): once Shopify has accepted the cancel, the manager's reason (note) and the `order_cancelled` entry are recorded whether or not this request's move lands. The orders/cancelled webhook (or a sync) can move the card while the cancel reads Shopify back; the answer is then `kind: "cancelled"` with `statusEvent: null` and the card's fresh status row, and `followCancellation` broadcasts the note and the entry but no second status move or push. The entries are written once per order: a second cancel that finds an `order_cancelled` entry already there records nothing and answers already-cancelled. When the move fails for another reason the entries are still kept and `moveFailed` says so. An order Shopify had already cancelled (for example a retry after a lost answer) keeps the typed reason as the manager's note, with no `order_cancelled` entry since who cancelled it in Shopify is not known, and the message says the reason is saved. The code below is the amended version.
+
 **Step 1: Write the failing test** (`src/server/desk/cancel-order.test.ts`)
 
 ```ts
@@ -4046,6 +4048,7 @@ import * as schema from "@/db/schema";
 import { encryptSecret } from "@/server/crypto";
 import { NOTE_MAX } from "@/lib/limits";
 import { CANCEL_COPY, cancelOrder, followCancellation } from "./cancel-order";
+import { applyShopifyMove, loadStatusRows } from "@/server/shopify/status-sync";
 import { REVIEW_READY_TRIES, type ReviewDeps } from "./review";
 import { openTestDb, seedCancelledStatus, seedDraft, seedWorkspace, snapshotOf } from "./test-helpers";
 
@@ -4178,6 +4181,35 @@ const timeout = (): Response => {
   throw new DOMException("The operation timed out.", "TimeoutError");
 };
 
+const accepted = (done: boolean) =>
+  Response.json({ data: { orderCancel: { job: { id: "gid://shopify/Job/1", done }, orderCancelUserErrors: [] } } });
+
+// What applyShopifyMove does for the orders/cancelled webhook or a sync.
+async function moveFromShopify(db: Db, at: number) {
+  const to = (await loadStatusRows(db, WS)).find((row) => row.shopifyLink === "cancelled");
+  if (!to) {
+    throw new Error("no cancelled status");
+  }
+  await applyShopifyMove(db, WS, "o1", "approved", to, "cancelled", at);
+}
+
+// An env whose workspace room records every broadcast, as "kind:entry type".
+function liveEnv() {
+  const sent: { kind: string; event?: { type: string } }[] = [];
+  const room = {
+    fetch: async (_url: string, init?: RequestInit) => {
+      sent.push(JSON.parse(String(init?.body)) as { kind: string; event?: { type: string } });
+      return new Response(null, { status: 204 });
+    },
+  };
+  const live = { ...env, ROOM: { idFromName: (name: string) => name, get: () => room } } as unknown as CloudflareEnv;
+  return { live, kinds: () => sent.map((item) => (item.event ? `${item.kind}:${item.event.type}` : item.kind)) };
+}
+
+function entriesOf(rows: Awaited<ReturnType<typeof timeline>>) {
+  return rows.map((event) => [event.type, event.text, event.actorId]).sort();
+}
+
 describe("cancelOrder", () => {
   it("needs a reason, a manager, an order and a cancelled status, asking Shopify nothing otherwise", async () => {
     const db = await setup();
@@ -4255,16 +4287,129 @@ describe("cancelOrder", () => {
     expect((await card(db)).statusKey).toBe("approved");
   });
 
-  it("follows an order already cancelled in Shopify without sending anything", async () => {
+  it("follows an order already cancelled in Shopify without sending anything, keeping the reason as a note", async () => {
     const db = await setup();
     const shop = fakeShop({ cancelledAt: "2026-10-06T14:00:00Z" });
-    expect(await cancelOrder(db, ctx(), { reason: "Duplicate order" }, deps(shop.impl))).toMatchObject({
+    expect(await cancelOrder(db, ctx(), { reason: " Duplicate order " }, deps(shop.impl))).toMatchObject({
       kind: "cancelled-in-shopify",
-      message: "Order #1234 was already cancelled in Shopify. The card is now Cancelled.",
+      message: "Order #1234 was already cancelled in Shopify. The card is now Cancelled, and your reason is saved as a note.",
     });
     expect(shop.ops()).toEqual(["OrderCancelState"]);
     expect(await card(db)).toMatchObject({ statusKey: "cancelled", statusSetBy: null });
-    expect((await timeline(db)).map((event) => event.text)).toEqual(["Cancelled in Shopify. Status set to Cancelled"]);
+    const entries = await timeline(db);
+    expect(entriesOf(entries)).toEqual([
+      ["note", "Duplicate order", MANAGER],
+      ["status", "Cancelled in Shopify. Status set to Cancelled", null],
+    ]);
+    expect(entries.find((event) => event.type === "note")?.meta).toEqual({ cancelReason: true });
+  });
+
+  it("records the reason and the cancellation when Shopify's own move lands first", async () => {
+    // Shopify finishes its job and the orders/cancelled webhook moves the
+    // card while this cancel is still waiting on Shopify.
+    const db = await setup();
+    const shop = fakeShop(
+      {},
+      {
+        handle: {
+          CancelOrder: async () => {
+            shop.state.cancelledAt = "2026-10-06T15:00:01Z";
+            await moveFromShopify(db, NOW - 1);
+            return accepted(false);
+          },
+        },
+      },
+    );
+    const result = await cancelOrder(db, ctx(), { reason: "Duplicate order" }, deps(shop.impl));
+    expect(result).toMatchObject({
+      kind: "cancelled",
+      confirmed: true,
+      statusEvent: null,
+      order: { id: "o1", statusKey: "cancelled", statusSetBy: null, statusSetAt: NOW - 1 },
+    });
+    if (result.kind !== "cancelled") {
+      throw new Error("expected a cancel");
+    }
+    expect(result.events.map((event) => [event.type, event.text, event.actorId])).toEqual([
+      ["note", "Duplicate order", MANAGER],
+      ["order_cancelled", "Shopify cancelled the order: no email to the customer, no restock, no refund.", MANAGER],
+    ]);
+    expect(shop.ops()).toEqual(["OrderCancelState", "CancelOrder", "OrderCancelState"]);
+    expect(entriesOf(await timeline(db))).toEqual([
+      ["note", "Duplicate order", MANAGER],
+      ["order_cancelled", "Shopify cancelled the order: no email to the customer, no restock, no refund.", MANAGER],
+      ["status", "Cancelled in Shopify. Status set to Cancelled", null],
+    ]);
+  });
+
+  it("records a cancellation once when a second cancel lands after the first", async () => {
+    const db = await setup();
+    const first = fakeShop();
+    const second = fakeShop(
+      {},
+      {
+        handle: {
+          // The first cancel runs to the end while the second waits on Shopify.
+          CancelOrder: async () => {
+            await cancelOrder(db, ctx(), { reason: "Duplicate order" }, { ...deps(first.impl), now: () => NOW - 5 });
+            second.state.cancelledAt = "2026-10-06T15:00:01Z";
+            return accepted(true);
+          },
+        },
+      },
+    );
+    expect(await cancelOrder(db, ctx(), { reason: "Ordered twice" }, deps(second.impl))).toEqual({ kind: "already-cancelled" });
+    expect(entriesOf(await timeline(db))).toEqual([
+      ["note", "Duplicate order", MANAGER],
+      ["order_cancelled", "Shopify cancelled the order: no email to the customer, no restock, no refund.", MANAGER],
+      ["status", "Cancelled the order in Shopify. Status set to Cancelled", MANAGER],
+    ]);
+  });
+
+  it("keeps the reason and the cancellation when Shopify cancelled but the card cannot move", async () => {
+    const db = await setup();
+    const shop = fakeShop(
+      {},
+      {
+        handle: {
+          // The cancelled status goes away while Shopify works.
+          CancelOrder: async () => {
+            await db.delete(schema.statuses).where(eq(schema.statuses.key, "cancelled"));
+            shop.state.cancelledAt = "2026-10-06T15:00:01Z";
+            return accepted(true);
+          },
+        },
+      },
+    );
+    expect(await cancelOrder(db, ctx(), { reason: "Duplicate order" }, deps(shop.impl))).toEqual({
+      kind: "refused",
+      status: 409,
+      error: CANCEL_COPY.moveFailed,
+    });
+    expect(CANCEL_COPY.moveFailed).toContain("The reason is saved as a note.");
+    expect((await card(db)).statusKey).toBe("approved");
+    expect(entriesOf(await timeline(db))).toEqual([
+      ["note", "Duplicate order", MANAGER],
+      ["order_cancelled", "Shopify cancelled the order: no email to the customer, no restock, no refund.", MANAGER],
+    ]);
+  });
+
+  it("keeps the reason when a retry finds the order Shopify cancelled after a lost answer", async () => {
+    const db = await setup();
+    const shop = fakeShop({}, { handle: { CancelOrder: timeout } });
+    expect(await cancelOrder(db, ctx(), { reason: "Duplicate order" }, deps(shop.impl))).toEqual({
+      kind: "refused",
+      status: 502,
+      error: CANCEL_COPY.notConfirmed,
+    });
+    // Shopify's job finished after the read that followed the timeout.
+    shop.state.cancelledAt = "2026-10-06T15:00:05Z";
+    expect(await cancelOrder(db, ctx(), { reason: "Duplicate order" }, deps(shop.impl))).toMatchObject({ kind: "cancelled-in-shopify" });
+    expect(shop.ops().filter((op) => op === "CancelOrder")).toHaveLength(1);
+    expect(entriesOf(await timeline(db))).toEqual([
+      ["note", "Duplicate order", MANAGER],
+      ["status", "Cancelled in Shopify. Status set to Cancelled", null],
+    ]);
   });
 
   it("changes nothing when Shopify refuses, and says why in plain words", async () => {
@@ -4334,11 +4479,51 @@ describe("followCancellation", () => {
     if (result.kind !== "cancelled") {
       throw new Error("expected a cancel");
     }
-    await followCancellation(db, env, WS, "o1", result, { fetchImpl: shop.impl, now: () => NOW + 1000 });
+    const { live, kinds } = liveEnv();
+    await followCancellation(db, live, WS, "o1", result, { fetchImpl: shop.impl, now: () => NOW + 1000 });
     const snapshot = (await card(db)).shopify as Record<string, unknown>;
     expect(snapshot.cancelledAt).toBe(Date.parse("2026-10-06T15:00:01Z"));
     expect(shop.state.tags).toEqual(["Ordering Desk: Cancelled"]);
     expect((await card(db)).statusKey).toBe("cancelled");
+    expect(kinds()).toEqual(expect.arrayContaining(["order.status:status", "order.note:note", "order.activity:order_cancelled"]));
+  });
+
+  it("shares only the reason and the cancellation when Shopify's own move landed first", async () => {
+    const db = await setup();
+    const shop = fakeShop(
+      {},
+      {
+        handle: {
+          CancelOrder: async () => {
+            shop.state.cancelledAt = "2026-10-06T15:00:01Z";
+            await moveFromShopify(db, NOW - 1);
+            return accepted(true);
+          },
+        },
+      },
+    );
+    const result = await cancelOrder(db, ctx(), { reason: "Duplicate order" }, deps(shop.impl));
+    if (result.kind !== "cancelled") {
+      throw new Error("expected a cancel");
+    }
+    const { live, kinds } = liveEnv();
+    await followCancellation(db, live, WS, "o1", result, { fetchImpl: shop.impl, now: () => NOW + 1000 });
+    // The webhook already shared its own move; this cancel adds its entries.
+    expect(kinds()).toEqual(expect.arrayContaining(["order.note:note", "order.activity:order_cancelled"]));
+    expect(kinds().filter((kind) => kind.startsWith("order.status"))).toEqual([]);
+    expect(shop.state.tags).toEqual(["Ordering Desk: Cancelled"]);
+  });
+
+  it("shares the reason note with the move when the order was already cancelled in Shopify", async () => {
+    const db = await setup();
+    const shop = fakeShop({ cancelledAt: "2026-10-06T14:00:00Z" });
+    const result = await cancelOrder(db, ctx(), { reason: "Duplicate order" }, deps(shop.impl));
+    if (result.kind !== "cancelled-in-shopify") {
+      throw new Error("expected Shopify's cancellation");
+    }
+    const { live, kinds } = liveEnv();
+    await followCancellation(db, live, WS, "o1", result, { fetchImpl: shop.impl, now: () => NOW + 1000 });
+    expect(kinds()).toEqual(expect.arrayContaining(["order.status:status", "order.note:note"]));
   });
 });
 ```
@@ -4374,10 +4559,14 @@ Create `src/server/desk/cancel-order.ts`:
 // moves the card if Shopify did cancel). Shopify cancels in a background
 // job, so an accepted cancel is read back up to REVIEW_READY_TRIES times;
 // the card moves either way and the entry says whether Shopify confirmed.
-// One batch: the move, its status entry, the reason note and an
-// order_cancelled entry, the three entries only when the move landed.
+// One batch: the move and its status entry, then the reason note and an
+// order_cancelled entry. Once Shopify accepted the cancel, the note and the
+// order_cancelled entry are recorded whether or not this move lands (the
+// orders/cancelled webhook can move the card first), once per order: a
+// second cancel that lost the race records nothing. An order Shopify had
+// already cancelled keeps the reason as a note too.
 
-import { and, eq, isNotNull, ne, sql } from "drizzle-orm";
+import { and, eq, isNotNull, ne, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@/db";
 import { applyBatch, rowsAffected } from "@/db/batch";
 import { events, orders, statuses, storeConnections } from "@/db/schema";
@@ -4418,10 +4607,12 @@ export const CANCEL_COPY = {
   gone: "Shopify no longer has this order.",
   notConfirmed:
     "Shopify did not answer. Check the order in Shopify before trying again. If Shopify cancelled it, the card moves to Cancelled by itself.",
-  moveFailed: "Shopify cancelled the order, but its status could not change here. Set it in the status list.",
+  moveFailed:
+    "Shopify cancelled the order, but its status could not change here. Set it in the status list. The reason is saved as a note.",
 } as const;
 
-export type CancelOrderView = { id: string; statusKey: string; statusSetBy: string; statusSetAt: number };
+// statusSetBy is null when Shopify's own move put the card in Cancelled.
+export type CancelOrderView = { id: string; statusKey: string; statusSetBy: string | null; statusSetAt: number };
 
 export type CancelResult =
   | { kind: "invalid"; error: string }
@@ -4429,12 +4620,14 @@ export type CancelResult =
   | { kind: "forbidden"; error: string }
   | { kind: "refused"; status: 409 | 502; error: string }
   | { kind: "already-cancelled" }
-  | { kind: "cancelled-in-shopify"; message: string; change: StatusChange | null }
+  | { kind: "cancelled-in-shopify"; message: string; change: StatusChange | null; noteEvent: EventView }
   | {
       kind: "cancelled";
       order: CancelOrderView;
       events: EventView[];
-      statusEvent: EventView;
+      // null: Shopify's own move (the orders/cancelled webhook or a sync)
+      // reached the card first and already shared its status entry.
+      statusEvent: EventView | null;
       noteEvent: EventView;
       cancelEvent: EventView;
       // Shopify's background job was seen done (cancelledAt) before the
@@ -4513,7 +4706,7 @@ export async function cancelOrder(db: Db, ctx: ReviewContext, body: unknown, dep
     return refused(409, CANCEL_COPY.gone);
   }
   if (before.order.cancelledAt !== null) {
-    return followShopifyCancel(db, ctx, card, before.order.name || card.name, clock);
+    return followShopifyCancel(db, ctx, card, before.order.name || card.name, reason, clock);
   }
   const notZero = totalRefusal(before.order);
   if (notZero) {
@@ -4544,21 +4737,39 @@ export async function cancelOrder(db: Db, ctx: ReviewContext, body: unknown, dep
 }
 
 // The order was cancelled in Shopify before this cancel: nothing is sent;
-// the card moves exactly as the orders/cancelled webhook would move it.
+// the card moves exactly as the orders/cancelled webhook would move it. The
+// reason is still saved as the manager's note (a retry after a lost answer
+// lands here when Shopify finished the first cancel), with no
+// order_cancelled entry: who cancelled it in Shopify is not known.
 async function followShopifyCancel(
   db: Db,
   ctx: ReviewContext,
   card: Card,
   orderName: string,
+  reason: string,
   clock: () => number,
 ): Promise<CancelResult> {
+  const now = clock();
   const rows = await loadStatusRows(db, ctx.workspaceId);
   const to = rows.find((row) => row.shopifyLink === "cancelled");
-  const change = to ? await applyShopifyMove(db, ctx.workspaceId, card.id, card.statusKey, to, "cancelled", clock()) : null;
+  const change = to ? await applyShopifyMove(db, ctx.workspaceId, card.id, card.statusKey, to, "cancelled", now) : null;
+  const note = {
+    id: crypto.randomUUID(),
+    workspaceId: ctx.workspaceId,
+    orderId: card.id,
+    type: "note" as const,
+    text: reason,
+    actorId: ctx.userId,
+    meta: { cancelReason: true },
+    createdAt: now,
+    source: "app" as const,
+  };
+  await db.insert(events).values(note);
   return {
     kind: "cancelled-in-shopify",
-    message: `Order ${orderName} was already cancelled in Shopify. The card is now Cancelled.`,
+    message: `Order ${orderName} was already cancelled in Shopify. The card is now Cancelled, and your reason is saved as a note.`,
     change,
+    noteEvent: { ...eventView(note), actorName: await actorNameOf(db, ctx.userId) },
   };
 }
 
@@ -4592,14 +4803,20 @@ async function commitCancel(
   };
   const statusExists = sql`exists (select 1 from ${statuses} where ${statuses.workspaceId} = ${ctx.workspaceId} and ${statuses.key} = ${target.key})`;
   const moved = sql`exists (select 1 from ${orders} where ${orders.id} = ${card.id} and ${orders.statusKey} = ${target.key} and ${orders.statusSetAt} = ${now} and ${orders.statusSetBy} = ${ctx.userId})`;
+  // Shopify accepted this cancel, so its reason and its entry are kept even
+  // when the move does not land; once per order, so a second cancel that lost
+  // the race adds nothing.
+  const isCard = sql`exists (select 1 from ${orders} where ${orders.id} = ${card.id} and ${orders.workspaceId} = ${ctx.workspaceId})`;
+  const firstCancel = sql`not exists (select 1 from ${events} where ${events.orderId} = ${card.id} and ${events.type} = 'order_cancelled')`;
+  const record = sql`${isCard} and (${moved} or ${firstCancel})`;
   // Values in the events table's column order (as in changeOrderStatus).
-  const insertWhenMoved = (event: typeof statusEvent | typeof noteEvent | typeof cancelEvent) =>
+  const insertWhen = (event: typeof statusEvent | typeof noteEvent | typeof cancelEvent, when: SQL) =>
     db
       .insert(events)
       .select(
-        sql`select ${event.id}, ${event.workspaceId}, ${event.orderId}, ${event.type}, ${event.text}, ${event.actorId}, ${JSON.stringify(event.meta)}, ${event.createdAt}, ${event.source} where ${moved}`,
+        sql`select ${event.id}, ${event.workspaceId}, ${event.orderId}, ${event.type}, ${event.text}, ${event.actorId}, ${JSON.stringify(event.meta)}, ${event.createdAt}, ${event.source} where ${when}`,
       );
-  const [update] = await applyBatch(db, [
+  const [update, , , recorded] = await applyBatch(db, [
     db
       .update(orders)
       .set({ statusKey: target.key, statusSetBy: ctx.userId, statusSetAt: now })
@@ -4612,21 +4829,43 @@ async function commitCancel(
           statusExists,
         ),
       ),
-    insertWhenMoved(statusEvent),
-    insertWhenMoved(noteEvent),
-    insertWhenMoved(cancelEvent),
+    insertWhen(statusEvent, moved),
+    // The note first: it leaves firstCancel as it was for the entry after it.
+    insertWhen(noteEvent, record),
+    insertWhen(cancelEvent, record),
   ]);
-  if (rowsAffected(update, "cancel") === 0) {
-    const fresh = await db.select({ statusKey: orders.statusKey }).from(orders).where(eq(orders.id, card.id)).limit(1);
-    return fresh[0]?.statusKey === target.key ? { kind: "already-cancelled" } : refused(409, CANCEL_COPY.moveFailed);
-  }
   const actorName = await actorNameOf(db, ctx.userId);
   const [statusView, noteView, cancelView] = [statusEvent, noteEvent, cancelEvent].map((event) => ({ ...eventView(event), actorName }));
+  if (rowsAffected(update, "cancel") > 0) {
+    return {
+      kind: "cancelled",
+      order: { id: card.id, statusKey: target.key, statusSetBy: ctx.userId, statusSetAt: now },
+      events: [statusView, noteView, cancelView],
+      statusEvent: statusView,
+      noteEvent: noteView,
+      cancelEvent: cancelView,
+      confirmed,
+    };
+  }
+  const fresh = await db
+    .select({ statusKey: orders.statusKey, statusSetBy: orders.statusSetBy, statusSetAt: orders.statusSetAt })
+    .from(orders)
+    .where(and(eq(orders.id, card.id), eq(orders.workspaceId, ctx.workspaceId)))
+    .limit(1);
+  const row = fresh[0];
+  if (row?.statusKey !== target.key) {
+    return refused(409, CANCEL_COPY.moveFailed);
+  }
+  if (rowsAffected(recorded, "cancel") === 0) {
+    return { kind: "already-cancelled" };
+  }
+  // Shopify's own move put the card in Cancelled first: this cancel adds its
+  // reason and its entry to that move (which always stamps statusSetAt).
   return {
     kind: "cancelled",
-    order: { id: card.id, statusKey: target.key, statusSetBy: ctx.userId, statusSetAt: now },
-    events: [statusView, noteView, cancelView],
-    statusEvent: statusView,
+    order: { id: card.id, statusKey: row.statusKey, statusSetBy: row.statusSetBy, statusSetAt: row.statusSetAt ?? now },
+    events: [noteView, cancelView],
+    statusEvent: null,
     noteEvent: noteView,
     cancelEvent: cancelView,
     confirmed,
@@ -4694,12 +4933,20 @@ export async function followCancellation(
   const opts = { fetchImpl: deps.fetchImpl, now: deps.now };
   try {
     if (result.kind === "cancelled") {
-      await broadcast(env, workspaceId, { kind: "order.status", event: result.statusEvent, order: result.order });
+      // No statusEvent: Shopify's move already broadcast and pushed its own.
+      if (result.statusEvent) {
+        await broadcast(env, workspaceId, { kind: "order.status", event: result.statusEvent, order: result.order });
+      }
       await broadcast(env, workspaceId, { kind: "order.note", event: result.noteEvent });
       await broadcast(env, workspaceId, { kind: "order.activity", event: result.cancelEvent });
-      await notifyActivity(db, env, workspaceId, result.statusEvent, opts);
-    } else if (result.change) {
-      await shareShopifyMoves(db, env, workspaceId, [result.change], opts);
+      if (result.statusEvent) {
+        await notifyActivity(db, env, workspaceId, result.statusEvent, opts);
+      }
+    } else {
+      if (result.change) {
+        await shareShopifyMoves(db, env, workspaceId, [result.change], opts);
+      }
+      await broadcast(env, workspaceId, { kind: "order.note", event: result.noteEvent });
     }
     await refreshOrderSnapshot(db, env, workspaceId, orderId, deps);
     if (result.kind === "cancelled") {
