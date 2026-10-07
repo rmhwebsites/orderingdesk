@@ -51,17 +51,19 @@ function chipIcon(tone: ChipTone, label: string) {
 }
 
 // The sync state: from sm up, and at every width when something is wrong
-// (phones also get it in the account menu).
+// (phones also get it in the account menu). Its words from md: below it
+// the icon and tone carry it (the words are in the account menu below lg),
+// so the workspace name keeps room beside Desk, People and Locations.
 function SyncChip() {
   const { sync, liveStatus } = useWorkspace();
   const now = useNow(30000);
   const state = syncChipState(sync, now || Date.now());
 
   if (state.kind === "loading") {
-    return <span className="od-skeleton hidden h-8 w-36 sm:block" aria-label="Loading sync status" />;
+    return <span className="od-skeleton hidden h-8 w-8 sm:block md:w-36" aria-label="Loading sync status" />;
   }
   // A quiet state stays hidden on phones; a problem shows at every width,
-  // as its icon below sm.
+  // as its icon below md.
   const quiet = state.tone === "good" || state.tone === "neutral" || state.tone === "info";
   return (
     // shrink-0: the chip never collapses below its icon and label; a long
@@ -69,10 +71,10 @@ function SyncChip() {
     <span
       data-tone={CHIP_TONE_COLOR[state.tone]}
       title={state.tip ?? LIVE_TEXT[liveStatus]}
-      className={`${quiet ? "hidden sm:inline-flex" : "inline-flex"} h-8 shrink-0 items-center gap-1.5 rounded-control bg-tone-fill px-2.5 text-xs font-semibold text-tone-text sm:px-3`}
+      className={`${quiet ? "hidden sm:inline-flex" : "inline-flex"} h-8 shrink-0 items-center gap-1.5 rounded-control bg-tone-fill px-2.5 text-xs font-semibold text-tone-text md:px-3`}
     >
       {chipIcon(state.tone, state.label)}
-      <span className="sr-only sm:not-sr-only">{state.label}</span>
+      <span className="sr-only md:not-sr-only">{state.label}</span>
       {state.tip ? <span className="sr-only">. {state.tip}</span> : null}
       <span className="sr-only">. {LIVE_TEXT[liveStatus]}.</span>
     </span>
@@ -146,11 +148,11 @@ function WorkspaceAccount({ account }: { account: AccountView }) {
 }
 
 // One 56px row at every width: the workspace (its name truncates first;
-// phones show its symbol only), Desk, People and Locations (icons only on
-// phones), the sync chip from sm, the Sync button from lg, Needs approval
-// for those who approve (its label from lg), Settings from sm, the bell,
-// and the account menu last so its panel, right aligned to it, stays on
-// screen.
+// phones show its symbol only), Desk, People and Locations (icons only
+// below xl), the sync chip from sm (its words from md), the Sync button
+// from lg, Needs approval for those who approve (its label from lg),
+// Settings from sm, the bell, and the account menu last so its panel,
+// right aligned to it, stays on screen.
 export function TopBar({ name, images, account }: { name: string; images: BrandImages; account: AccountView }) {
   const { workspace } = useWorkspace();
   return (
@@ -170,7 +172,7 @@ export function TopBar({ name, images, account }: { name: string; images: BrandI
               row; the name stays for screen readers. */}
           <span className="min-w-0 max-sm:sr-only">
             <span className="block truncate font-display text-[15px] font-semibold leading-tight text-ink">{name}</span>
-            <span className="block text-xs leading-tight text-ink-2">{APP_NAME}</span>
+            <span className="block truncate text-xs leading-tight text-ink-2">{APP_NAME}</span>
           </span>
         </Link>
 

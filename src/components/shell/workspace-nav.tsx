@@ -34,8 +34,10 @@ const LINKS = [
   { section: "locations", label: "Locations", Icon: MapPinIcon, href: (base: string) => `${base}/locations` },
 ] as const;
 
-// Desk, People, Locations (design section 3). Icons with labels from sm up;
-// icons only on phones, labels kept for screen readers; 40px targets.
+// Desk, People, Locations (design section 3). Icons with labels from xl up;
+// icons only below it, labels kept for screen readers; 40px targets. With
+// labels from sm, the top bar's one row ran past the screen from 640 to
+// 1024px and squeezed the workspace name to nothing.
 export function WorkspaceNav() {
   const { workspace } = useWorkspace();
   const active = navSection(usePathname() ?? "", workspace.basePath);
@@ -46,12 +48,12 @@ export function WorkspaceNav() {
           key={section}
           href={href(workspace.basePath)}
           aria-current={active === section ? "page" : undefined}
-          className={`inline-flex h-10 min-w-10 items-center justify-center gap-2 rounded-control px-2.5 text-sm font-semibold transition-colors sm:px-3 ${
+          className={`inline-flex h-10 min-w-10 items-center justify-center gap-2 rounded-control px-2.5 text-sm font-semibold transition-colors xl:px-3 ${
             active === section ? "bg-surface-2 text-ink" : "text-ink-2 hover:bg-surface-2 hover:text-ink"
           }`}
         >
           <Icon size={18} aria-hidden />
-          <span className="sr-only sm:not-sr-only">{label}</span>
+          <span className="sr-only xl:not-sr-only">{label}</span>
         </Link>
       ))}
     </nav>

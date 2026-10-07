@@ -25,7 +25,7 @@ describe("navSection", () => {
 });
 
 describe("WorkspaceNav", () => {
-  it("links Desk, People and Locations, marks the current one, and keeps labels for screen readers on phones", () => {
+  it("links Desk, People and Locations, marks the current one, and keeps labels for screen readers below xl", () => {
     const html = renderToStaticMarkup(createElement(WorkspaceNav));
     expect(html).toContain('aria-label="Workspace"');
     expect(html).toContain('href="/w/impact"');
@@ -34,7 +34,11 @@ describe("WorkspaceNav", () => {
     expect(html.match(/aria-current="page"/g)).toHaveLength(1);
     // next/link writes href after the other attributes: read the marked tag.
     expect(html.match(/<a[^>]*aria-current="page"[^>]*>/)?.[0]).toContain('href="/w/impact/people"');
-    expect(html).toContain("sr-only sm:not-sr-only");
+    // Labels from xl only: shown from sm, they pushed the top bar's one row
+    // past the screen from 640 to 1024px and squeezed the workspace name out.
+    expect(html).toContain("sr-only xl:not-sr-only");
+    expect(html).not.toContain("sm:not-sr-only");
+    expect(html).not.toContain("sm:px-3");
   });
 
   it("uses short paths on a client host", () => {

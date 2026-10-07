@@ -119,7 +119,23 @@ describe("TopBar navigation", () => {
     expect(html).toContain('href="/locations"');
   });
 
+  it("keeps the links to icons below xl, so tablets keep one row and the workspace name", () => {
+    const nav = render().match(/<nav aria-label="Workspace"[\s\S]*?<\/nav>/)?.[0] ?? "";
+    expect(nav).toContain("xl:not-sr-only");
+    expect(nav).not.toMatch(/\b(sm|md|lg):not-sr-only/);
+  });
+
   it("keeps the workspace symbol only on phones, so the links fit the one row", () => {
     expect(render()).toContain('<span class="min-w-0 max-sm:sr-only">');
+  });
+
+  it("gives the workspace name room from sm: the sync chip keeps its words for md up, and the name's lines never wrap", () => {
+    const html = render(LONG_NAME);
+    // The chip's tag, then its first span (the words) after the icon.
+    const chip = html.match(/<span data-tone="[^"]+" title="[^"]+" class="([^"]*)">[^]*?<\/svg><span class="([^"]*)">/);
+    expect(chip?.[2]).toBe("sr-only md:not-sr-only");
+    expect(chip?.[1].split(" ")).toContain("md:px-3");
+    expect(chip?.[1]).not.toContain("sm:px-3");
+    expect(html).toMatch(/<span class="[^"]*\btruncate\b[^"]*">Ordering Desk<\/span>/);
   });
 });
