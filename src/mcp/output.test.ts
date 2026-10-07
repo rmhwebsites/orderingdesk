@@ -67,12 +67,13 @@ describe("plainText", () => {
 
   // Several patterns backtrack, so their time grows with the square of the
   // length on text built to defeat them ("[" or "<a" thousands of times, no
-  // closing bracket). Only the start of a long value goes through them, and
+  // closing bracket). Only the start of a long value goes through them, also
+  // when the compatibility form makes one character up to 18 (U+FDFA), and
   // the result says it was cut.
   it("reads only the start of a very long value, stays fast on text built to backtrack, and marks the cut", () => {
     const replace = vi.spyOn(String.prototype, "replace");
     try {
-      for (const unit of ["[", "![", "<a", "](", "\\[", "<a![\\[("]) {
+      for (const unit of ["[", "![", "<a", "](", "\\[", "<a![\\[(", "\\[\uFDFA", "[\uFDFA", "![\uFDFA", "<a\uFDFA"]) {
         const started = performance.now();
         const text = plainText(unit.repeat(200000), LONG_TEXT_MAX);
         expect(performance.now() - started, unit).toBeLessThan(200);
@@ -92,6 +93,11 @@ describe("plainText", () => {
     expect(plainText("Rush " + "​".repeat(INPUT_MAX - 5), LONG_TEXT_MAX)).toBe("Rush");
     expect(plainText("Rush " + "​".repeat(TEXT_MAX * 8 - 4))).toBe("Rush...");
     expect(plainText("Rush " + "​".repeat(TEXT_MAX * 8 - 5))).toBe("Rush");
+    // A short value whose compatibility form is longer than that is cut there
+    // too (without leaving half of a surrogate pair), and says so.
+    expect(plainText("[a](\uFDFA)".repeat(173) + "b".repeat(20) + "\u{20000}".repeat(2))).toBe(
+      "a".repeat(173) + "b".repeat(20) + "...",
+    );
   });
 
   // Text a person cannot see in the app but a chat app's model reads: the

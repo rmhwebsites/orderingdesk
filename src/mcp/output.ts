@@ -14,12 +14,14 @@ export const TEXT_MAX = 500;
 export const LONG_TEXT_MAX = 4000;
 export const NAME_MAX = 120;
 // plainText reads at most this many characters of a value, and at most 8 for
-// each one it may return. Several patterns below backtrack, so their time
-// grows with the square of the length on text built to defeat them ("[" or
-// "<a" thousands of times, no closing bracket): at 8,000 characters the worst
-// case takes tens of milliseconds, at 200,000 it takes many seconds. Cutting
-// first only removes text, and a link cut in half is still a link to
-// URL_LIKE.
+// each one it may return, and it cuts the text to that length again after
+// withoutHidden, because the Unicode compatibility form can make one
+// character up to 18 (U+FDFA), so the patterns below never see more. Several
+// of them backtrack, so their time grows with the square of the length on
+// text built to defeat them ("[" or "<a" thousands of times, no closing
+// bracket): at 8,000 characters the worst case takes tens of milliseconds, at
+// 200,000 it takes many seconds. Cutting only removes text, and a link cut in
+// half is still a link to URL_LIKE.
 export const INPUT_MAX = 8000;
 const INPUT_PER_CHARACTER = 8;
 
@@ -66,12 +68,19 @@ export function plainText(value: unknown, max = TEXT_MAX): string {
   if (typeof value !== "string") {
     return "";
   }
-  // A value cut here ends in "..." like one cut at max (unless nothing is
-  // left to show).
+  // A value cut here (before withoutHidden, or after it when the
+  // compatibility form made it longer) ends in "..." like one cut at max
+  // (unless nothing is left to show). The second cut drops half of a
+  // surrogate pair left at its end.
   const limit = Math.min(max * INPUT_PER_CHARACTER, INPUT_MAX);
-  const cut = value.length > limit;
+  let cut = value.length > limit;
+  let visible = withoutHidden(cut ? value.slice(0, limit) : value);
+  if (visible.length > limit) {
+    visible = visible.slice(0, limit).replace(/[\uD800-\uDBFF]$/, "");
+    cut = true;
+  }
   // Tags go first, so removing one cannot join the parts of a link.
-  const text = withoutHidden(cut ? value.slice(0, limit) : value)
+  const text = visible
     .replace(TAG, "")
     .replace(MD_IMAGE, "$1")
     .replace(MD_LINK, "$1")
