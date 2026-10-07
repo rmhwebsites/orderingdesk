@@ -21,7 +21,7 @@ import { isAiClient } from "../lib/via";
 import { hubHostname } from "../server/host";
 import { roleViewerFor, workspaceRoleOf } from "../server/workspace-role";
 import { loadActiveGrant, touchGrant } from "./grants";
-import type { Principal } from "./types";
+import type { EveryWorkspaceConnection, Principal } from "./types";
 
 // workspaceId null: a platform admin's hub connection for every workspace
 // (owner decision 3, Oct 7), served by resolveEveryWorkspace (Task 30A).
@@ -104,6 +104,49 @@ export async function resolvePrincipal(
     scopes: grant.scopes,
     host: hostname,
     limits: { reads: workspace.reads, changes: roleAtLeast(role, "manager") ? workspace.managerChanges : workspace.staffChanges },
+    grantExpiresAt: grant.expiresAt,
+  };
+}
+
+// A platform admin's hub connection for every workspace (owner decision 3,
+// Oct 7; Wave 2 plan, Decision 4). Refused (null, and the handler answers
+// 401 invalid_token) unless the props carry no workspace, the call arrived
+// on the hub, the mirror row is active, unexpired, for this person, on the
+// hub and itself for every workspace, and the person is still a platform
+// admin (re-read now). No workspace is checked here: each tool call names
+// one (src/mcp/every-workspace.ts).
+export async function resolveEveryWorkspace(
+  db: Db,
+  env: CloudflareEnv,
+  input: { props: unknown; hostname: string },
+  now: number,
+): Promise<EveryWorkspaceConnection | null> {
+  const props = grantPropsOf(input.props);
+  const hostname = input.hostname.toLowerCase();
+  if (!props || props.workspaceId !== null || hostname !== hubHostname(env)) {
+    return null;
+  }
+  const grant = await loadActiveGrant(db, props.grantId, now);
+  if (!grant || grant.workspaceId !== null || grant.userId !== props.userId || grant.host !== hostname) {
+    return null;
+  }
+  const people = await db.select({ id: user.id, email: user.email, name: user.name }).from(user).where(eq(user.id, grant.userId)).limit(1);
+  const person = people[0];
+  if (!person || !(await roleViewerFor(db, env, person, true)).platformAdmin) {
+    return null;
+  }
+  try {
+    await touchGrant(db, grant.id, now);
+  } catch {
+    // last_used_at is a convenience; the call goes on.
+  }
+  return {
+    userId: person.id,
+    personName: person.name?.trim() || person.email,
+    grantId: grant.id,
+    client: isAiClient(grant.client) ? grant.client : "other",
+    scopes: grant.scopes,
+    host: hostname,
     grantExpiresAt: grant.expiresAt,
   };
 }
