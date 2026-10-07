@@ -16,15 +16,20 @@
   },
   "dependencies": {
     "@block65/webcrypto-web-push": "^2.0.0",
+    "@cloudflare/workers-oauth-provider": "1.2.2",
+    "@modelcontextprotocol/server": "2.0.0",
     "@phosphor-icons/react": "^2.1.10",
+    "agents": "0.26.0",
     "better-auth": "^1.7.7",
     "drizzle-orm": "^0.45.3",
     "next": "^16.3.8",
     "pdf-lib": "^1.17.1",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "zod": "4.6.5"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
     "@opennextjs/cloudflare": "^1.20.7",
     "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^26.6.3",
