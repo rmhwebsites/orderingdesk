@@ -85,6 +85,12 @@ describe("authorize pages", () => {
     expect(page).not.toContain('name="workspace"');
   });
 
+  it("give the code page's other-email link a 44px touch target", () => {
+    const code = codePage(ctx, { handle: "h", email: "e@example.com" });
+    expect(code).toContain('<a class="text-link" href="/oauth/authorize?client_id=x&amp;state=s">Use a different email</a>');
+    expect(code).toMatch(/\.text-link \{[^}]*display: inline-flex;[^}]*min-height: 44px;/);
+  });
+
   it("show plain messages", () => {
     const page = messagePage(look, { title: "AI connections are off", message: "Ask a platform admin." });
     expect(page).toContain("<h1>AI connections are off</h1>");

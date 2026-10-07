@@ -24,6 +24,13 @@ import { useWorkspace } from "./workspace-provider";
 
 const RELOAD_DELAY_MS = 400;
 
+// The open panel. Below sm it spans the screen under the 56px top bar: the
+// account menu follows the bell there, so a panel hung from the bell's
+// right edge would run past the left edge of a phone screen. From sm up it
+// hangs from the bell.
+export const BELL_PANEL_CLASS =
+  "od-rise fixed inset-x-4 top-16 z-10 flex max-h-[min(34rem,calc(100dvh-6rem))] flex-col overflow-hidden rounded-panel border border-line bg-surface shadow-lift focus:outline-none sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:mt-2 sm:w-[min(24rem,calc(100vw-2rem))]";
+
 function itemTitle(item: ActivityItem): string {
   if (item.orderName) {
     return item.orderName;
@@ -206,7 +213,7 @@ export function Bell() {
           role="dialog"
           aria-label="Activity"
           tabIndex={-1}
-          className="od-rise absolute right-0 top-full z-10 mt-2 flex max-h-[min(34rem,calc(100dvh-6rem))] w-[min(24rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-panel border border-line bg-surface shadow-lift focus:outline-none"
+          className={BELL_PANEL_CLASS}
         >
           <div className="flex min-h-12 items-center justify-between gap-3 border-b border-line px-4 py-2">
             <h2 className="font-display text-sm font-semibold text-ink">Activity</h2>

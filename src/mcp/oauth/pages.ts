@@ -54,6 +54,7 @@ button { min-height: 44px; padding: 10px 20px; font-size: 16px; font-weight: 700
 .secondary { background: transparent; color: ${look.ink}; border-color: ${look.muted}; }
 button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible { outline: 3px solid ${look.ink}; outline-offset: 2px; }
 a { color: inherit; }
+.text-link { display: inline-flex; align-items: center; min-height: 44px; }
 @media (prefers-color-scheme: dark) {
   body { background: #0f1214; color: #eef1ef; }
   .card { background: #171b1f; border-color: #2c3339; }
@@ -108,7 +109,7 @@ ${errorLine(opts.error)}
 <input id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required autofocus>
 <div class="actions"><button class="primary" type="submit">Continue</button></div>
 </form>
-<p class="muted"><a href="${e(ctx.action)}">Use a different email</a></p>`,
+<p class="muted"><a class="text-link" href="${e(ctx.action)}">Use a different email</a></p>`,
   );
 }
 
