@@ -397,3 +397,13 @@ export function searchBoxText(boxText: string, addressSearch: string): string {
   const boxQ = boxText.trim().length > 0 ? boxText.slice(0, DESK_QUERY_MAX) : "";
   return boxQ === addressQ ? boxText : addressQ;
 }
+
+// Whether two addresses hold the same desk query: the open order (?order=,
+// the drawer) and anything the desk does not read are left out, and a
+// default spelled out reads as none. An AI answer replaces the query only
+// while the address still holds the one it was asked from; a view, status,
+// sort, kind, chip or words the person changed while it was on its way win.
+export function sameDeskQuery(a: string, b: string): boolean {
+  const key = (search: string) => deskParams(parseDeskQuery(new URLSearchParams(search))).toString();
+  return key(a) === key(b);
+}

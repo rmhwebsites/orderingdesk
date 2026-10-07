@@ -17,6 +17,7 @@ import {
   parseDeskQuery,
   querySortDefault,
   reloadLimit,
+  sameDeskQuery,
   searchBoxText,
   understoodChips,
   type DeskQuery,
@@ -353,5 +354,29 @@ describe("clearAllPatch", () => {
     // An answer that left the sort at its default changes nothing about it.
     const plain = parseDeskQuery(new URLSearchParams("?view=all&location=loc_north"));
     expect(after("?view=all&sort=oldest&location=loc_north", plain, "open")).toBe("?sort=oldest");
+  });
+});
+
+describe("sameDeskQuery", () => {
+  // The address an AI question was asked from, after Enter wrote its words.
+  const asked = "?q=hard+hats+for+north+yard";
+
+  it("holds while only the drawer opened or closed, or a default was spelled out", () => {
+    expect(sameDeskQuery(asked, asked)).toBe(true);
+    expect(sameDeskQuery(asked, `${asked}&order=d12`)).toBe(true);
+    expect(sameDeskQuery("?view=closed&order=d12", "?view=closed")).toBe(true);
+    expect(sameDeskQuery("", "?view=open&sort=newest")).toBe(true);
+    expect(sameDeskQuery(asked, "?q=hard%20hats%20for%20north%20yard")).toBe(true);
+  });
+
+  it("breaks once the person changed the query while waiting: a view, a status, a sort, a kind, a chip, new words", () => {
+    // Picked Closed while the answer was pending: theirs wins.
+    expect(sameDeskQuery(asked, `${asked}&view=closed`)).toBe(false);
+    expect(sameDeskQuery(asked, `${asked}&status=new`)).toBe(false);
+    expect(sameDeskQuery(asked, `${asked}&sort=oldest`)).toBe(false);
+    expect(sameDeskQuery(asked, `${asked}&kind=orders`)).toBe(false);
+    expect(sameDeskQuery(`${asked}&location=loc_north`, asked)).toBe(false);
+    expect(sameDeskQuery(asked, "?q=vests")).toBe(false);
+    expect(sameDeskQuery(asked, "")).toBe(false);
   });
 });

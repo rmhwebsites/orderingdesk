@@ -12,6 +12,7 @@ import {
   parseDeskQuery,
   querySortDefault,
   reloadLimit,
+  sameDeskQuery,
   understoodChips,
   type DeskQuery,
   type DeskView,
@@ -207,7 +208,8 @@ export function Desk() {
   const [searchReset, setSearchReset] = useState(0);
   const [ai, setAi] = useState<AiState>(AI_IDLE);
   // The question waiting for an answer ("" when none): a late answer to an
-  // abandoned question is dropped.
+  // abandoned question is dropped, and so is one whose query the person
+  // changed while it was on its way (changeQuery, sameDeskQuery).
   const asked = useRef("");
   // The view the person was on when an AI answer replaced the query (its
   // own view): clearing the search goes back to it, as clearing typed
@@ -465,11 +467,27 @@ export function Desk() {
     },
     [stopTyping, writeWords],
   );
+  // A view, status, sort, kind or chip the person picks replaces a
+  // question still waiting: its spinner stops and its late answer is
+  // dropped.
+  const changeQuery = useCallback(
+    (patch: Partial<DeskQuery>) => {
+      if (asked.current !== "") {
+        asked.current = "";
+        setAi(AI_IDLE);
+      }
+      updateDeskQuery(patch);
+    },
+    [updateDeskQuery],
+  );
   // Enter: keyword results at once, then a question of three words or
   // more goes to AI search (when the workspace has it on). Its answer
   // replaces the whole query (its own view, never q, the open drawer
   // stays) and shows as removable chips; any fallback keeps the keyword
-  // results.
+  // results. Either lands only while the address still holds the query it
+  // was asked from (askedFrom, read right after the words were written:
+  // replaceState is synchronous), so a change made any other way while it
+  // was on its way (a link, Back) wins too.
   const onSearchSubmit = useCallback(
     async (text: string) => {
       stopTyping();
@@ -481,7 +499,8 @@ export function Desk() {
         setAi(AI_IDLE);
         return;
       }
-      const fromView = parseDeskQuery(new URLSearchParams(window.location.search)).view;
+      const askedFrom = window.location.search;
+      const fromView = parseDeskQuery(new URLSearchParams(askedFrom)).view;
       asked.current = q;
       setAi({ status: "asking", q });
       try {
@@ -495,6 +514,10 @@ export function Desk() {
           return; // a newer search replaced this one
         }
         asked.current = "";
+        if (!sameDeskQuery(askedFrom, window.location.search)) {
+          setAi(AI_IDLE);
+          return;
+        }
         if (response.ok && typeof body?.params === "string") {
           if (viewBeforeAi.current === null) {
             viewBeforeAi.current = fromView;
@@ -510,7 +533,7 @@ export function Desk() {
       } catch {
         if (asked.current === q) {
           asked.current = "";
-          setAi({ status: "fallback", q, reason: "error" });
+          setAi(sameDeskQuery(askedFrom, window.location.search) ? { status: "fallback", q, reason: "error" } : AI_IDLE);
         }
       }
     },
@@ -1220,12 +1243,12 @@ export function Desk() {
             onView={(next) => {
               viewBeforeAi.current = null;
               setAi((current) => (current.status === "understood" && current.fromView !== null ? { ...current, fromView: null } : current));
-              updateDeskQuery({ view: next, status: null });
+              changeQuery({ view: next, status: null });
             }}
             viewCounts={viewCounts}
             showApproval={roleAtLeast(role, "manager")}
             statusKey={deskQuery.status}
-            onStatus={(statusKey) => updateDeskQuery({ status: statusKey })}
+            onStatus={(statusKey) => changeQuery({ status: statusKey })}
             statusChips={viewChips}
             query={searchText}
             resetKey={searchReset}
@@ -1235,12 +1258,12 @@ export function Desk() {
             aiHint={aiSearch}
             sort={deskQuery.sort}
             sortDefault={querySortDefault(deskQuery)}
-            onSort={(sort) => updateDeskQuery({ sort })}
+            onSort={(sort) => changeQuery({ sort })}
             kindFilter={
               showKindFilter && view !== "approval"
                 ? {
                     kind: deskQuery.kind,
-                    onKind: (kind: DeskKind) => updateDeskQuery({ kind }),
+                    onKind: (kind: DeskKind) => changeQuery({ kind }),
                     // The payload's counts over every card (the loaded page
                     // is already filtered by kind).
                     draftCount: drafts.draftCount,
@@ -1258,7 +1281,7 @@ export function Desk() {
           <FilterChips
             chips={activeChips}
             understood={understood}
-            onRemove={(patch) => updateDeskQuery(patch)}
+            onRemove={(patch) => changeQuery(patch)}
             onClear={clearFilters}
           />
           {/* Kept in the page so a fallback is announced when it lands. */}
