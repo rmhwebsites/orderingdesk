@@ -38,7 +38,7 @@ describe("getWorkspaceSettings", () => {
     const db = await setup();
     expect(await getWorkspaceSettings(db, WS)).toEqual({
       workspace: { name: "Workspace " + WS, accentColor: "#91d500", slug: WS },
-      settings: { notificationEmails: [], poPrefix: "PO", replyTo: null, fromName: null },
+      settings: { notificationEmails: [], poPrefix: "PO", replyTo: null, fromName: null, timeZone: "America/New_York", aiSearch: true },
     });
     expect(await getWorkspaceSettings(db, "ws_missing")).toBeNull();
   });
@@ -57,6 +57,8 @@ describe("updateWorkspaceSettings", () => {
         poPrefix: "IMP",
         replyTo: "ops@impact.example",
         fromName: null,
+        timeZone: "America/New_York",
+        aiSearch: true,
       },
     });
     // The slug never changes with the name.
@@ -254,6 +256,38 @@ describe("updateWorkspaceSettings", () => {
       poPrefix: "NEW",
       replyTo: null,
       fromName: null,
+      timeZone: "America/New_York",
+      aiSearch: true,
     });
+  });
+});
+
+describe("search settings", () => {
+  const manager = { canEditIdentity: false };
+
+  it("saves the time zone and the AI search switch", async () => {
+    const { db } = openTestDb();
+    await seedWorkspace(db, "ws_impact");
+    const result = await updateWorkspaceSettings(db, "ws_impact", { timeZone: "America/Chicago", aiSearch: false }, manager);
+    expect(result).toMatchObject({ kind: "ok", settings: { timeZone: "America/Chicago", aiSearch: false } });
+  });
+
+  it("refuses a time zone the runtime does not know and a switch that is not a boolean", async () => {
+    const { db } = openTestDb();
+    await seedWorkspace(db, "ws_impact");
+    expect(await updateWorkspaceSettings(db, "ws_impact", { timeZone: "Mars/Base" }, manager)).toEqual({
+      kind: "invalid",
+      error: "The time zone must be an IANA name like America/New_York",
+    });
+    expect(await updateWorkspaceSettings(db, "ws_impact", { aiSearch: "yes" }, manager)).toEqual({
+      kind: "invalid",
+      error: "AI search must be on or off",
+    });
+  });
+
+  it("reads New York and AI search on for a workspace that never chose", async () => {
+    const { db } = openTestDb();
+    await seedWorkspace(db, "ws_impact");
+    expect((await getWorkspaceSettings(db, "ws_impact"))?.settings).toMatchObject({ timeZone: "America/New_York", aiSearch: true });
   });
 });

@@ -5,7 +5,7 @@ import { AuthError, guardResponse, requireMember, roleAtLeast } from "@/server/g
 type RouteContext = { params: Promise<{ id: string }> };
 
 // {workspace: {name, accentColor, slug}, settings: {notificationEmails,
-// poPrefix, replyTo, fromName}}
+// poPrefix, replyTo, fromName, timeZone, aiSearch}}
 export async function GET(_request: Request, context: RouteContext) {
   try {
     const { id } = await context.params;
@@ -21,8 +21,9 @@ export async function GET(_request: Request, context: RouteContext) {
 }
 
 // Managers and platform admins. Partial update of any of
-// notificationEmails, poPrefix, replyTo, fromName, and (platform admins
-// only: identity and branding) name and accentColor. 200 with the GET
+// notificationEmails, poPrefix, replyTo, fromName, timeZone (an IANA zone
+// name), aiSearch (a boolean), and (platform admins only: identity and
+// branding) name and accentColor. 200 with the GET
 // shape; 400 {error}; 404 when a manager sends name or accentColor.
 export async function PUT(request: Request, context: RouteContext) {
   try {

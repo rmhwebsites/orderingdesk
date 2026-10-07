@@ -41,6 +41,8 @@ export type SettingsPageData = {
   // the statuses.
   queue: QueueSettingsView | null;
   notifications: SettingsView | null;
+  // Settings > Search: the time zone and the AI search switch.
+  search: SettingsView | null;
   sender: SenderView | null;
   domain: DomainView | null;
   branding: { view: BrandingView; accentColor: string } | null;
@@ -78,7 +80,7 @@ export async function loadSettingsPage(
     shows("statuses")
       ? db.select().from(statuses).where(eq(statuses.workspaceId, workspace.id)).orderBy(asc(statuses.sort), asc(statuses.key))
       : Promise.resolve(null),
-    shows("notifications") ? getWorkspaceSettings(db, workspace.id) : Promise.resolve(null),
+    shows("notifications") || shows("search") ? getWorkspaceSettings(db, workspace.id) : Promise.resolve(null),
     access.canEditSender ? loadMailWorkspace(db, workspace.id) : Promise.resolve(null),
     shows("statuses") ? getQueueSettings(db, workspace.id) : Promise.resolve(null),
   ]);
@@ -101,7 +103,8 @@ export async function loadSettingsPage(
       : null,
     statuses: statusRows ? statusRows.map(statusView) : null,
     queue,
-    notifications: settings ? settings.settings : null,
+    notifications: shows("notifications") && settings ? settings.settings : null,
+    search: shows("search") && settings ? settings.settings : null,
     sender: mail ? senderView(env, mail) : null,
     domain: shows("domain") ? { domain: workspace.customDomain, status: workspace.customDomainStatus } : null,
     branding: shows("branding")

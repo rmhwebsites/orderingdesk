@@ -10,6 +10,7 @@ describe("settingsAccess", () => {
       canEditTeam: false,
       canEditRosterTags: false,
       canEditStatuses: false,
+      canEditSearch: false,
       canEditVendors: false,
       canEditNotifications: false,
       canEditSender: false,
@@ -18,11 +19,12 @@ describe("settingsAccess", () => {
 
   it("gives managers the team, statuses, vendors and notifications, not the platform settings", () => {
     expect(settingsAccess("manager")).toEqual({
-      sections: ["alerts", "store", "team", "statuses", "vendors", "notifications"],
+      sections: ["alerts", "store", "team", "statuses", "search", "vendors", "notifications"],
       canEditStore: false,
       canEditTeam: true,
       canEditRosterTags: false,
       canEditStatuses: true,
+      canEditSearch: true,
       canEditVendors: true,
       canEditNotifications: true,
       canEditSender: false,
@@ -31,11 +33,12 @@ describe("settingsAccess", () => {
 
   it("gives platform admins everything", () => {
     expect(settingsAccess("platform")).toEqual({
-      sections: ["alerts", "store", "team", "statuses", "vendors", "notifications", "domain", "branding"],
+      sections: ["alerts", "store", "team", "statuses", "search", "vendors", "notifications", "domain", "branding"],
       canEditStore: true,
       canEditTeam: true,
       canEditRosterTags: true,
       canEditStatuses: true,
+      canEditSearch: true,
       canEditVendors: true,
       canEditNotifications: true,
       canEditSender: true,

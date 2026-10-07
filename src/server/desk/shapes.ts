@@ -2,6 +2,7 @@
 // the desk UI against these, so change them deliberately.
 
 import type { events, ShopifyLinkValue, statuses, workspaceSettings } from "@/db/schema";
+import { DEFAULT_TIME_ZONE, isTimeZone } from "@/lib/date-range";
 
 export type StatusView = {
   key: string;
@@ -46,6 +47,10 @@ export type SettingsView = {
   poPrefix: string;
   replyTo: string | null;
   fromName: string | null;
+  // Search (Settings > Search): the zone search dates follow, and whether
+  // questions go to AI search.
+  timeZone: string;
+  aiSearch: boolean;
 };
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -85,5 +90,7 @@ export function settingsView(row: typeof workspaceSettings.$inferSelect | undefi
     poPrefix: row?.poPrefix ?? "PO",
     replyTo: row?.replyTo ?? null,
     fromName: row?.fromName ?? null,
+    timeZone: row && isTimeZone(row.timeZone) ? row.timeZone : DEFAULT_TIME_ZONE,
+    aiSearch: row ? Boolean(row.aiSearch) : true,
   };
 }

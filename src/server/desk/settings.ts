@@ -1,10 +1,12 @@
 // Workspace settings: the workspace's own name and accent color plus the
-// workspace_settings row (notification list, PO prefix, email identity).
+// workspace_settings row (notification list, PO prefix, email identity,
+// search time zone and the AI search switch).
 
 import { eq } from "drizzle-orm";
 import type { Db } from "@/db";
 import { applyBatch } from "@/db/batch";
 import { workspaceSettings, workspaces } from "@/db/schema";
+import { isTimeZone } from "@/lib/date-range";
 import { isRecord, settingsView, type SettingsView } from "./shapes";
 import { normalizeEmail, normalizeEmailList } from "./validate";
 
@@ -37,7 +39,8 @@ export type UpdateSettingsResult =
 
 // canEditIdentity: the workspace's name and accent color (its branding) are
 // platform-admin settings (platform amendment section 2); managers change
-// the notification list, reply-to, from name and PO prefix.
+// the notification list, reply-to, from name, PO prefix, time zone and AI
+// search switch.
 export type SettingsAccess = { canEditIdentity: boolean };
 
 type WorkspacePatch = { name?: string; accentColor?: string };
@@ -46,6 +49,8 @@ type SettingsPatch = {
   poPrefix?: string;
   replyTo?: string | null;
   fromName?: string | null;
+  timeZone?: string;
+  aiSearch?: boolean;
 };
 
 function blank(value: unknown): boolean {
@@ -112,8 +117,21 @@ function parsePatch(body: unknown): { workspace: WorkspacePatch; settings: Setti
     }
   }
 
+  if (body.timeZone !== undefined) {
+    if (!isTimeZone(body.timeZone)) {
+      return "The time zone must be an IANA name like America/New_York";
+    }
+    settings.timeZone = body.timeZone;
+  }
+  if (body.aiSearch !== undefined) {
+    if (typeof body.aiSearch !== "boolean") {
+      return "AI search must be on or off";
+    }
+    settings.aiSearch = body.aiSearch;
+  }
+
   if (Object.keys(workspace).length + Object.keys(settings).length === 0) {
-    return "Nothing to update: send name, accentColor, notificationEmails, poPrefix, replyTo or fromName";
+    return "Nothing to update: send name, accentColor, notificationEmails, poPrefix, replyTo, fromName, timeZone or aiSearch";
   }
   return { workspace, settings };
 }

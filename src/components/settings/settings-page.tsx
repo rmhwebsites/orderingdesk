@@ -10,6 +10,7 @@ import { CustomDomainSection } from "./custom-domain";
 import { InlineMessage } from "./kit";
 import { MyNotificationsSection } from "./my-notifications";
 import { NotificationsSection } from "./notifications";
+import { SearchSection } from "./search-settings";
 import { StatusesSection } from "./statuses";
 import { StoreConnectionSection } from "./store-connection";
 import { TeamSection } from "./team";
@@ -74,6 +75,7 @@ export function SettingsPage({ data }: { data: SettingsPageData }) {
             />
           ) : null}
           {data.statuses ? <StatusesSection workspaceId={workspace.id} initial={data.statuses} queue={data.queue} /> : null}
+          {data.search ? <SearchSection workspaceId={workspace.id} initial={data.search} /> : null}
           <VendorsSection workspaceId={workspace.id} initial={data.vendors} canEdit={access.canEditVendors} />
           {data.notifications ? (
             <NotificationsSection

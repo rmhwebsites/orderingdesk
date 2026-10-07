@@ -84,6 +84,8 @@ describe("loadDesk", () => {
       poPrefix: "IMP",
       replyTo: "ops@example.com",
       fromName: null,
+      timeZone: "America/New_York",
+      aiSearch: true,
     });
   });
 

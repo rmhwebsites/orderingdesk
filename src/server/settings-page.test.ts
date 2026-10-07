@@ -50,6 +50,7 @@ describe("loadSettingsPage", () => {
     expect(page.statuses).toBeNull();
     expect(page.queue).toBeNull();
     expect(page.notifications).toBeNull();
+    expect(page.search).toBeNull();
     expect(page.sender).toBeNull();
     expect(page.domain).toBeNull();
     expect(page.branding).toBeNull();
@@ -69,7 +70,9 @@ describe("loadSettingsPage", () => {
     });
     expect(page.statuses?.map((status) => status.key)).toEqual(["new", "processing", "approved", "shipped"]);
     expect(page.queue).toEqual({ ageAmberDays: 2, ageRedDays: 4, priceDisplay: "auto" });
-    expect(page.notifications).toEqual({ notificationEmails: [], poPrefix: "PO", replyTo: null, fromName: null });
+    const settings = { notificationEmails: [], poPrefix: "PO", replyTo: null, fromName: null, timeZone: "America/New_York", aiSearch: true };
+    expect(page.notifications).toEqual(settings);
+    expect(page.search).toEqual(settings);
     expect(page.sender).toBeNull();
     expect(page.domain).toBeNull();
     expect(page.branding).toBeNull();

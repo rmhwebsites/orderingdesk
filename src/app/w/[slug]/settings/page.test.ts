@@ -101,7 +101,7 @@ describe("/w/[slug]/settings on the hub", () => {
 
     as("u_lead", "lead@example.com");
     const manager = (await outcome(slugPage("ws_impact"))) as ReactElement<{ data: SettingsPageData }>;
-    expect(manager.props.data.access.sections).toEqual(["alerts", "store", "team", "statuses", "vendors", "notifications"]);
+    expect(manager.props.data.access.sections).toEqual(["alerts", "store", "team", "statuses", "search", "vendors", "notifications"]);
 
     as("u_boss", "boss@example.com");
     const platform = (await outcome(slugPage("ws_other"))) as ReactElement<{ data: SettingsPageData }>;

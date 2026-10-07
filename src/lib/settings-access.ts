@@ -6,8 +6,9 @@
 // - Everyone: their own notification choices and this device's push
 //   (Your notifications), first.
 // - Staff: the store's status and the vendor list, read only.
-// - Managers: also the team, statuses, vendors and the workspace email
-//   settings (who gets new order and purchase order email).
+// - Managers: also the team, statuses, search (time zone and the AI search
+//   switch), vendors and the workspace email settings (who gets new order
+//   and purchase order email).
 // - Platform admins: everything, including the store connection, roster
 //   tags, email sender, custom domain and branding.
 
@@ -18,6 +19,7 @@ export type SettingsSection =
   | "store"
   | "team"
   | "statuses"
+  | "search"
   | "vendors"
   | "notifications"
   | "domain"
@@ -28,6 +30,7 @@ export const SETTINGS_SECTION_LABELS: Record<SettingsSection, string> = {
   store: "Store connection",
   team: "Team",
   statuses: "Statuses",
+  search: "Search",
   vendors: "Vendors",
   notifications: "Workspace email",
   domain: "Custom domain",
@@ -41,6 +44,7 @@ export type SettingsAccess = {
   canEditTeam: boolean;
   canEditRosterTags: boolean;
   canEditStatuses: boolean;
+  canEditSearch: boolean;
   canEditVendors: boolean;
   canEditNotifications: boolean;
   canEditSender: boolean;
@@ -51,7 +55,7 @@ export function settingsAccess(role: Role): SettingsAccess {
   const platform = roleAtLeast(role, "platform");
   const sections: SettingsSection[] = ["alerts", "store"];
   if (manager) {
-    sections.push("team", "statuses");
+    sections.push("team", "statuses", "search");
   }
   sections.push("vendors");
   if (manager) {
@@ -66,6 +70,7 @@ export function settingsAccess(role: Role): SettingsAccess {
     canEditTeam: manager,
     canEditRosterTags: platform,
     canEditStatuses: manager,
+    canEditSearch: manager,
     canEditVendors: manager,
     canEditNotifications: manager,
     canEditSender: platform,
