@@ -6,6 +6,7 @@ import { notifyNewOrders } from "../notify";
 import { shareShopifyMoves } from "../shopify/fanout";
 import { syncRoster } from "../shopify/roster-sync";
 import { runBackfillTick } from "./backfill";
+import { syncLocationsIfDue } from "./locations";
 import { runSync, type SyncOptions } from "./run";
 
 // Webhook ids are kept this long for dedupe. Shopify retries a failed
@@ -73,6 +74,18 @@ export async function runAllSyncs(db: Db, env: CloudflareEnv, opts?: SyncOptions
       }
     } catch (e) {
       console.log("[roster] " + JSON.stringify({ workspaceId, error: e instanceof Error ? e.name : "failed" }));
+    }
+
+    // Company locations (comprehensive design section 2): once a day, or
+    // while the workspace has none; skipped without a companies scope.
+    // Logged as counts only.
+    try {
+      const synced = await syncLocationsIfDue(db, env, workspaceId, { fetchImpl: opts?.fetchImpl, now: opts?.now });
+      if (synced.kind === "ok" || synced.kind === "failed") {
+        console.log("[locations] " + JSON.stringify({ workspaceId, ...synced }));
+      }
+    } catch (e) {
+      console.log("[locations] " + JSON.stringify({ workspaceId, error: e instanceof Error ? e.name : "failed" }));
     }
 
     // A running order history import advances a bounded stretch, last, so

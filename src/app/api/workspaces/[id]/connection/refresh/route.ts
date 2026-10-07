@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { refreshConnection } from "@/server/desk/connection-refresh";
 import { guardResponse, requireMember } from "@/server/guard";
+import { syncLocations } from "@/server/sync/locations";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -19,7 +20,7 @@ export async function POST(_request: Request, context: RouteContext) {
   try {
     const { id } = await context.params;
     const { db } = await requireMember(id, "platform");
-    const { env } = getCloudflareContext();
+    const { env, ctx } = getCloudflareContext();
     const result = await refreshConnection(db, {
       workspaceId: id,
       encryptionKey: env.ENCRYPTION_KEY,
@@ -32,6 +33,8 @@ export async function POST(_request: Request, context: RouteContext) {
       case "unreachable":
         return NextResponse.json({ error: result.error }, { status: 502 });
       case "refreshed":
+        // The store's company locations, after the response (never throws).
+        ctx.waitUntil(syncLocations(db, env, id));
         return NextResponse.json({
           connection: result.connection,
           ...(result.warning ? { warning: result.warning } : {}),

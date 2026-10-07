@@ -3,6 +3,7 @@ import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { kickUsers } from "@/server/broadcast";
 import { deleteConnection, saveConnection } from "@/server/desk/connection";
 import { guardResponse, requireMember } from "@/server/guard";
+import { syncLocations } from "@/server/sync/locations";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -23,13 +24,14 @@ type RouteContext = { params: Promise<{ id: string }> };
 // workspace already has orders and the domain names another store; 422
 // {error} when Shopify rejects the credentials or a required permission is
 // missing (each one named); 502 {error} when Shopify cannot be reached or
-// errors.
+// errors. A save or refresh also starts the company location sync after the
+// response (src/server/sync/locations.ts).
 export async function PUT(request: Request, context: RouteContext) {
   try {
     const { id } = await context.params;
     const { db } = await requireMember(id, "platform");
     const body = (await request.json().catch(() => null)) as unknown;
-    const { env } = getCloudflareContext();
+    const { env, ctx } = getCloudflareContext();
     const result = await saveConnection(
       db,
       { workspaceId: id, encryptionKey: env.ENCRYPTION_KEY, appUrl: env.APP_URL },
@@ -45,6 +47,8 @@ export async function PUT(request: Request, context: RouteContext) {
       case "unreachable":
         return NextResponse.json({ error: result.error }, { status: 502 });
       case "saved":
+        // The store's company locations, after the response (never throws).
+        ctx.waitUntil(syncLocations(db, env, id));
         return NextResponse.json({
           connection: result.connection,
           ...(result.warning ? { warning: result.warning } : {}),

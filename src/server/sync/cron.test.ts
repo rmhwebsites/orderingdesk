@@ -20,12 +20,16 @@ vi.mock("../notify", () => ({
 vi.mock("../shopify/roster-sync", () => ({
   syncRoster: vi.fn(async () => ({ kind: "ok", complete: true, entries: 0, removed: 0, revokedUserIds: [] })),
 }));
+vi.mock("./locations", () => ({
+  syncLocationsIfDue: vi.fn(async () => ({ kind: "skipped", reason: "no-companies-scope" })),
+}));
 
 const { runSync } = await import("./run");
 const { runBackfillTick } = await import("./backfill");
 const { broadcastSync, broadcastMerges, broadcastImported, kickUsers } = await import("../broadcast");
 const { syncRoster } = await import("../shopify/roster-sync");
 const { notifyNewOrders } = await import("../notify");
+const { syncLocationsIfDue } = await import("./locations");
 const { runAllSyncs, WEBHOOK_DELIVERY_RETENTION_MS } = await import("./cron");
 
 const env = { ENCRYPTION_KEY: "unused" } as CloudflareEnv;
@@ -57,6 +61,7 @@ beforeEach(() => {
   vi.mocked(notifyNewOrders).mockClear();
   vi.mocked(runBackfillTick).mockClear();
   vi.mocked(broadcastImported).mockClear();
+  vi.mocked(syncLocationsIfDue).mockClear();
   vi.spyOn(console, "log").mockImplementation(() => undefined);
 });
 
@@ -202,5 +207,18 @@ describe("runAllSyncs order history import", () => {
     vi.mocked(runBackfillTick).mockRejectedValueOnce(new Error("boom"));
     await runAllSyncs(db, env);
     expect(vi.mocked(runBackfillTick)).toHaveBeenCalledTimes(2);
+  });
+});
+
+// Comprehensive design section 2: company locations once a day per store.
+describe("runAllSyncs company locations", () => {
+  it("checks every enabled workspace's locations, and one failure does not stop the next", async () => {
+    const db = await setup();
+    vi.mocked(runSync).mockResolvedValue(result());
+    vi.mocked(syncLocationsIfDue).mockImplementationOnce(async () => {
+      throw new Error("boom");
+    });
+    await runAllSyncs(db, env);
+    expect(vi.mocked(syncLocationsIfDue).mock.calls.map((call) => call[2]).sort()).toEqual(["ws_a", "ws_b"]);
   });
 });

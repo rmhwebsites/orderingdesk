@@ -8,19 +8,25 @@ import { openTestDb, seedMember, seedUser, seedWorkspace } from "@/server/desk/t
 // Refresh connection (draft orders spec section 7.3): platform admins only,
 // on the hub. Shopify is a stubbed global fetch.
 const KEY = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
-const state: { db: Db | null; session: { user: { id: string; email: string } } | null } = { db: null, session: null };
+const state: { db: Db | null; session: { user: { id: string; email: string } } | null; after: Promise<unknown>[] } = {
+  db: null,
+  session: null,
+  after: [],
+};
 
 vi.mock("next/headers", () => ({ headers: async () => new Headers({ host: "orderingdesk.test" }) }));
 vi.mock("@opennextjs/cloudflare", () => ({
   getCloudflareContext: () => ({
     env: { APP_URL: "https://orderingdesk.test", PLATFORM_ADMIN_EMAILS: "boss@example.com", ENCRYPTION_KEY: KEY },
-    ctx: {},
+    ctx: { waitUntil: (promise: Promise<unknown>) => state.after.push(promise) },
   }),
 }));
 vi.mock("@/server/auth", () => ({ getAuth: async () => ({ api: { getSession: async () => state.session } }) }));
 vi.mock("@/db", () => ({ getDb: () => state.db, getDbFromEnv: () => state.db }));
+vi.mock("@/server/sync/locations", () => ({ syncLocations: vi.fn(async () => ({ kind: "skipped", reason: "no-companies-scope" })) }));
 
 const { POST } = await import("./route");
+const { syncLocations } = await import("@/server/sync/locations");
 
 const context = { params: Promise.resolve({ id: "ws_impact" }) };
 const request = () => new Request("https://orderingdesk.test/api/workspaces/ws_impact/connection/refresh", { method: "POST" });
@@ -38,7 +44,9 @@ beforeEach(async () => {
   const { db } = openTestDb();
   state.db = db;
   state.session = null;
+  state.after = [];
   shopifyCalls.length = 0;
+  vi.mocked(syncLocations).mockClear();
   await seedWorkspace(db, "ws_impact");
   await seedUser(db, "u_boss", "boss@example.com");
   await seedUser(db, "u_manager", "manager@example.com");
@@ -109,6 +117,9 @@ describe("POST /api/workspaces/[id]/connection/refresh", () => {
     const [row] = await state.db!.select().from(schema.storeConnections).where(eq(schema.storeConnections.workspaceId, "ws_impact"));
     expect(row.scopes).toEqual(SCOPES);
     expect(JSON.stringify(body)).not.toContain("shpat_route_minted");
+    await Promise.all(state.after);
+    // The store's company locations follow, after the response.
+    expect(vi.mocked(syncLocations).mock.lastCall?.[2]).toBe("ws_impact");
   });
 
   it("answers 409 when no store is connected", async () => {
@@ -116,5 +127,6 @@ describe("POST /api/workspaces/[id]/connection/refresh", () => {
     const response = await POST(request(), context);
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({ error: "Connect the store first." });
+    expect(syncLocations).not.toHaveBeenCalled();
   });
 });
