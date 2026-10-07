@@ -34,7 +34,7 @@ function failed(result: Exclude<GraphqlResult, { kind: "ok" }>): AdminFailure {
 
 // The messages of a mutation payload's userErrors, or null when there are
 // none.
-function userErrorsOf(payload: unknown): string | null {
+export function userErrorsOf(payload: unknown): string | null {
   const errors = isRecord(payload) ? payload.userErrors : undefined;
   if (!Array.isArray(errors) || errors.length === 0) {
     return null;
