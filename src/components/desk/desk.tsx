@@ -173,6 +173,7 @@ export function Desk() {
   const switching = viewState === "loading";
   const viewRef = useRef<DeskView>(view);
   const closedRef = useRef<ReadonlySet<string>>(new Set());
+  const rejectedRef = useRef<ReadonlySet<string>>(new Set());
   const [drafts, setDrafts] = useState<DraftsState>({ draftCount: 0, deletedDraftCount: 0, enabled: false, missingScopes: [] });
   const [bannerHidden, setBannerHidden] = useState(true);
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
@@ -331,9 +332,16 @@ export function Desk() {
     () => new Set(statuses.filter((status) => status.closed).map((status) => status.key)),
     [statuses],
   );
+  // The status linked to draft_rejected: its requests never wait for
+  // approval, closed or not (src/lib/desk-state.ts viewMatches).
+  const rejectedKeys = useMemo(
+    () => new Set(statuses.filter((status) => status.shopifyLink === "draft_rejected").map((status) => status.key)),
+    [statuses],
+  );
   useEffect(() => {
     closedRef.current = closedKeys;
-  }, [closedKeys]);
+    rejectedRef.current = rejectedKeys;
+  }, [closedKeys, rejectedKeys]);
 
   // A different view: load it (the server filters; the list stays until
   // the new one lands).
@@ -475,8 +483,10 @@ export function Desk() {
         setDetail((current) => withDetailStatus(current, event.order));
         const after = state.orders.find((row) => row.id === event.order.id);
         if (before && after && before.statusKey !== after.statusKey) {
-          setViewCounts((current) => shiftViewCounts(current, before, before.statusKey, after.statusKey, closedRef.current));
-        } else if (!before && crossesClosed(event.event.meta, closedRef.current)) {
+          setViewCounts((current) =>
+            shiftViewCounts(current, before, before.statusKey, after.statusKey, closedRef.current, rejectedRef.current),
+          );
+        } else if (!before && crossesClosed(event.event.meta, closedRef.current, rejectedRef.current)) {
           void reload();
         }
       }
@@ -518,7 +528,9 @@ export function Desk() {
       if (optimistic) {
         commit(optimistic.state);
         if (before) {
-          setViewCounts((current) => shiftViewCounts(current, before, optimistic.previousKey, nextKey, closedRef.current));
+          setViewCounts((current) =>
+            shiftViewCounts(current, before, optimistic.previousKey, nextKey, closedRef.current, rejectedRef.current),
+          );
         }
       }
       pendingStatus.current.set(orderId, nextKey);
@@ -570,7 +582,9 @@ export function Desk() {
           if (rolled !== deskRef.current) {
             commit(rolled);
             if (before) {
-              setViewCounts((current) => shiftViewCounts(current, before, nextKey, optimistic.previousKey, closedRef.current));
+              setViewCounts((current) =>
+                shiftViewCounts(current, before, nextKey, optimistic.previousKey, closedRef.current, rejectedRef.current),
+              );
             }
           }
         }
@@ -759,8 +773,8 @@ export function Desk() {
   // The list filters by the loaded view (src/lib/desk-state.ts listFilter):
   // the toolbar follows the address, the cards follow what has landed.
   const visible = useMemo(
-    () => selectOrders(desk.orders, listFilter(filter, loadedView), closedKeys),
-    [desk.orders, filter, loadedView, closedKeys],
+    () => selectOrders(desk.orders, listFilter(filter, loadedView), closedKeys, rejectedKeys),
+    [desk.orders, filter, loadedView, closedKeys, rejectedKeys],
   );
   // Totals and the Paid chip (the workspace's Show prices setting).
   const showPrices = useMemo(
@@ -871,7 +885,7 @@ export function Desk() {
   );
   const total = totalOrders(desk.statusCounts);
   const drawerSummary = drawerOrderId ? desk.orders.find((order) => order.id === drawerOrderId) : undefined;
-  const nextRequest = drawerOrderId ? nextWaitingRequest(visible, drawerOrderId, closedKeys) : null;
+  const nextRequest = drawerOrderId ? nextWaitingRequest(visible, drawerOrderId, closedKeys, rejectedKeys) : null;
   const drawerTimeline =
     drawerOrderId && desk.timeline?.orderId === drawerOrderId ? desk.timeline.events : [];
 

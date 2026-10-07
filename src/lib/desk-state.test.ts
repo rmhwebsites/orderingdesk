@@ -546,6 +546,45 @@ describe("views", () => {
   });
 });
 
+// Wave 1a final review: the server leaves a request in the status linked to
+// draft_rejected out of the approval queue whether or not that status is
+// closed (src/server/desk/read.ts); the desk follows the same rule.
+describe("the approval queue and the rejected status", () => {
+  const closed = new Set(["delivered"]);
+  const rejected = new Set(["rejected"]);
+  const waiting = order("d1", { kind: "draft", statusKey: "new" });
+  const refused = order("d2", { kind: "draft", statusKey: "rejected" });
+
+  it("never counts a request in the rejected status as waiting, closed or not", () => {
+    expect(viewMatches(waiting, "approval", closed, rejected)).toBe(true);
+    expect(viewMatches(refused, "approval", closed, rejected)).toBe(false);
+    expect(viewMatches(refused, "open", closed, rejected)).toBe(true);
+    expect(
+      selectOrders([waiting, refused], { query: "", statusKey: null, sort: "newest", view: "approval" }, closed, rejected).map((row) => row.id),
+    ).toEqual(["d1"]);
+    expect(nextWaitingRequest([waiting, refused], "zz", closed, rejected)).toEqual({ id: "d1", name: "#d1" });
+  });
+
+  it("moves the approval count when a request enters or leaves the rejected status, and reloads for one it has not loaded", () => {
+    const counts = { open: 3, approval: 1, all: 5, closed: 2 };
+    expect(shiftViewCounts(counts, { kind: "draft", draftDeleted: false }, "new", "rejected", closed, rejected)).toEqual({
+      open: 3,
+      approval: 0,
+      all: 5,
+      closed: 2,
+    });
+    expect(shiftViewCounts(counts, { kind: "draft", draftDeleted: false }, "rejected", "new", closed, rejected)).toEqual({
+      open: 3,
+      approval: 2,
+      all: 5,
+      closed: 2,
+    });
+    expect(shiftViewCounts(counts, { kind: "order", draftDeleted: false }, "new", "rejected", closed, rejected)).toBe(counts);
+    expect(crossesClosed({ from: "new", to: "rejected" }, closed, rejected)).toBe(true);
+    expect(crossesClosed({ from: "new", to: "processing" }, closed, rejected)).toBe(false);
+  });
+});
+
 describe("nextWaitingRequest", () => {
   it("finds the next request waiting after the current one, wrapping to the top", () => {
     const closed = new Set(["rejected"]);

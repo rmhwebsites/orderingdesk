@@ -590,6 +590,20 @@ describe("loadDesk views", () => {
     expect(await countNeedsApproval(db, OTHER)).toBe(0);
   });
 
+  // Wave 1a final review: a rejected request never waits for approval, even
+  // when its status is not marked closed; the queue and its count agree.
+  it("leaves rejected requests out of the approval queue by their status's link, closed or not", async () => {
+    const db = await seeded();
+    await db
+      .update(schema.statuses)
+      .set({ closed: false })
+      .where(and(eq(schema.statuses.workspaceId, WS), eq(schema.statuses.key, "rejected")));
+    const approval = await loadDesk(db, WS, { view: "approval" });
+    expect(approval?.orders.map((order) => order.id)).toEqual(["d_wait"]);
+    expect(approval?.viewCounts).toEqual({ open: 4, approval: 1, all: 5, closed: 1 });
+    expect(await countNeedsApproval(db, WS)).toBe(1);
+  });
+
   // Owner decision after the plan: an order whose status triggers a
   // purchase order and that has none says "PO not created".
   it("says whether each card has a purchase order", async () => {

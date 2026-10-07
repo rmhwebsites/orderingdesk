@@ -182,13 +182,19 @@ function summarize(row: typeof orders.$inferSelect, hasPo: boolean, locationName
 const statusJoin = and(eq(statuses.workspaceId, orders.workspaceId), eq(statuses.key, orders.statusKey));
 const isOpen = sql`coalesce(${statuses.closed}, 0) = 0`;
 const isClosed = sql`coalesce(${statuses.closed}, 0) = 1`;
+// A request still waiting for a manager: a draft that Shopify has not
+// deleted, in an open status that is not the one linked to draft_rejected
+// (a rejected request never waits, whether or not its status is closed).
+// The one fragment for the approval view, its count in every view's sizes
+// and the top bar's badge; the desk applies the same rule
+// (src/lib/desk-state.ts viewMatches).
+const awaitingApproval = sql`(${orders.shopifyOrderId} is null and ${orders.draftDeletedAt} is null and coalesce(${statuses.closed}, 0) = 0 and coalesce(${statuses.shopifyLink}, '') <> 'draft_rejected')`;
 // Whether a card has any purchase order (one indexed lookup per card).
 const hasPurchaseOrder = sql<number>`exists (select 1 from ${purchaseOrders} where ${purchaseOrders.orderId} = ${orders.id} and ${purchaseOrders.workspaceId} = ${orders.workspaceId})`;
 
 // Which cards a view loads (comprehensive desk design section 1). Deleted
 // requests come with Open, All and Closed; the desk's Deleted filter shows
-// them. The approval queue is requests still waiting: drafts that are not
-// deleted, in an open status.
+// them. The approval queue is requests still waiting (awaitingApproval).
 function viewCondition(view: DeskView): SQL | undefined {
   switch (view) {
     case "all":
@@ -198,7 +204,7 @@ function viewCondition(view: DeskView): SQL | undefined {
     case "closed":
       return isClosed;
     case "approval":
-      return and(isNull(orders.shopifyOrderId), isNull(orders.draftDeletedAt), isOpen);
+      return awaitingApproval;
   }
 }
 
@@ -272,7 +278,7 @@ export async function loadDesk(
       .select({
         all: sql<number>`coalesce(sum(case when ${orders.shopifyOrderId} is null and ${orders.draftDeletedAt} is not null then 0 else 1 end), 0)`,
         closed: sql<number>`coalesce(sum(case when ${orders.shopifyOrderId} is null and ${orders.draftDeletedAt} is not null then 0 when coalesce(${statuses.closed}, 0) = 1 then 1 else 0 end), 0)`,
-        approval: sql<number>`coalesce(sum(case when ${orders.shopifyOrderId} is null and ${orders.draftDeletedAt} is null and coalesce(${statuses.closed}, 0) = 0 then 1 else 0 end), 0)`,
+        approval: sql<number>`coalesce(sum(case when ${awaitingApproval} then 1 else 0 end), 0)`,
       })
       .from(orders)
       .leftJoin(statuses, statusJoin)
