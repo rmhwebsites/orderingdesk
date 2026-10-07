@@ -37,6 +37,13 @@ describe("actorLabel", () => {
     expect(actorLabel(item({ actorId: null, actorName: null, source: "shopify", type: "order_new" }))).toBe("Shopify");
     expect(actorLabel(item({ actorId: null, actorName: null, source: "system", type: "sync_error" }))).toBe("Ordering Desk");
   });
+
+  it("adds the AI app to the person's name", () => {
+    expect(actorLabel(item({ actorId: "u_casey", actorName: "Casey Lin", source: "ai", meta: { ai: { client: "claude" } } }))).toBe(
+      "Casey Lin via Claude",
+    );
+    expect(actorLabel(item({ mine: true, source: "ai", meta: { ai: { client: "chatgpt" } } }))).toBe("You via ChatGPT");
+  });
 });
 
 describe("orderHref", () => {

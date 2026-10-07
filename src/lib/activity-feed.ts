@@ -4,6 +4,7 @@
 
 import type { ActivityItem } from "@/server/activity";
 import { APP_NAME } from "./brand";
+import { viaLabel } from "./via";
 
 const TOAST_TYPES = new Set<ActivityItem["type"]>(["status", "note", "po_sent"]);
 const MAX_TOASTS = 3;
@@ -17,13 +18,15 @@ export function unreadBadge(count: number | null): string | null {
 }
 
 export function actorLabel(item: ActivityItem): string {
-  if (item.mine) {
-    return "You";
-  }
-  if (item.actorId) {
-    return item.actorName ?? "Former member";
-  }
-  return item.source === "shopify" || item.type === "order_new" ? "Shopify" : APP_NAME;
+  const base = item.mine
+    ? "You"
+    : item.actorId
+      ? (item.actorName ?? "Former member")
+      : item.source === "shopify" || item.type === "order_new"
+        ? "Shopify"
+        : APP_NAME;
+  const via = viaLabel(item);
+  return via ? `${base} ${via}` : base;
 }
 
 // The order in the desk, which opens its drawer from ?order=.

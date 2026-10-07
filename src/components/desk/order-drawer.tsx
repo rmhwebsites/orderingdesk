@@ -28,7 +28,7 @@ import { EventIcon } from "@/components/event-icon";
 import { ui } from "@/components/ui";
 import { focusSoon } from "@/components/settings/kit";
 import { StatusSelect } from "./status-select";
-import { APP_NAME } from "@/lib/brand";
+import { timelineActor } from "./timeline-actor";
 import type { PoView } from "@/server/po/service";
 import { PurchaseOrders } from "./po-history";
 import { Chip, Spinner } from "@/components/kit";
@@ -194,22 +194,6 @@ export function DrawerShell({
   );
 }
 
-function actorName(event: EventView, members: Map<string, MemberView>, selfUserId: string): string {
-  if (!event.actorId) {
-    return event.source === "shopify" || event.type === "order_new" ? "Shopify" : APP_NAME;
-  }
-  if (event.actorId === selfUserId) {
-    return "You";
-  }
-  const member = members.get(event.actorId);
-  if (member) {
-    return member.name?.trim() || member.email || "Team member";
-  }
-  // Not a member: a platform admin from outside the workspace (who may
-  // approve and reject), named by the server; else someone who left.
-  return event.actorName?.trim() || "Former member";
-}
-
 // Who set the card's current status, for "Status set by ...": a member by
 // the member list, else the name on the newest status entry that person
 // wrote (a platform admin who is not a member), else a former member.
@@ -277,35 +261,39 @@ function Timeline({
   }
   return (
     <ol className="flex flex-col gap-4">
-      {events.map((event) => (
-        <li key={event.id} className="flex gap-3">
-          <EventIcon look={eventLook(event)} />
-          <div className="min-w-0 flex-1 pt-1">
-            <p className="flex flex-wrap items-baseline gap-x-2 text-sm">
-              <span className="font-semibold text-ink">{actorName(event, members, selfUserId)}</span>
-              <time
-                dateTime={new Date(event.createdAt).toISOString()}
-                title={formatDateTime(event.createdAt)}
-                className="text-xs tabular-nums text-ink-2"
-              >
-                {now > 0 ? relativeTime(event.createdAt, now) : formatDateTime(event.createdAt)}
-              </time>
-            </p>
-            {event.type === "note" ? (
-              <>
-                {metaOf(event).rejectReason === true ? (
-                  <p className="mt-1 text-xs font-semibold text-ink-2">Reason</p>
-                ) : null}
-                <p className="mt-1.5 whitespace-pre-wrap break-words rounded-panel bg-surface-2 px-3 py-2 text-sm text-ink">
-                  {event.text}
-                </p>
-              </>
-            ) : (
-              <p className="mt-0.5 break-words text-sm text-ink-2">{event.text}</p>
-            )}
-          </div>
-        </li>
-      ))}
+      {events.map((event) => {
+        const actor = timelineActor(event, members, selfUserId);
+        return (
+          <li key={event.id} className="flex gap-3">
+            <EventIcon look={eventLook(event)} />
+            <div className="min-w-0 flex-1 pt-1">
+              <p className="flex flex-wrap items-baseline gap-x-2 text-sm">
+                <span className="font-semibold text-ink">{actor.name}</span>
+                {actor.via ? <span className="text-xs text-ink-2">{actor.via}</span> : null}
+                <time
+                  dateTime={new Date(event.createdAt).toISOString()}
+                  title={formatDateTime(event.createdAt)}
+                  className="text-xs tabular-nums text-ink-2"
+                >
+                  {now > 0 ? relativeTime(event.createdAt, now) : formatDateTime(event.createdAt)}
+                </time>
+              </p>
+              {event.type === "note" ? (
+                <>
+                  {metaOf(event).rejectReason === true ? (
+                    <p className="mt-1 text-xs font-semibold text-ink-2">Reason</p>
+                  ) : null}
+                  <p className="mt-1.5 whitespace-pre-wrap break-words rounded-panel bg-surface-2 px-3 py-2 text-sm text-ink">
+                    {event.text}
+                  </p>
+                </>
+              ) : (
+                <p className="mt-0.5 break-words text-sm text-ink-2">{event.text}</p>
+              )}
+            </div>
+          </li>
+        );
+      })}
     </ol>
   );
 }
@@ -555,7 +543,7 @@ export function OrderDrawerContent({
   const placedAt = kind === "order" && snapshot && !showsDraft ? snapshot.createdAt : null;
   const isRejected = rejectedStatus !== undefined && statusKey === rejectedStatus.key;
   const rejectionNote = isRejected ? rejectionOf(timeline) : null;
-  const rejectedBy = rejectionNote ? actorName(rejectionNote, members, selfUserId) : null;
+  const rejectedBy = rejectionNote ? timelineActor(rejectionNote, members, selfUserId).name : null;
   const rejection =
     rejectionNote && rejectedBy
       ? { reason: rejectionNote.text, by: rejectedBy === "You" ? "you" : rejectedBy, at: rejectionNote.createdAt }
