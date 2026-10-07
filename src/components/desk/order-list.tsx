@@ -40,8 +40,9 @@ export type ListProps = {
     onToggle: (orderId: string, range: boolean) => void;
     onToggleAll: () => void;
   } | null;
-  // Totals and the Total column; when false, a card with a price shows it
-  // as an amber chip.
+  // The phone cards' totals; when false, a card with a price shows it as an
+  // amber chip. The desktop rows have a Branch column in place of the total
+  // and always mark a card with a price.
   showPrices: boolean;
 };
 
@@ -53,10 +54,33 @@ function itemsLine(order: OrderSummary): string {
   return `${order.itemsPreview.join(", ")}${more > 0 ? `, and ${more} more` : ""}`;
 }
 
-// "For Casey Lin · Buford HQ" when the request names them.
-function requestLine(order: OrderSummary): string | null {
-  const parts = [order.requestFor ? `For ${order.requestFor}` : "", order.branch].filter((part) => part.length > 0);
+// "For Casey Lin · Buford HQ" when the request names them. The desktop row
+// has its own Branch column, so it leaves the branch out.
+export function requestLine(
+  order: Pick<OrderSummary, "requestFor" | "branch">,
+  opts: { withBranch: boolean },
+): string | null {
+  const parts = [order.requestFor ? `For ${order.requestFor}` : "", opts.withBranch ? order.branch : ""].filter(
+    (part) => part.length > 0,
+  );
   return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+// The Branch column (comprehensive design section 2): the synced company
+// location, else the request's own field (OrderSummary.branch).
+export function branchText(order: Pick<OrderSummary, "branch">): string {
+  return order.branch.trim();
+}
+
+export function BranchCell({ order }: { order: Pick<OrderSummary, "branch"> }) {
+  const text = branchText(order);
+  return text ? (
+    <span className="block truncate text-sm text-ink" title={text}>
+      {text}
+    </span>
+  ) : (
+    <span className="text-sm text-ink-2">No branch</span>
+  );
 }
 
 // A request's Draft chip, Deleted when Shopify deleted its draft; an order
@@ -78,8 +102,8 @@ function KindMark({ order }: { order: OrderSummary }) {
   ) : null;
 }
 
-function CustomerLine({ order }: { order: OrderSummary }) {
-  const line = requestLine(order);
+function CustomerLine({ order, withBranch }: { order: OrderSummary; withBranch: boolean }) {
+  const line = requestLine(order, { withBranch });
   return (
     <span className="block truncate text-sm" title={order.email || undefined}>
       <span className="font-medium text-ink">{order.customerName || "No customer name"}</span>
@@ -152,7 +176,8 @@ function Total({ order }: { order: OrderSummary }) {
   return <span className="font-mono text-sm tabular-nums text-ink">{formatMoney(order.total, order.currency)}</span>;
 }
 
-// A card with a price while prices are hidden: worth noticing on a $0 store.
+// A card with a price (on the desktop always, on a phone card while prices
+// are hidden): worth noticing on a $0 store.
 function PricedMark({ order }: { order: OrderSummary }) {
   return isPriced(order.total) ? (
     <Chip tone="amber" size="sm" title="This card has a price">
@@ -226,7 +251,6 @@ export function OrderTable({
   ageRule,
   closedKeys,
   selection,
-  showPrices,
 }: ListProps) {
   return (
     <div className="overflow-hidden rounded-panel border border-line bg-surface shadow-panel">
@@ -238,7 +262,7 @@ export function OrderTable({
           <col className="w-[24%]" />
           <col />
           <col className="w-[5.5rem]" />
-          {showPrices ? <col className="w-[7rem]" /> : null}
+          <col className="w-[9rem]" />
           <col className="w-[11rem]" />
         </colgroup>
         <thead>
@@ -260,7 +284,7 @@ export function OrderTable({
             <th scope="col" className="px-3 font-semibold">Customer</th>
             <th scope="col" className="px-3 font-semibold">Items</th>
             <th scope="col" className="px-3 font-semibold">Age</th>
-            {showPrices ? <th scope="col" className="px-3 text-right font-semibold">Total</th> : null}
+            <th scope="col" className="px-3 font-semibold">Branch</th>
             <th scope="col" className="px-4 font-semibold">Status</th>
           </tr>
         </thead>
@@ -296,14 +320,14 @@ export function OrderTable({
                       {order.name}
                     </button>
                     <KindMark order={order} />
-                    {showPrices ? null : <PricedMark order={order} />}
+                    <PricedMark order={order} />
                   </span>
                 </td>
                 <td className={`px-3 ${flash}`}>
                   <DayText order={order} now={now} />
                 </td>
                 <td className={`px-3 ${flash}`}>
-                  <CustomerLine order={order} />
+                  <CustomerLine order={order} withBranch={false} />
                 </td>
                 <td className={`px-3 ${flash}`}>
                   <span className="flex min-w-0 items-center gap-2">
@@ -314,11 +338,9 @@ export function OrderTable({
                 <td className={`px-3 ${flash}`}>
                   <AgeBadge order={order} statuses={statuses} ageRule={ageRule} closedKeys={closedKeys} now={now} withLabel={false} />
                 </td>
-                {showPrices ? (
-                  <td className={`px-3 text-right ${flash}`}>
-                    <Total order={order} />
-                  </td>
-                ) : null}
+                <td className={`px-3 ${flash}`}>
+                  <BranchCell order={order} />
+                </td>
                 <td className={`px-4 ${flash}`} onClick={(event) => event.stopPropagation()}>
                   <RowStatus order={order} statuses={statuses} role={role} busy={savingIds.has(order.id)} onChangeStatus={onChangeStatus} />
                   <RowError message={rowErrors[order.id]} />
@@ -385,7 +407,7 @@ export function OrderCards({
             </span>
           </div>
           <div className="mt-1">
-            <CustomerLine order={order} />
+            <CustomerLine order={order} withBranch />
           </div>
           <div className="mt-0.5">
             <ItemsLine order={order} />

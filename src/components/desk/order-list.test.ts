@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { OrderSummary } from "@/server/desk/read";
 import type { StatusView } from "@/server/desk/shapes";
-import { OrderList, type ListProps } from "./order-list";
+import { BranchCell, OrderList, branchText, requestLine, type ListProps } from "./order-list";
 
 const NOW = Date.parse("2026-10-05T15:00:00.000Z");
 const STATUSES: StatusView[] = [
@@ -89,7 +89,7 @@ describe("OrderList", () => {
     const html = render("table");
     expect(html.match(/<tr class="h-11 /g)).toHaveLength(3);
     expect(html).not.toContain("line-clamp-2");
-    expect(html).toContain("For Casey Lin · Buford HQ");
+    expect(html).toContain(" · For Casey Lin</span>");
   });
 
   it("marks requests, and a request whose draft Shopify deleted", () => {
@@ -152,16 +152,44 @@ describe("OrderList selection", () => {
 });
 
 describe("OrderList prices", () => {
-  it("drops the Total column when prices are hidden, and still marks a card that has a price", () => {
+  it("never shows a Total column on the desktop, marks a card that has a price, and keeps the cards' totals under the price rule", () => {
     const orders = [card("free"), card("priced", { total: "48.00" })];
     const shown = render("table", { orders, showPrices: true });
-    expect(shown).toContain(">Total</th>");
-    expect(shown).toContain("$0.00");
+    expect(shown).not.toContain(">Total</th>");
+    expect(shown).toContain(">Branch</th>");
+    expect(shown).not.toContain("$0.00");
+    expect(shown).toContain("$48.00");
+    expect(render("cards", { orders, showPrices: true })).toContain("$0.00");
     const hidden = render("table", { orders, showPrices: false });
     expect(hidden).not.toContain(">Total</th>");
     expect(hidden).not.toContain("$0.00");
     expect(hidden).toContain("$48.00");
     expect(hidden).toContain('title="This card has a price"');
     expect(render("cards", { orders, showPrices: false })).not.toContain("$0.00");
+  });
+});
+
+// The desktop list's Branch column (comprehensive design section 2): the
+// card's synced location, else its request field, in place of the total.
+describe("Branch column", () => {
+  it("names the card's branch, trimmed, or says there is none", () => {
+    expect(branchText({ branch: " Mableton " })).toBe("Mableton");
+    expect(renderToStaticMarkup(createElement(BranchCell, { order: { branch: "Mableton" } }))).toContain(">Mableton<");
+    expect(renderToStaticMarkup(createElement(BranchCell, { order: { branch: "" } }))).toContain(">No branch<");
+  });
+
+  it("leaves the branch out of the request line when the row has a Branch column", () => {
+    expect(requestLine({ requestFor: "Casey Lin", branch: "Mableton" }, { withBranch: false })).toBe("For Casey Lin");
+    expect(requestLine({ requestFor: "Casey Lin", branch: "Mableton" }, { withBranch: true })).toBe("For Casey Lin · Mableton");
+    expect(requestLine({ requestFor: "", branch: "" }, { withBranch: true })).toBeNull();
+  });
+
+  it("shows Branch, never Total, on the desktop, and keeps the phone cards as they were", () => {
+    const table = render("table");
+    expect(table).toContain(">Branch</th>");
+    expect(table).not.toContain(">Total</th>");
+    expect(table).toContain(" · For Casey Lin</span>");
+    expect(table).toContain('title="Buford HQ">Buford HQ</span>');
+    expect(render("cards")).toContain("For Casey Lin · Buford HQ");
   });
 });
