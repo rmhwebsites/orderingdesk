@@ -2,14 +2,15 @@
 // company location of the workspace's store, kept in the locations table so
 // cards name their branch and show its address, and the request editor
 // lists a company's branches. syncLocations runs when the connection is
-// saved or refreshed and from the cron once a day (syncLocationsIfDue); the
+// saved or refreshed and from the cron once a day (syncLocationsIfDue, timed
+// by store_connections.locations_synced_at, never by the rows); the
 // company_locations/* webhooks apply one location at a time. A location
 // Shopify stops listing is kept, inactive, so cards still name it; rows are
 // never deleted. After each sync, cards stored before 0012 get their
 // location by name (backfillLocationIds). Needs a companies scope; never
 // throws. Relative imports on purpose: the cron path bundles this.
 
-import { and, asc, eq, isNull, lt, max, sql, type AnyColumn } from "drizzle-orm";
+import { and, asc, eq, isNull, lt, sql, type AnyColumn } from "drizzle-orm";
 import type { Db } from "../../db";
 import { rowsAffected } from "../../db/batch";
 import { locations, orders, storeConnections } from "../../db/schema";
@@ -116,11 +117,38 @@ export async function backfillLocationIds(db: Db, workspaceId: string): Promise<
   return rowsAffected(result, "locations");
 }
 
+// Records that a location sync just ran, so the cron's next one waits a
+// day. Never throws: without the stamp the next tick simply tries again.
+async function stampLocationSync(db: Db, workspaceId: string, at: number): Promise<void> {
+  try {
+    await db.update(storeConnections).set({ locationsSyncedAt: at }).where(eq(storeConnections.workspaceId, workspaceId));
+  } catch (e) {
+    console.warn("[locations] " + JSON.stringify({ workspaceId, stamp: safeErrorReason(e) }));
+  }
+}
+
+// Every run that was not skipped is stamped: complete, partial, or failed
+// (so failures back off a day too; saving or refreshing the connection runs
+// it again at once). A skipped run asked Shopify nothing and is not.
 export async function syncLocations(
   db: Db,
   env: Pick<CloudflareEnv, "ENCRYPTION_KEY">,
   workspaceId: string,
   deps: Deps = {},
+): Promise<LocationSyncResult> {
+  const startedAt = (deps.now ?? Date.now)();
+  const result = await syncLocationsOnce(db, env, workspaceId, deps);
+  if (result.kind !== "skipped") {
+    await stampLocationSync(db, workspaceId, startedAt);
+  }
+  return result;
+}
+
+async function syncLocationsOnce(
+  db: Db,
+  env: Pick<CloudflareEnv, "ENCRYPTION_KEY">,
+  workspaceId: string,
+  deps: Deps,
 ): Promise<LocationSyncResult> {
   try {
     const grant = await grantOf(db, workspaceId);
@@ -164,8 +192,11 @@ export async function syncLocations(
   }
 }
 
-// The cron's pass: when the workspace has no locations yet, or its newest
-// confirmation is a day old.
+// The cron's pass: when no location sync has run yet, or the last one ran
+// a day ago. Timed by the connection's stamp, not by
+// locations.updated_at: webhooks touch rows too, and this daily run is the
+// only thing that heals a lost webhook; a store with no company locations
+// has no rows at all and would otherwise be asked on every tick.
 export async function syncLocationsIfDue(
   db: Db,
   env: Pick<CloudflareEnv, "ENCRYPTION_KEY">,
@@ -173,11 +204,12 @@ export async function syncLocationsIfDue(
   deps: Deps = {},
 ): Promise<LocationSyncResult> {
   const clock = deps.now ?? Date.now;
-  const newest = await db
-    .select({ at: max(locations.updatedAt) })
-    .from(locations)
-    .where(eq(locations.workspaceId, workspaceId));
-  const at = newest[0]?.at ?? null;
+  const stamped = await db
+    .select({ at: storeConnections.locationsSyncedAt })
+    .from(storeConnections)
+    .where(eq(storeConnections.workspaceId, workspaceId))
+    .limit(1);
+  const at = stamped[0]?.at ?? null;
   if (at !== null && clock() - at < LOCATIONS_SYNC_EVERY_MS) {
     return { kind: "skipped", reason: "not-due" };
   }

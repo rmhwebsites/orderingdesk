@@ -124,6 +124,11 @@ export const storeConnections = sqliteTable("store_connections", {
   // X-Shopify-Shop-Domain, so the webhook receiver accepts exactly either.
   // Null until then, or when Shopify did not say.
   canonicalShopDomain: text("canonical_shop_domain"),
+  // When a company location sync (src/server/sync/locations.ts) last ran,
+  // complete, partial or failed: the cron runs the next one a day later.
+  // Kept apart from locations.updated_at, which webhooks also touch. Null
+  // until the first sync (0012).
+  locationsSyncedAt: integer("locations_synced_at"),
 });
 
 // The Shopify states and draft order outcomes a status can follow (see
@@ -217,7 +222,9 @@ export const orders = sqliteTable("orders", {
 // section 2), synced by src/server/sync/locations.ts. shopify_location_id
 // and company_id are Shopify legacy ids. active = false: Shopify no longer
 // lists it (kept, so cards still name it). updated_at: when the desk last
-// confirmed the row against Shopify (the daily cron pass reads it).
+// confirmed the row against Shopify (a complete sync deactivates the rows
+// it did not touch); webhooks touch it too, so the cron times the daily
+// sync by store_connections.locations_synced_at instead.
 export const locations = sqliteTable("locations", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id),

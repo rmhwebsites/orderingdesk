@@ -233,16 +233,79 @@ describe("backfillLocationIds", () => {
 });
 
 describe("syncLocationsIfDue", () => {
-  it("runs when the workspace has no locations, then once a day", async () => {
+  const MINUTE = 60 * 1000;
+  const HOUR = 60 * MINUTE;
+  const NOT_DUE = { kind: "skipped", reason: "not-due" };
+  const due = (db: Db, shop: { impl: typeof fetch }, at: number) => syncLocationsIfDue(db, env, WS, { fetchImpl: shop.impl, now: () => at });
+  const syncedAt = async (db: Db) =>
+    (await db.select().from(schema.storeConnections).where(eq(schema.storeConnections.workspaceId, WS)))[0]?.locationsSyncedAt;
+
+  it("runs when it never ran, then once a day", async () => {
     const shop = fakeShop(THREE);
     const db = await setup();
-    expect((await syncLocationsIfDue(db, env, WS, { fetchImpl: shop.impl, now: () => NOW })).kind).toBe("ok");
-    expect(await syncLocationsIfDue(db, env, WS, { fetchImpl: shop.impl, now: () => NOW + 3600000 })).toEqual({
-      kind: "skipped",
-      reason: "not-due",
-    });
-    expect((await syncLocationsIfDue(db, env, WS, { fetchImpl: shop.impl, now: () => NOW + LOCATIONS_SYNC_EVERY_MS })).kind).toBe("ok");
-    expect(LOCATIONS_SYNC_EVERY_MS).toBe(24 * 60 * 60 * 1000);
+    expect((await due(db, shop, NOW)).kind).toBe("ok");
+    expect(await syncedAt(db)).toBe(NOW);
+    expect(await due(db, shop, NOW + HOUR)).toEqual(NOT_DUE);
+    expect((await due(db, shop, NOW + LOCATIONS_SYNC_EVERY_MS)).kind).toBe("ok");
+    expect(LOCATIONS_SYNC_EVERY_MS).toBe(24 * HOUR);
+  });
+
+  // The daily sync is the only path that heals a lost webhook, so a webhook
+  // that touches one location never postpones it.
+  it("runs a day after the last sync even when a webhook touched a location since", async () => {
+    const shop = fakeShop(THREE);
+    const db = await setup();
+    expect((await due(db, shop, NOW)).kind).toBe("ok");
+    // 102 is deleted in Shopify and its webhook is lost; 101 is renamed and
+    // its webhook arrives 23 hours after the sync.
+    shop.state.list = [{ id: 101, name: "Buford Main" }, { id: 103, name: "Athens" }];
+    await applyLocationWebhook(db, env, WS, { kind: "location", locationGid: "gid://shopify/CompanyLocation/101" }, { fetchImpl: shop.impl, now: () => NOW + 23 * HOUR });
+    shop.ops.length = 0;
+    expect(await due(db, shop, NOW + 24 * HOUR)).toMatchObject({ kind: "ok", deactivated: 1, complete: true });
+    expect(shop.ops).toEqual(["CompanyLocations"]);
+    expect((await rows(db)).map((row) => [row.shopifyLocationId, row.name, row.active])).toEqual([
+      ["101", "Buford Main", true],
+      ["102", "Mableton", false],
+      ["103", "Athens", true],
+    ]);
+  });
+
+  it("asks a store with no company locations once a day, not on every cron tick", async () => {
+    const shop = fakeShop([]);
+    const db = await setup();
+    expect(await due(db, shop, NOW)).toEqual({ kind: "ok", upserted: 0, deactivated: 0, backfilled: 0, complete: true });
+    expect(await due(db, shop, NOW + 10 * MINUTE)).toEqual(NOT_DUE);
+    expect(await due(db, shop, NOW + 23 * HOUR)).toEqual(NOT_DUE);
+    expect(shop.ops).toEqual(["CompanyLocations"]);
+    expect((await due(db, shop, NOW + 24 * HOUR)).kind).toBe("ok");
+    expect(shop.ops).toEqual(["CompanyLocations", "CompanyLocations"]);
+  });
+
+  it("backs off a day after a failed sync too, while a save or refresh still syncs at once", async () => {
+    const shop = fakeShop(THREE, { failPage: 0 });
+    const db = await setup();
+    expect((await due(db, shop, NOW)).kind).toBe("failed");
+    const askedOnce = shop.ops.length;
+    expect(askedOnce).toBeGreaterThan(0);
+    expect(await due(db, shop, NOW + 10 * MINUTE)).toEqual(NOT_DUE);
+    expect(shop.ops).toHaveLength(askedOnce);
+    // Saving or refreshing the connection calls syncLocations directly.
+    shop.state.failPage = undefined;
+    expect(await syncLocations(db, env, WS, { fetchImpl: shop.impl, now: () => NOW + 20 * MINUTE })).toMatchObject({ kind: "ok", upserted: 3 });
+    expect(await due(db, shop, NOW + 20 * MINUTE + LOCATIONS_SYNC_EVERY_MS - 1)).toEqual(NOT_DUE);
+    expect((await due(db, shop, NOW + 20 * MINUTE + LOCATIONS_SYNC_EVERY_MS)).kind).toBe("ok");
+  });
+
+  it("records nothing while skipped, so the first tick with a companies scope syncs", async () => {
+    const shop = fakeShop(THREE);
+    const db = await setup(["read_orders", "read_customers"]);
+    expect(await due(db, shop, NOW)).toEqual({ kind: "skipped", reason: "no-companies-scope" });
+    expect(await syncedAt(db)).toBeNull();
+    await db
+      .update(schema.storeConnections)
+      .set({ scopes: ["read_orders", "read_customers", "read_companies"] })
+      .where(eq(schema.storeConnections.workspaceId, WS));
+    expect(await due(db, shop, NOW + 10 * MINUTE)).toMatchObject({ kind: "ok", upserted: 3 });
   });
 });
 

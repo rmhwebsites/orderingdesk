@@ -30,7 +30,7 @@
 ## Decisions this plan makes (within the design; do not re-open them while building)
 
 1. **Location ids.** `locations.shopify_location_id` and `orders.location_id` both hold the Shopify company location's legacy id, the numeric tail of `gid://shopify/CompanyLocation/<id>`, read straight from the purchasing entity (no lookup, works before the location is synced). Join on `(workspace_id, shopify_location_id)`. `locations.id` is an internal random UUID used only as the primary key. Wave 1c's `order_search.location_id` and `people.location_id` carry the same Shopify legacy id.
-2. **Location freshness.** `locations.updated_at` is when the desk last confirmed the row against Shopify. A complete sync touches every row it saw and marks rows it did not see `active = 0` (kept, never deleted: cards still name them). The cron runs the sync when the workspace has no rows or its newest `updated_at` is 24 hours old. Location sync needs `read_companies` or `write_companies` and never runs without it.
+2. **Location freshness.** `locations.updated_at` is when the desk last confirmed the row against Shopify. A complete sync touches every row it saw and marks rows it did not see `active = 0` (kept, never deleted: cards still name them). Each sync that is not skipped (complete, partial or failed) stamps `store_connections.locations_synced_at` (0012); the cron runs the sync when that stamp is null or 24 hours old. The stamp, not the rows, times it: webhooks touch rows too and must never postpone the daily sync, the only path that heals a lost webhook, and a store with no company locations has no rows at all and would be asked on every tick. A failed sync backs off a day too; saving or refreshing the connection syncs at once. Location sync needs `read_companies` or `write_companies` and never runs without it.
 3. **Webhooks.** `COMPANY_LOCATIONS_CREATE`, `_UPDATE` and `_DELETE` are registered only with a companies scope, after the base topics and before the draft topics (draft topics stay last, as `replaceWebhookSubscriptions` stops at the first refusal; Shopify accepts the location topics with `read_customers`, which every connection has).
 4. **Orders query.** The order selection gains `cancelledAt` always, and `purchasingEntity { __typename ... on PurchasingCompany { location { id } } }` only when the stored grant holds a companies scope (`companiesEnabled`): that fragment needs `read_companies`, which is not a required scope, and any GraphQL error fails a whole sync. With it the page estimate goes from 783 to 798 of the 800 budget in `client.test.ts`; any later field must give points back. A store without a companies scope keeps syncing, and its cards get no `location_id` from orders (drafts already need `read_companies`).
 5. **Address rule.** With a company location: the location name is the heading (bold), then the order's own street lines (no recipient or company line), falling back to the location's synced address; phone last. Without a location: today's lines (recipient, company, street, locality, country). Stored purchase order ship-to lines read their first line as the heading (the PDF already bolds it).
@@ -432,7 +432,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- src/lib/address.ts s
 ### Task 2: Migration 0012: schema, generated SQL, drift test
 
 **Files:**
-- Modify: `src/db/schema.ts:1-6` (type import), `:129` (`SHOPIFY_LINK_VALUES`), `:155-200` (`orders`: add `locationId` last, after `draftDeletedAt` at line 187), `:202-225` (`events.type`), new `locations` table after `orders`
+- Modify: `src/db/schema.ts:1-6` (type import), `store_connections` (add `locationsSyncedAt` last, after `canonicalShopDomain`), `:129` (`SHOPIFY_LINK_VALUES`), `:155-200` (`orders`: add `locationId` last, after `draftDeletedAt` at line 187), `:202-225` (`events.type`), new `locations` table after `orders`
 - Create (generated): `drizzle/0012_locations_edit_cancel.sql`, `drizzle/meta/0012_snapshot.json`; Modify (generated): `drizzle/meta/_journal.json`
 - Modify: `src/server/desk/statuses.ts:39-44` (`LINK_NAMES`), `:101` (error copy)
 - Modify: `src/lib/event-look.ts` and `src/components/event-icon.tsx` (Wave 1a's one event map for the timeline and the bell: looks and glyphs for the two new event types and for a status move that cancelled an order)
@@ -458,8 +458,12 @@ In `src/db/schema.test.ts`:
 ```ts
   // Migration 0012 (locations, editing requests, cancel): one row per
   // Shopify company location and workspace, active unless Shopify dropped
-  // it, and cards that do not know their location yet.
+  // it, cards that do not know their location yet, and connections whose
+  // location sync never ran.
   it("stores company locations once per workspace and starts cards without a location", () => {
+    expect(db.prepare("SELECT locations_synced_at FROM store_connections WHERE workspace_id = ?").get("ws1")).toEqual({
+      locations_synced_at: null,
+    });
     const insert = db.prepare(
       "INSERT INTO locations (id, workspace_id, shopify_location_id, company_id, name, address, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
     );
@@ -478,7 +482,8 @@ In `src/db/schema.test.ts`:
 In `src/server/sync/run.test.ts` (line 2012), rename the test from Wave 1a's `"runs a whole cursor chain on the schema as of migration 0011"` to `"runs a whole cursor chain on the schema as of migration 0012"`, change Wave 1a's `openDb({ through: "0011" })` to `openDb({ through: "0012" })`, and append to its comment:
 
 ```ts
-    // Raised to 0012 by Wave 1b: every order insert names orders.location_id.
+    // Raised to 0012 by Wave 1b: every order insert names orders.location_id
+    // and the whole-row store_connections read names locations_synced_at.
     // DEPLOY NOTE, run `npm run db:migrate:remote` (applies 0012) BEFORE the
     // code that needs it reaches production.
 ```
@@ -561,6 +566,16 @@ Expected: FAIL. `no such table: locations` in the new schema test; the pinned ru
   locationId: text("location_id"),
 ```
 
+- In `store_connections`, after `canonicalShopDomain: text("canonical_shop_domain"),` add (added after the Task 7 review: the daily location sync is timed by this stamp, never by `locations.updated_at`):
+
+```ts
+  // When a company location sync (src/server/sync/locations.ts) last ran,
+  // complete, partial or failed: the cron runs the next one a day later.
+  // Kept apart from locations.updated_at, which webhooks also touch. Null
+  // until the first sync (0012).
+  locationsSyncedAt: integer("locations_synced_at"),
+```
+
 - After the `orders` table add:
 
 ```ts
@@ -568,7 +583,9 @@ Expected: FAIL. `no such table: locations` in the new schema test; the pinned ru
 // section 2), synced by src/server/sync/locations.ts. shopify_location_id
 // and company_id are Shopify legacy ids. active = false: Shopify no longer
 // lists it (kept, so cards still name it). updated_at: when the desk last
-// confirmed the row against Shopify (the daily cron pass reads it).
+// confirmed the row against Shopify (a complete sync deactivates the rows
+// it did not touch); webhooks touch it too, so the cron times the daily
+// sync by store_connections.locations_synced_at instead.
 export const locations = sqliteTable("locations", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id),
@@ -590,7 +607,7 @@ export const locations = sqliteTable("locations", {
       "order_cancelled",
 ```
 
-Generate: `npm run db:generate -- --name locations_edit_cancel`. Review `drizzle/0012_locations_edit_cancel.sql`. It must be exactly a `CREATE TABLE \`locations\`` (with `\`active\` integer DEFAULT true NOT NULL`, which SQLite stores as 1, and the foreign key to workspaces), a `CREATE UNIQUE INDEX \`location_shopify_unique\``, and `ALTER TABLE \`orders\` ADD \`location_id\` text;`. If drizzle-kit wrote a `__new_orders` rebuild instead of the ALTER, stop: replace the rebuild with the single ALTER statement and confirm `npx drizzle-kit check` reports no drift. Do not add the data step yet (Task 3).
+Generate: `npm run db:generate -- --name locations_edit_cancel`. Review `drizzle/0012_locations_edit_cancel.sql`. It must be exactly a `CREATE TABLE \`locations\`` (with `\`active\` integer DEFAULT true NOT NULL`, which SQLite stores as 1, and the foreign key to workspaces), a `CREATE UNIQUE INDEX \`location_shopify_unique\``, `ALTER TABLE \`orders\` ADD \`location_id\` text;` and `ALTER TABLE \`store_connections\` ADD \`locations_synced_at\` integer;`. If drizzle-kit wrote a `__new_orders` rebuild instead of the ALTER, stop: replace the rebuild with the single ALTER statement and confirm `npx drizzle-kit check` reports no drift. Do not add the data step yet (Task 3).
 
 `src/server/desk/statuses.ts`: add `cancelled: "Shopify's cancelled state",` to `LINK_NAMES`, change line 101 to `return \`${position}: the Shopify link must be fulfilled, delivered, draft completed, draft rejected, cancelled or none\`;`, and add to the comment above `SHOPIFY_LINKS`: `cancelled is where Cancel order and Shopify's own cancellations put an order.`
 
@@ -1847,7 +1864,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- src/server/shopify/l
 ### Task 7: Location sync service
 
 **Files:**
-- Create: `src/server/sync/locations.ts`
+- Create: `src/server/sync/locations.ts` (writes and reads `store_connections.locations_synced_at` from Task 2)
 - Create: `src/server/sync/locations.test.ts`
 
 **Step 1: Write the failing test** (`src/server/sync/locations.test.ts`)
@@ -2088,16 +2105,79 @@ describe("backfillLocationIds", () => {
 });
 
 describe("syncLocationsIfDue", () => {
-  it("runs when the workspace has no locations, then once a day", async () => {
+  const MINUTE = 60 * 1000;
+  const HOUR = 60 * MINUTE;
+  const NOT_DUE = { kind: "skipped", reason: "not-due" };
+  const due = (db: Db, shop: { impl: typeof fetch }, at: number) => syncLocationsIfDue(db, env, WS, { fetchImpl: shop.impl, now: () => at });
+  const syncedAt = async (db: Db) =>
+    (await db.select().from(schema.storeConnections).where(eq(schema.storeConnections.workspaceId, WS)))[0]?.locationsSyncedAt;
+
+  it("runs when it never ran, then once a day", async () => {
     const shop = fakeShop(THREE);
     const db = await setup();
-    expect((await syncLocationsIfDue(db, env, WS, { fetchImpl: shop.impl, now: () => NOW })).kind).toBe("ok");
-    expect(await syncLocationsIfDue(db, env, WS, { fetchImpl: shop.impl, now: () => NOW + 3600000 })).toEqual({
-      kind: "skipped",
-      reason: "not-due",
-    });
-    expect((await syncLocationsIfDue(db, env, WS, { fetchImpl: shop.impl, now: () => NOW + LOCATIONS_SYNC_EVERY_MS })).kind).toBe("ok");
-    expect(LOCATIONS_SYNC_EVERY_MS).toBe(24 * 60 * 60 * 1000);
+    expect((await due(db, shop, NOW)).kind).toBe("ok");
+    expect(await syncedAt(db)).toBe(NOW);
+    expect(await due(db, shop, NOW + HOUR)).toEqual(NOT_DUE);
+    expect((await due(db, shop, NOW + LOCATIONS_SYNC_EVERY_MS)).kind).toBe("ok");
+    expect(LOCATIONS_SYNC_EVERY_MS).toBe(24 * HOUR);
+  });
+
+  // The daily sync is the only path that heals a lost webhook, so a webhook
+  // that touches one location never postpones it.
+  it("runs a day after the last sync even when a webhook touched a location since", async () => {
+    const shop = fakeShop(THREE);
+    const db = await setup();
+    expect((await due(db, shop, NOW)).kind).toBe("ok");
+    // 102 is deleted in Shopify and its webhook is lost; 101 is renamed and
+    // its webhook arrives 23 hours after the sync.
+    shop.state.list = [{ id: 101, name: "Buford Main" }, { id: 103, name: "Athens" }];
+    await applyLocationWebhook(db, env, WS, { kind: "location", locationGid: "gid://shopify/CompanyLocation/101" }, { fetchImpl: shop.impl, now: () => NOW + 23 * HOUR });
+    shop.ops.length = 0;
+    expect(await due(db, shop, NOW + 24 * HOUR)).toMatchObject({ kind: "ok", deactivated: 1, complete: true });
+    expect(shop.ops).toEqual(["CompanyLocations"]);
+    expect((await rows(db)).map((row) => [row.shopifyLocationId, row.name, row.active])).toEqual([
+      ["101", "Buford Main", true],
+      ["102", "Mableton", false],
+      ["103", "Athens", true],
+    ]);
+  });
+
+  it("asks a store with no company locations once a day, not on every cron tick", async () => {
+    const shop = fakeShop([]);
+    const db = await setup();
+    expect(await due(db, shop, NOW)).toEqual({ kind: "ok", upserted: 0, deactivated: 0, backfilled: 0, complete: true });
+    expect(await due(db, shop, NOW + 10 * MINUTE)).toEqual(NOT_DUE);
+    expect(await due(db, shop, NOW + 23 * HOUR)).toEqual(NOT_DUE);
+    expect(shop.ops).toEqual(["CompanyLocations"]);
+    expect((await due(db, shop, NOW + 24 * HOUR)).kind).toBe("ok");
+    expect(shop.ops).toEqual(["CompanyLocations", "CompanyLocations"]);
+  });
+
+  it("backs off a day after a failed sync too, while a save or refresh still syncs at once", async () => {
+    const shop = fakeShop(THREE, { failPage: 0 });
+    const db = await setup();
+    expect((await due(db, shop, NOW)).kind).toBe("failed");
+    const askedOnce = shop.ops.length;
+    expect(askedOnce).toBeGreaterThan(0);
+    expect(await due(db, shop, NOW + 10 * MINUTE)).toEqual(NOT_DUE);
+    expect(shop.ops).toHaveLength(askedOnce);
+    // Saving or refreshing the connection calls syncLocations directly.
+    shop.state.failPage = undefined;
+    expect(await syncLocations(db, env, WS, { fetchImpl: shop.impl, now: () => NOW + 20 * MINUTE })).toMatchObject({ kind: "ok", upserted: 3 });
+    expect(await due(db, shop, NOW + 20 * MINUTE + LOCATIONS_SYNC_EVERY_MS - 1)).toEqual(NOT_DUE);
+    expect((await due(db, shop, NOW + 20 * MINUTE + LOCATIONS_SYNC_EVERY_MS)).kind).toBe("ok");
+  });
+
+  it("records nothing while skipped, so the first tick with a companies scope syncs", async () => {
+    const shop = fakeShop(THREE);
+    const db = await setup(["read_orders", "read_customers"]);
+    expect(await due(db, shop, NOW)).toEqual({ kind: "skipped", reason: "no-companies-scope" });
+    expect(await syncedAt(db)).toBeNull();
+    await db
+      .update(schema.storeConnections)
+      .set({ scopes: ["read_orders", "read_customers", "read_companies"] })
+      .where(eq(schema.storeConnections.workspaceId, WS));
+    expect(await due(db, shop, NOW + 10 * MINUTE)).toMatchObject({ kind: "ok", upserted: 3 });
   });
 });
 
@@ -2152,14 +2232,15 @@ Expected: FAIL, `Failed to resolve import "./locations"`.
 // company location of the workspace's store, kept in the locations table so
 // cards name their branch and show its address, and the request editor
 // lists a company's branches. syncLocations runs when the connection is
-// saved or refreshed and from the cron once a day (syncLocationsIfDue); the
+// saved or refreshed and from the cron once a day (syncLocationsIfDue, timed
+// by store_connections.locations_synced_at, never by the rows); the
 // company_locations/* webhooks apply one location at a time. A location
 // Shopify stops listing is kept, inactive, so cards still name it; rows are
 // never deleted. After each sync, cards stored before 0012 get their
 // location by name (backfillLocationIds). Needs a companies scope; never
 // throws. Relative imports on purpose: the cron path bundles this.
 
-import { and, asc, eq, isNull, lt, max, sql, type AnyColumn } from "drizzle-orm";
+import { and, asc, eq, isNull, lt, sql, type AnyColumn } from "drizzle-orm";
 import type { Db } from "../../db";
 import { rowsAffected } from "../../db/batch";
 import { locations, orders, storeConnections } from "../../db/schema";
@@ -2266,11 +2347,38 @@ export async function backfillLocationIds(db: Db, workspaceId: string): Promise<
   return rowsAffected(result, "locations");
 }
 
+// Records that a location sync just ran, so the cron's next one waits a
+// day. Never throws: without the stamp the next tick simply tries again.
+async function stampLocationSync(db: Db, workspaceId: string, at: number): Promise<void> {
+  try {
+    await db.update(storeConnections).set({ locationsSyncedAt: at }).where(eq(storeConnections.workspaceId, workspaceId));
+  } catch (e) {
+    console.warn("[locations] " + JSON.stringify({ workspaceId, stamp: safeErrorReason(e) }));
+  }
+}
+
+// Every run that was not skipped is stamped: complete, partial, or failed
+// (so failures back off a day too; saving or refreshing the connection runs
+// it again at once). A skipped run asked Shopify nothing and is not.
 export async function syncLocations(
   db: Db,
   env: Pick<CloudflareEnv, "ENCRYPTION_KEY">,
   workspaceId: string,
   deps: Deps = {},
+): Promise<LocationSyncResult> {
+  const startedAt = (deps.now ?? Date.now)();
+  const result = await syncLocationsOnce(db, env, workspaceId, deps);
+  if (result.kind !== "skipped") {
+    await stampLocationSync(db, workspaceId, startedAt);
+  }
+  return result;
+}
+
+async function syncLocationsOnce(
+  db: Db,
+  env: Pick<CloudflareEnv, "ENCRYPTION_KEY">,
+  workspaceId: string,
+  deps: Deps,
 ): Promise<LocationSyncResult> {
   try {
     const grant = await grantOf(db, workspaceId);
@@ -2314,8 +2422,11 @@ export async function syncLocations(
   }
 }
 
-// The cron's pass: when the workspace has no locations yet, or its newest
-// confirmation is a day old.
+// The cron's pass: when no location sync has run yet, or the last one ran
+// a day ago. Timed by the connection's stamp, not by
+// locations.updated_at: webhooks touch rows too, and this daily run is the
+// only thing that heals a lost webhook; a store with no company locations
+// has no rows at all and would otherwise be asked on every tick.
 export async function syncLocationsIfDue(
   db: Db,
   env: Pick<CloudflareEnv, "ENCRYPTION_KEY">,
@@ -2323,11 +2434,12 @@ export async function syncLocationsIfDue(
   deps: Deps = {},
 ): Promise<LocationSyncResult> {
   const clock = deps.now ?? Date.now;
-  const newest = await db
-    .select({ at: max(locations.updatedAt) })
-    .from(locations)
-    .where(eq(locations.workspaceId, workspaceId));
-  const at = newest[0]?.at ?? null;
+  const stamped = await db
+    .select({ at: storeConnections.locationsSyncedAt })
+    .from(storeConnections)
+    .where(eq(storeConnections.workspaceId, workspaceId))
+    .limit(1);
+  const at = stamped[0]?.at ?? null;
   if (at !== null && clock() - at < LOCATIONS_SYNC_EVERY_MS) {
     return { kind: "skipped", reason: "not-due" };
   }
@@ -2482,8 +2594,9 @@ Expected: FAIL, `syncLocationsIfDue` and `syncLocations` were never called.
 `src/server/sync/cron.ts`: add `import { syncLocationsIfDue } from "./locations";` and after the roster `try { ... } catch { ... }` block:
 
 ```ts
-    // Company locations (comprehensive design section 2): once a day, or
-    // while the workspace has none; skipped without a companies scope.
+    // Company locations (comprehensive design section 2): once a day after
+    // the last location sync (store_connections.locations_synced_at), and
+    // right away when none ran yet; skipped without a companies scope.
     // Logged as counts only.
     try {
       const synced = await syncLocationsIfDue(db, env, workspaceId, { fetchImpl: opts?.fetchImpl, now: opts?.now });

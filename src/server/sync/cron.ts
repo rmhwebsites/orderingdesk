@@ -76,8 +76,9 @@ export async function runAllSyncs(db: Db, env: CloudflareEnv, opts?: SyncOptions
       console.log("[roster] " + JSON.stringify({ workspaceId, error: e instanceof Error ? e.name : "failed" }));
     }
 
-    // Company locations (comprehensive design section 2): once a day, or
-    // while the workspace has none; skipped without a companies scope.
+    // Company locations (comprehensive design section 2): once a day after
+    // the last location sync (store_connections.locations_synced_at), and
+    // right away when none ran yet; skipped without a companies scope.
     // Logged as counts only.
     try {
       const synced = await syncLocationsIfDue(db, env, workspaceId, { fetchImpl: opts?.fetchImpl, now: opts?.now });

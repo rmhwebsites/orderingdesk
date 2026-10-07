@@ -1340,6 +1340,13 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
+        },
+        "locations_synced_at": {
+          "name": "locations_synced_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         }
       },
       "indexes": {},

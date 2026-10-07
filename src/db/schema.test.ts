@@ -313,8 +313,12 @@ describe("schema migrations", () => {
 
   // Migration 0012 (locations, editing requests, cancel): one row per
   // Shopify company location and workspace, active unless Shopify dropped
-  // it, and cards that do not know their location yet.
+  // it, cards that do not know their location yet, and connections whose
+  // location sync never ran.
   it("stores company locations once per workspace and starts cards without a location", () => {
+    expect(db.prepare("SELECT locations_synced_at FROM store_connections WHERE workspace_id = ?").get("ws1")).toEqual({
+      locations_synced_at: null,
+    });
     const insert = db.prepare(
       "INSERT INTO locations (id, workspace_id, shopify_location_id, company_id, name, address, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
     );

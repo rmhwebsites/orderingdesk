@@ -2024,7 +2024,8 @@ describe("runSync", () => {
     // neither). DEPLOY NOTE, run `npm run db:migrate:remote` (applies 0011)
     // BEFORE the code that needs it reaches production. Raise the number
     // again only together with a deploy note like this one.
-    // Raised to 0012 by Wave 1b: every order insert names orders.location_id.
+    // Raised to 0012 by Wave 1b: every order insert names orders.location_id
+    // and the whole-row store_connections read names locations_synced_at.
     // DEPLOY NOTE, run `npm run db:migrate:remote` (applies 0012) BEFORE the
     // code that needs it reaches production.
     const { db, env } = openDb({ through: "0012" });
