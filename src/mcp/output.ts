@@ -4,9 +4,10 @@
 // reasons, request fields, personalization, timeline entries) is wrapped as
 // { untrusted: "..." } so the chat app's model reads it as data. Every
 // string loses control and invisible characters, HTML tags, markdown images
-// and links, and every link that is not a Shopify CDN file (the
-// personalizer's proofs live there). Errors are { error: { code, message,
-// retryable } } with isError set.
+// and links (inline or by reference, and the reference definitions behind
+// them), and every link that is not a Shopify CDN file (the personalizer's
+// proofs live there). Errors are { error: { code, message, retryable } }
+// with isError set.
 // Relative imports only: custom-worker.ts bundles src/mcp.
 
 export const TEXT_MAX = 500;
@@ -21,10 +22,26 @@ export const NAME_MAX = 120;
 // point (soft hyphen, variation selectors, Hangul fillers), and the line and
 // paragraph separators.
 const HIDDEN = /[^\P{C}\t\n]|[\p{Default_Ignorable_Code_Point}\u{2028}\u{2029}]/gu;
+const TAG = /<\/?[a-z][^>]*>/gi;
 const MD_IMAGE = /!\[([^\]]*)\]\([^)]*\)/g;
 const MD_LINK = /\[([^\]]*)\]\([^)]*\)/g;
-const TAG = /<\/?[a-z][^>]*>/gi;
-const URL_LIKE = /\b(?:https?:\/\/|www\.|javascript:|mailto:|ftp:\/\/|data:[a-z]+\/)[^\s<>"']*/gi;
+// The address of an inline link or image the two above miss (brackets
+// inside its text): an inline link needs "](" right after its text.
+const MD_ADDRESS = /\](?:\([^)]*\))+/g;
+// "[text][label]", "[text][]" and "![alt][label]" become their text.
+const MD_REFERENCE = /!?\[((?:[^[\]\\]|\\[\s\S])*)\]\[(?:[^[\]\\]|\\[\s\S])*\]/g;
+// A reference definition ("[label]: address", at the start of a line, in a
+// quote or in a list) makes "[label]" and "![label]" a link or an image
+// anywhere in the text, and it needs "]:" right after its label. Every
+// "[label]:" loses its brackets, then any "]:" still left (nested brackets)
+// loses the "]", so no definition survives.
+const MD_DEFINITION = /\[((?:[^[\]\\]|\\[\s\S])*)\]:/g;
+const MD_DEFINITION_LEFT = /\]+:/g;
+// Schemes match anywhere (GFM links a URL right after "_" or "*"), "www."
+// where no letter or digit comes before it, and an address without a scheme
+// ("//host.name/x") where it is not part of a longer one.
+const URL_LIKE =
+  /(?:https?:\/\/|ftp:\/\/|javascript:|mailto:|xmpp:|data:[a-z]+\/|(?<![a-z0-9])www\.|(?<![a-z0-9:/])\/\/[^\s/<>"']+\.)[^\s<>"']*/gi;
 const SHOPIFY_CDN = "https://cdn.shopify.com/";
 
 // A carriage return becomes a line feed (alone it is a line break too), then
@@ -40,10 +57,15 @@ export function plainText(value: unknown, max = TEXT_MAX): string {
   if (typeof value !== "string") {
     return "";
   }
+  // Tags go first, so removing one cannot join the parts of a link.
   const text = withoutHidden(value)
+    .replace(TAG, "")
     .replace(MD_IMAGE, "$1")
     .replace(MD_LINK, "$1")
-    .replace(TAG, "")
+    .replace(MD_ADDRESS, "]")
+    .replace(MD_REFERENCE, "$1")
+    .replace(MD_DEFINITION, "$1:")
+    .replace(MD_DEFINITION_LEFT, ":")
     .replace(URL_LIKE, (url) => (url.startsWith(SHOPIFY_CDN) ? url : "[link removed]"))
     .replace(/[ \t]+/g, " ")
     .replace(/ *\n */g, "\n")
