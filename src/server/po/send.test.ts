@@ -535,3 +535,13 @@ describe("failures are never silent", () => {
     });
   });
 });
+
+describe("sending and the search index", () => {
+  it("makes the order findable by the PO number its first send minted", async () => {
+    const result = await send(await confirmed());
+    expect(result.kind).toBe("sent");
+    const number = (await row()).poNumber.toLowerCase();
+    const [search] = await db.select().from(schema.orderSearch).where(eq(schema.orderSearch.orderId, ORDER));
+    expect(search.haystack).toContain(number);
+  });
+});

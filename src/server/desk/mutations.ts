@@ -10,6 +10,7 @@ import { events, orders, statuses } from "@/db/schema";
 import { NOTE_MAX } from "@/lib/limits";
 import type { Role } from "@/lib/roles";
 import { BULK_STATUS_MAX, checkStatusMove } from "@/lib/status-rules";
+import { safeIndexOrders } from "@/server/search/index-orders";
 import { eventView, isRecord, type EventView } from "./shapes";
 
 // Shared with the note composer (src/lib/limits.ts).
@@ -157,6 +158,7 @@ export async function changeOrderStatus(
   if (rowsAffected(updateResult, "desk") === 0) {
     return { kind: "invalid", error: "Unknown status for this workspace" };
   }
+  await safeIndexOrders(db, ctx.workspaceId, [order.id]);
 
   return {
     kind: "changed",
@@ -334,5 +336,6 @@ export async function changeOrderStatuses(db: Db, ctx: BulkContext, body: unknow
     });
     triggersPo ||= target.triggersPo && order.shopifyOrderId !== null;
   });
+  await safeIndexOrders(db, ctx.workspaceId, changed.map((entry) => entry.order.id));
   return { kind: "ok", statusLabel: target.label, results, changed, triggersPo };
 }

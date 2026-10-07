@@ -64,6 +64,7 @@ import {
   fetchDraftNode,
   type DraftForApprove,
 } from "@/server/shopify/admin";
+import { safeIndexOrders } from "@/server/search/index-orders";
 import { pushAndShare, shareShopifyMoves } from "@/server/shopify/fanout";
 import { normalizeDrafts, type NormalizedDraft } from "@/server/shopify/normalize";
 import { evaluateShopifyTransitions, safeErrorReason, type StatusChange } from "@/server/shopify/status-sync";
@@ -307,7 +308,18 @@ type Completion = { orderId: string; orderName: string | null; completedDraft?: 
 // ---------------------------------------------------------------------------
 // Approve
 
+// Approve, then the card's search row (it is an order now, in the
+// approved status). The order snapshot written after the response is
+// indexed by upsertFetchedOrder.
 export async function approveRequest(db: Db, ctx: ReviewContext, deps: ReviewDeps): Promise<ApproveResult> {
+  const result = await decideApproval(db, ctx, deps);
+  if (result.kind === "approved" || result.kind === "completed-in-shopify") {
+    await safeIndexOrders(db, ctx.workspaceId, [ctx.orderId]);
+  }
+  return result;
+}
+
+async function decideApproval(db: Db, ctx: ReviewContext, deps: ReviewDeps): Promise<ApproveResult> {
   const clock = deps.now ?? Date.now;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const card = await loadCard(db, ctx.workspaceId, ctx.orderId);
@@ -657,7 +669,21 @@ async function followShopifyCompletion(
 // ---------------------------------------------------------------------------
 // Reject
 
+// Reject, then the card's search row.
 export async function rejectRequest(
+  db: Db,
+  ctx: ReviewContext,
+  body: unknown,
+  deps: Pick<ReviewDeps, "now">,
+): Promise<RejectResult> {
+  const result = await decideRejection(db, ctx, body, deps);
+  if (result.kind === "rejected") {
+    await safeIndexOrders(db, ctx.workspaceId, [ctx.orderId]);
+  }
+  return result;
+}
+
+async function decideRejection(
   db: Db,
   ctx: ReviewContext,
   body: unknown,

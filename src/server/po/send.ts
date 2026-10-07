@@ -37,6 +37,7 @@ import { events, orders, purchaseOrders } from "@/db/schema";
 import { brandHex } from "@/lib/branding";
 import { sameRecipients, subtotalCents, type PoRecipients } from "@/lib/po";
 import { eventView, isRecord, type EventView } from "@/server/desk/shapes";
+import { safeIndexOrders } from "@/server/search/index-orders";
 import { sendEmail, senderFor } from "@/server/email/send";
 import { loadMailWorkspace } from "@/server/email/workspace";
 import type { PoSentNotice } from "@/server/notify";
@@ -274,6 +275,8 @@ export async function sendPurchaseOrder(
     } catch (e) {
       throw new SendFailure(e instanceof PoNumberError ? e.message : plainReason("No purchase order number could be assigned", e));
     }
+    // The minted number is part of the order's search text.
+    await safeIndexOrders(db, ctx.workspaceId, [row.orderId]);
 
     // A resend carries the PDF the vendor already has; anything else is
     // rendered now (a failed PO may have been edited since).

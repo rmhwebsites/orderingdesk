@@ -3,6 +3,8 @@ import { asc, eq } from "drizzle-orm";
 import type { Db } from "../../db";
 import * as schema from "../../db/schema";
 import { encryptSecret } from "../crypto";
+import { indexOrders } from "../search/index-orders";
+import type { CompanyLocationRecord } from "../shopify/locations";
 import { draftSnapshotOf, openTestDb, seedDraft, seedLocation, seedOrder, seedWorkspace, snapshotOf } from "../desk/test-helpers";
 import {
   LOCATIONS_SYNC_EVERY_MS,
@@ -12,6 +14,7 @@ import {
   listLocations,
   syncLocations,
   syncLocationsIfDue,
+  upsertLocation,
 } from "./locations";
 
 // The locations table (comprehensive design section 2) against the real
@@ -344,5 +347,19 @@ describe("applyLocationWebhook", () => {
     await applyLocationWebhook(db, env, WS, { kind: "location", locationGid: "gid://shopify/CompanyLocation/104" }, { fetchImpl: shop.impl, now: () => NOW });
     expect(await rows(db)).toEqual([]);
     expect(shop.ops).toEqual([]);
+  });
+});
+
+describe("upsertLocation and the search index", () => {
+  it("rewrites the haystack of the cards at a renamed location", async () => {
+    const { db } = openTestDb();
+    await seedWorkspace(db, WS);
+    await seedLocation(db, WS, { shopifyLocationId: "101", name: "North Yard" });
+    await seedOrder(db, WS, { id: "o1" });
+    await db.update(schema.orders).set({ locationId: "101" }).where(eq(schema.orders.id, "o1"));
+    await indexOrders(db, WS, ["o1"]);
+    await upsertLocation(db, WS, { shopifyLocationId: "101", companyId: "7", name: "North Yard Annex", address: null } as CompanyLocationRecord, 5);
+    const [row] = await db.select().from(schema.orderSearch).where(eq(schema.orderSearch.orderId, "o1"));
+    expect(row.haystack).toContain("north yard annex");
   });
 });

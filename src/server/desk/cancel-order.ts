@@ -41,6 +41,7 @@ import {
   fetchOrderNode,
   type OrderCancelState,
 } from "@/server/shopify/admin";
+import { safeIndexOrders } from "@/server/search/index-orders";
 import { pushAndShare, shareShopifyMoves } from "@/server/shopify/fanout";
 import { normalizeOrders } from "@/server/shopify/normalize";
 import { applyShopifyMove, loadStatusRows, safeErrorReason, type StatusChange } from "@/server/shopify/status-sync";
@@ -119,7 +120,18 @@ function refusalText(detail: string, state: OrderCancelState): string {
     : `Shopify did not cancel the order (Shopify said: ${said}). Nothing changed.`;
 }
 
+// Cancel, then the card's search row (it is in the cancelled status now,
+// also when Shopify had cancelled the order first). The order snapshot
+// written after the response is indexed by upsertFetchedOrder.
 export async function cancelOrder(db: Db, ctx: ReviewContext, body: unknown, deps: ReviewDeps): Promise<CancelResult> {
+  const result = await decideCancellation(db, ctx, body, deps);
+  if (result.kind === "cancelled" || (result.kind === "cancelled-in-shopify" && result.change)) {
+    await safeIndexOrders(db, ctx.workspaceId, [ctx.orderId]);
+  }
+  return result;
+}
+
+async function decideCancellation(db: Db, ctx: ReviewContext, body: unknown, deps: ReviewDeps): Promise<CancelResult> {
   const clock = deps.now ?? Date.now;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const raw = isRecord(body) ? body.reason : undefined;

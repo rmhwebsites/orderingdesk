@@ -6,6 +6,7 @@ import { encryptSecret } from "@/server/crypto";
 import { NOTE_MAX } from "@/lib/limits";
 import { CANCEL_COPY, cancelOrder, followCancellation } from "./cancel-order";
 import { applyShopifyMove, loadStatusRows } from "@/server/shopify/status-sync";
+import { indexOrders } from "@/server/search/index-orders";
 import { REVIEW_READY_TRIES, type ReviewDeps } from "./review";
 import { openTestDb, seedCancelledStatus, seedDraft, seedWorkspace, snapshotOf } from "./test-helpers";
 
@@ -481,5 +482,25 @@ describe("followCancellation", () => {
     const { live, kinds } = liveEnv();
     await followCancellation(db, live, WS, "o1", result, { fetchImpl: shop.impl, now: () => NOW + 1000 });
     expect(kinds()).toEqual(expect.arrayContaining(["order.status:status", "order.note:note"]));
+  });
+});
+
+describe("cancelOrder and the search index", () => {
+  it("moves the card's search row to Cancelled with the card", async () => {
+    const db = await setup();
+    await indexOrders(db, WS, ["o1"]);
+    const shop = fakeShop();
+    expect((await cancelOrder(db, ctx(), { reason: "Duplicate order" }, deps(shop.impl))).kind).toBe("cancelled");
+    const [row] = await db.select().from(schema.orderSearch).where(eq(schema.orderSearch.orderId, "o1"));
+    expect(row).toMatchObject({ statusKey: "cancelled", closed: 1, statusSetAt: NOW });
+  });
+
+  it("moves it too when Shopify had already cancelled the order", async () => {
+    const db = await setup();
+    await indexOrders(db, WS, ["o1"]);
+    const shop = fakeShop({ cancelledAt: "2026-10-06T14:00:00Z" });
+    expect((await cancelOrder(db, ctx(), { reason: "Duplicate order" }, deps(shop.impl))).kind).toBe("cancelled-in-shopify");
+    const [row] = await db.select().from(schema.orderSearch).where(eq(schema.orderSearch.orderId, "o1"));
+    expect(row).toMatchObject({ statusKey: "cancelled", closed: 1, statusSetAt: NOW });
   });
 });

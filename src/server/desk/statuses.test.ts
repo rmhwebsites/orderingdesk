@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { asc, eq } from "drizzle-orm";
 import type { Db } from "@/db";
 import * as schema from "@/db/schema";
+import { indexOrders } from "@/server/search/index-orders";
 import { STATUS_COLORS, STATUS_LABEL_MAX, STATUS_LIST_MAX, replaceStatuses } from "./statuses";
 import { openTestDb, seedOrder, seedWorkspace, withBatch } from "./test-helpers";
 
@@ -223,8 +224,9 @@ describe("replaceStatuses", () => {
     ]);
     expect(result.kind).toBe("ok");
     expect(batched).toHaveLength(1);
-    // The guarded delete, the survivor re-sort, two updates and one insert.
-    expect(batched[0]).toHaveLength(5);
+    // The guarded delete, the survivor re-sort, two updates, one insert and
+    // the search rows' closed flags.
+    expect(batched[0]).toHaveLength(6);
     expect((await statusRows(db)).map((row) => row.key)).toEqual([
       "new",
       "approved",
@@ -501,5 +503,21 @@ describe("replaceStatuses", () => {
       ["new", false],
       ["cancelled", true],
     ]);
+  });
+});
+
+describe("replaceStatuses and the search index", () => {
+  it("keeps the closed flag of every search row in step with its status", async () => {
+    const { db } = openTestDb();
+    await seedWorkspace(db, "ws_impact");
+    await seedOrder(db, "ws_impact", { id: "o1", statusKey: "shipped" });
+    await indexOrders(db, "ws_impact", ["o1"]);
+    const rows = await db.select().from(schema.statuses).where(eq(schema.statuses.workspaceId, "ws_impact")).orderBy(asc(schema.statuses.sort));
+    const body = (closedKey: string | null) =>
+      rows.map((status) => ({ key: status.key, label: status.label, color: status.color, triggersPo: status.triggersPo, closed: status.key === closedKey }));
+    expect((await replaceStatuses(db, "ws_impact", body("shipped"))).kind).toBe("ok");
+    expect((await db.select().from(schema.orderSearch))[0].closed).toBe(1);
+    expect((await replaceStatuses(db, "ws_impact", body(null))).kind).toBe("ok");
+    expect((await db.select().from(schema.orderSearch))[0].closed).toBe(0);
   });
 });

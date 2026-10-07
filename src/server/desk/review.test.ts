@@ -731,6 +731,15 @@ describe("approveRequest", () => {
     expect(events.filter((event) => event.type === "draft_completed")).toHaveLength(1);
     expect((await row(db)).statusSetBy).toBe("u_other");
   });
+
+  it("leaves the search row showing the order the request became", async () => {
+    const { db } = await setup();
+    await approveRequest(db, ctx(), deps(fakeShop()));
+    const [row] = await db.select().from(schema.orderSearch).where(eq(schema.orderSearch.orderId, "d1"));
+    expect(row).toMatchObject({ kind: "order", statusKey: "approved", statusSetAt: NOW });
+    expect(row.haystack).toContain("#1234");
+    expect(row.haystack).toContain("#d12");
+  });
 });
 
 describe("rejectRequest", () => {
@@ -801,6 +810,13 @@ describe("rejectRequest", () => {
   it("records the team's decision on a draft Shopify already deleted", async () => {
     const { db } = await setup({ deleted: true });
     expect((await rejectRequest(db, ctx(), { reason: "Gone anyway" }, deps(fakeShop()))).kind).toBe("rejected");
+  });
+
+  it("leaves the search row in Rejected", async () => {
+    const { db } = await setup();
+    await rejectRequest(db, ctx(), { reason: "Not in the budget." }, deps(fakeShop()));
+    const [row] = await db.select().from(schema.orderSearch).where(eq(schema.orderSearch.orderId, "d1"));
+    expect(row).toMatchObject({ kind: "draft", statusKey: "rejected" });
   });
 });
 

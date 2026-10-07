@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { eq } from "drizzle-orm";
 import type { Db } from "@/db";
 import * as schema from "@/db/schema";
+import { indexOrders } from "@/server/search/index-orders";
 import { NOTE_MAX, addOrderNote, changeOrderStatus, changeOrderStatuses } from "./mutations";
 import {
   openTestDb,
@@ -99,8 +100,11 @@ describe("changeOrderStatus", () => {
     const batched: unknown[][] = [];
     const result = await changeOrderStatus(withBatch(db, batched), ctx(), { statusKey: "shipped" });
     expect(result.kind).toBe("changed");
-    expect(batched).toHaveLength(1);
+    // The status write, then the search index's own batch (the card's
+    // search row; its snapshot names no customer, so no people upsert).
+    expect(batched).toHaveLength(2);
     expect(batched[0]).toHaveLength(2);
+    expect(batched[1]).toHaveLength(1);
     expect((await orderRow(db, "o1")).statusKey).toBe("shipped");
     expect(await eventsOf(db)).toHaveLength(1);
   });
@@ -378,8 +382,11 @@ describe("changeOrderStatuses (bulk)", () => {
       { orderId: "o1", name: "#1001", outcome: "changed" },
       { orderId: "o2", name: "#1002", outcome: "changed" },
     ]);
-    expect(record).toHaveLength(1);
+    // The status writes, then the search index's own batch (one search row
+    // per changed card).
+    expect(record).toHaveLength(2);
     expect(record[0]).toHaveLength(4);
+    expect(record[1]).toHaveLength(2);
     expect((await orderRow(db, "o2")).statusKey).toBe("shipped");
     expect((await orderRow(db, "o2")).statusSetBy).toBe(USER);
     const entries = (await eventsOf(db)).map((entry) => [entry.orderId, entry.text, entry.meta]);
@@ -448,5 +455,26 @@ describe("changeOrderStatuses (bulk)", () => {
     const db = await setup();
     const result = await changeOrderStatuses(db, bulk(), { orderIds: ["o1"], statusKey: "approved" });
     expect(result).toMatchObject({ kind: "ok", triggersPo: true });
+  });
+
+  it("moves every changed card's search row with it", async () => {
+    const db = await setup();
+    await seedOrder(db, WS, { id: "o2", name: "#1002" });
+    await indexOrders(db, WS, ["o1", "o2"]);
+    const result = await changeOrderStatuses(db, bulk(), { orderIds: ["o1", "o2"], statusKey: "processing" });
+    expect(result.kind).toBe("ok");
+    const rows = await db.select().from(schema.orderSearch).where(eq(schema.orderSearch.workspaceId, WS));
+    expect(rows.map((row) => row.statusKey).sort()).toEqual(["processing", "processing"]);
+  });
+});
+
+describe("changeOrderStatus and the search index", () => {
+  it("moves the card's search row with its status", async () => {
+    const db = await setup();
+    await indexOrders(db, WS, ["o1"]);
+    const result = await changeOrderStatus(db, ctx(), { statusKey: "processing" });
+    expect(result.kind).toBe("changed");
+    const [row] = await db.select().from(schema.orderSearch).where(eq(schema.orderSearch.orderId, "o1"));
+    expect(row).toMatchObject({ statusKey: "processing", statusSetAt: NOW });
   });
 });

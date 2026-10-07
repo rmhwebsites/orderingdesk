@@ -17,6 +17,7 @@ import { locations, orders, storeConnections } from "../../db/schema";
 import { readLocationAddress, type LocationAddress } from "../../lib/address";
 import { companiesEnabled, failureText } from "../shopify/admin";
 import { fetchCompanyLocation, fetchCompanyLocations, type CompanyLocationRecord } from "../shopify/locations";
+import { reindexLocation } from "../search/index-orders";
 import { companyLocationIdOf } from "../shopify/normalize";
 import { safeErrorReason } from "../shopify/status-sync";
 import { getAccessToken } from "../shopify/token";
@@ -61,7 +62,14 @@ async function grantOf(db: Db, workspaceId: string): Promise<{ scopes: string[] 
   return row && row.status !== "disabled" ? { scopes: Array.isArray(row.scopes) ? row.scopes : null } : null;
 }
 
+// A renamed location rewrites the search text of the cards shipping there
+// (its name is in their haystack).
 export async function upsertLocation(db: Db, workspaceId: string, record: CompanyLocationRecord, now: number): Promise<void> {
+  const before = await db
+    .select({ name: locations.name })
+    .from(locations)
+    .where(and(eq(locations.workspaceId, workspaceId), eq(locations.shopifyLocationId, record.shopifyLocationId)))
+    .limit(1);
   await db
     .insert(locations)
     .values({
@@ -78,6 +86,9 @@ export async function upsertLocation(db: Db, workspaceId: string, record: Compan
       target: [locations.workspaceId, locations.shopifyLocationId],
       set: { companyId: record.companyId, name: record.name, address: record.address, active: true, updatedAt: now },
     });
+  if (before[0] && before[0].name !== record.name) {
+    await reindexLocation(db, workspaceId, record.shopifyLocationId);
+  }
 }
 
 export async function deactivateLocation(db: Db, workspaceId: string, shopifyLocationId: string, now: number): Promise<void> {

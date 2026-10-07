@@ -10,6 +10,7 @@ import type { Db } from "@/db";
 import { applyBatch } from "@/db/batch";
 import { orders, SHOPIFY_LINK_VALUES, statuses } from "@/db/schema";
 import { SHOPIFY_TAG_MAX, STATUS_LABEL_MAX, STATUS_TAG_PREFIX } from "@/lib/status-label";
+import { closedFlagsStatement } from "@/server/search/index-orders";
 import { isRecord, statusView, type StatusView } from "./shapes";
 
 // Design token names; Phase 5 defines a light and a dark value for each. The
@@ -317,6 +318,9 @@ export async function replaceStatuses(
       );
     }
   });
+  // A closed flag may have changed: the search rows follow in the same
+  // batch.
+  statements.push(closedFlagsStatement(db, workspaceId));
   await applyBatch(db, statements);
 
   const rows = await listStatuses(db, workspaceId);
