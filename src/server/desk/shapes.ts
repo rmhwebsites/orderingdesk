@@ -2,7 +2,8 @@
 // the desk UI against these, so change them deliberately.
 
 import type { events, ShopifyLinkValue, statuses, workspaceSettings } from "@/db/schema";
-import { DEFAULT_TIME_ZONE, isTimeZone } from "@/lib/date-range";
+// Relative: the cron bundle reaches this module (notify, status and draft sync).
+import { DEFAULT_TIME_ZONE, isTimeZone } from "../../lib/date-range";
 
 export type StatusView = {
   key: string;
