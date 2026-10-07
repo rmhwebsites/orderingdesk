@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { errorResult, okResult, personLabel, plainText, untrusted } from "./output";
+import { describe, it, expect, vi } from "vitest";
+import { INPUT_MAX, LONG_TEXT_MAX, TEXT_MAX, errorResult, okResult, personLabel, plainText, untrusted } from "./output";
 
 // Prompt injection defenses for text returned to a chat app (design section
 // 4): no links, images, HTML or invisible characters, length caps, and
@@ -63,6 +63,35 @@ describe("plainText", () => {
     expect(long.endsWith("...")).toBe(true);
     expect(plainText(42)).toBe("");
     expect(plainText(null)).toBe("");
+  });
+
+  // Several patterns backtrack, so their time grows with the square of the
+  // length on text built to defeat them ("[" or "<a" thousands of times, no
+  // closing bracket). Only the start of a long value goes through them, and
+  // the result says it was cut.
+  it("reads only the start of a very long value, stays fast on text built to backtrack, and marks the cut", () => {
+    const replace = vi.spyOn(String.prototype, "replace");
+    try {
+      for (const unit of ["[", "![", "<a", "](", "\\[", "<a![\\[("]) {
+        const started = performance.now();
+        const text = plainText(unit.repeat(200000), LONG_TEXT_MAX);
+        expect(performance.now() - started, unit).toBeLessThan(200);
+        expect(text.length, unit).toBeLessThanOrEqual(LONG_TEXT_MAX);
+        expect(text.endsWith("..."), unit).toBe(true);
+      }
+      const read = replace.mock.contexts.map((value) => String(value).length);
+      expect(Math.max(...read)).toBeLessThanOrEqual(INPUT_MAX);
+    } finally {
+      replace.mockRestore();
+    }
+    expect(plainText("x".repeat(INPUT_MAX + 1), LONG_TEXT_MAX)).toHaveLength(LONG_TEXT_MAX);
+    expect(plainText("<b>".repeat(INPUT_MAX) + "Rush order", LONG_TEXT_MAX)).not.toContain("Rush");
+    // At most INPUT_MAX characters, and at most 8 for each one returned.
+    expect(plainText("​".repeat(INPUT_MAX + 1), LONG_TEXT_MAX)).toBe("");
+    expect(plainText("Rush " + "​".repeat(INPUT_MAX - 4), LONG_TEXT_MAX)).toBe("Rush...");
+    expect(plainText("Rush " + "​".repeat(INPUT_MAX - 5), LONG_TEXT_MAX)).toBe("Rush");
+    expect(plainText("Rush " + "​".repeat(TEXT_MAX * 8 - 4))).toBe("Rush...");
+    expect(plainText("Rush " + "​".repeat(TEXT_MAX * 8 - 5))).toBe("Rush");
   });
 
   // Text a person cannot see in the app but a chat app's model reads: the
