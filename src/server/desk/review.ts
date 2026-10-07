@@ -174,7 +174,7 @@ type Card = DraftRow & {
 
 type StatusInfo = { key: string; label: string; triggersPo: boolean };
 
-type Access = { shopDomain: string; token: string; fetchImpl: typeof fetch };
+export type Access = { shopDomain: string; token: string; fetchImpl: typeof fetch };
 
 const refused = <S extends 409 | 502>(status: S, error: string) => ({ kind: "refused" as const, status, error });
 
@@ -206,12 +206,12 @@ async function loadCard(db: Db, workspaceId: string, orderId: string): Promise<C
   return rows[0];
 }
 
-// The status linked to a draft outcome (the first by sort; the statuses
-// editor allows one).
-async function linkedStatus(
+// The status linked to a draft outcome or to Shopify's cancelled state (the
+// first by sort; the statuses editor allows one).
+export async function linkedStatus(
   db: Db,
   workspaceId: string,
-  link: "draft_completed" | "draft_rejected",
+  link: "draft_completed" | "draft_rejected" | "cancelled",
 ): Promise<StatusInfo | undefined> {
   const rows = await db
     .select({ key: statuses.key, label: statuses.label, triggersPo: statuses.triggersPo })
@@ -222,10 +222,10 @@ async function linkedStatus(
   return rows[0];
 }
 
-// The acting person's name for the entries Approve and Reject return and
-// broadcast: open desks know only workspace members, and a platform admin
-// who is not one would otherwise read as a former member.
-async function actorNameOf(db: Db, userId: string): Promise<string | null> {
+// The acting person's name for the entries Approve, Reject and Cancel
+// return and broadcast: open desks know only workspace members, and a
+// platform admin who is not one would otherwise read as a former member.
+export async function actorNameOf(db: Db, userId: string): Promise<string | null> {
   const rows = await db.select({ name: user.name, email: user.email }).from(user).where(eq(user.id, userId)).limit(1);
   return rows[0] ? personName(rows[0].name, rows[0].email) : null;
 }
@@ -239,7 +239,7 @@ async function draftsOn(db: Db, workspaceId: string): Promise<boolean> {
   return draftsEnabled(rows[0]?.scopes);
 }
 
-async function shopifyAccess(
+export async function shopifyAccess(
   db: Db,
   workspaceId: string,
   deps: ReviewDeps,
