@@ -235,3 +235,55 @@ export async function call(tool: ToolDef, args: Record<string, unknown>, deps: T
   // eslint-free any: tests read nested fields freely.
   return { result, data: result.structuredContent as Record<string, any> };
 }
+
+// A draft as Shopify returns it in the sync's selection (DRAFT_FIELDS).
+export function draftNode(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const money = (amount: string) => ({ shopMoney: { amount, currencyCode: "USD" } });
+  return {
+    id: "gid://shopify/DraftOrder/12",
+    legacyResourceId: "12",
+    name: "#D12",
+    status: "OPEN",
+    createdAt: "2026-10-07T14:00:00Z",
+    updatedAt: "2026-10-07T14:00:00Z",
+    completedAt: null,
+    email: "jordan@example.com",
+    tags: [],
+    note2: "",
+    poNumber: null,
+    discountCodes: [],
+    customAttributes: [],
+    order: null,
+    customer: { firstName: "Jordan", lastName: "Vale", displayName: "Jordan Vale", email: "jordan@example.com" },
+    purchasingEntity: {
+      __typename: "PurchasingCompany",
+      company: { id: "gid://shopify/Company/7", name: "Example Rentals" },
+      location: { id: "gid://shopify/CompanyLocation/101", name: "North Yard" },
+    },
+    shippingAddress: null,
+    appliedDiscount: null,
+    totalPriceSet: money("0.0"),
+    subtotalPriceSet: money("0.0"),
+    totalDiscountsSet: money("0.0"),
+    lineItems: {
+      nodes: [{ title: "Business cards", quantity: 1, sku: "BC-1", variantTitle: null, custom: false, customAttributes: [], originalUnitPriceSet: { shopMoney: { amount: "0.0" } } }],
+      pageInfo: { hasNextPage: false },
+    },
+    ...overrides,
+  };
+}
+
+// The approve pre-check's answer (DRAFT_BEFORE_APPROVE_QUERY).
+export function beforeApprove(total = "0.0", status = "OPEN"): Record<string, unknown> {
+  return {
+    draftOrder: {
+      id: "gid://shopify/DraftOrder/12",
+      name: "#D12",
+      status,
+      ready: true,
+      completedAt: null,
+      order: null,
+      totalPriceSet: { shopMoney: { amount: total, currencyCode: "USD" } },
+    },
+  };
+}
