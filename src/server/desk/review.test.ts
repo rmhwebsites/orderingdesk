@@ -740,6 +740,16 @@ describe("approveRequest", () => {
     expect(row.haystack).toContain("#1234");
     expect(row.haystack).toContain("#d12");
   });
+
+  it("records source ai and the app on the approval entry when approved through an AI app", async () => {
+    const { db } = await setup();
+    expect((await approveRequest(db, { ...ctx(), via: { client: "chatgpt" } }, deps(fakeShop()))).kind).toBe("approved");
+    const events = await eventsOf(db);
+    const status = events.find((event) => event.type === "status");
+    expect(status?.source).toBe("ai");
+    expect(status?.meta).toMatchObject({ action: "approve", ai: { client: "chatgpt" } });
+    expect(events.find((event) => event.type === "draft_completed")?.source).toBe("app");
+  });
 });
 
 describe("rejectRequest", () => {
@@ -817,6 +827,18 @@ describe("rejectRequest", () => {
     await rejectRequest(db, ctx(), { reason: "Not in the budget." }, deps(fakeShop()));
     const [row] = await db.select().from(schema.orderSearch).where(eq(schema.orderSearch.orderId, "d1"));
     expect(row).toMatchObject({ kind: "draft", statusKey: "rejected" });
+  });
+
+  it("records source ai and the app on both entries when rejected through an AI app", async () => {
+    const { db } = await setup();
+    await rejectRequest(db, { ...ctx(), via: { client: "claude" } }, { reason: "Not this quarter" }, deps(fakeShop()));
+    const events = await eventsOf(db);
+    expect(events.map((event) => [event.type, event.source, (event.meta as { ai?: unknown }).ai])).toEqual(
+      expect.arrayContaining([
+        ["status", "ai", { client: "claude" }],
+        ["note", "ai", { client: "claude" }],
+      ]),
+    );
   });
 });
 

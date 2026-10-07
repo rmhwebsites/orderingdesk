@@ -591,4 +591,13 @@ describe("editRequest", () => {
     expect(await editRequest(other, ctx(), body(), deps(busy.impl))).toMatchObject({ kind: "edited", warning: EDIT_REFUSALS.calculating });
     expect(busy.ops().filter((op) => op === "DraftBeforeApprove")).toHaveLength(1 + REVIEW_READY_TRIES);
   });
+
+  it("records source ai and the app when edited through an AI app", async () => {
+    const db = await setup();
+    const result = await editRequest(db, { ...ctx(), via: { client: "claude-code" } }, body(), deps(fakeShop().impl));
+    expect(result).toMatchObject({ kind: "edited", event: { type: "draft_edited", source: "ai" } });
+    const entry = (await timeline(db)).find((event) => event.type === "draft_edited");
+    expect(entry?.source).toBe("ai");
+    expect(entry?.meta).toMatchObject({ ai: { client: "claude-code" } });
+  });
 });

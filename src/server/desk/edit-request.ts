@@ -26,6 +26,7 @@ import { events, orders, storeConnections } from "@/db/schema";
 import { addressBlock, oneLineAddress, type LocationAddress } from "@/lib/address";
 import { formatMoney } from "@/lib/format";
 import { roleAtLeast } from "@/lib/roles";
+import { eventSource, withVia } from "@/lib/via";
 import {
   EDIT_LINES_MAX,
   editLanded,
@@ -426,9 +427,9 @@ export async function editRequest(db: Db, ctx: ReviewContext, body: unknown, dep
     type: "draft_edited" as const,
     text: `Edited the request: ${summary.changes.join("; ")}`.slice(0, EVENT_TEXT_MAX),
     actorId: ctx.userId,
-    meta: { changes: summary.changes, before: summary.before, after: summary.after },
+    meta: withVia({ changes: summary.changes, before: summary.before, after: summary.after }, ctx.via),
     createdAt: now,
-    source: "app" as const,
+    source: eventSource(ctx.via),
   };
   await db.insert(events).values(event);
   const actorName = await actorNameOf(db, ctx.userId);

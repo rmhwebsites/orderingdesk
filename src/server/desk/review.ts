@@ -53,6 +53,7 @@ import { events, orders, statuses, storeConnections, user } from "@/db/schema";
 import { formatMoney } from "@/lib/format";
 import { NOTE_MAX } from "@/lib/limits";
 import { roleAtLeast, type Role } from "@/lib/roles";
+import { eventSource, withVia, type Via } from "@/lib/via";
 import { broadcast, broadcastMerges, broadcastSync } from "@/server/broadcast";
 import { notifyActivity } from "@/server/notify";
 import {
@@ -112,7 +113,7 @@ export type ReviewDeps = {
   sleep?: (ms: number) => Promise<void>;
 };
 
-export type ReviewContext = { workspaceId: string; orderId: string; userId: string; role: Role };
+export type ReviewContext = { workspaceId: string; orderId: string; userId: string; role: Role; via?: Via };
 
 export type ReviewOrder = { id: string; statusKey: string; statusSetBy: string | null; statusSetAt: number | null };
 
@@ -475,9 +476,9 @@ function approvalStatements(
     type: "status" as const,
     text: `Approved the request. Status set to ${approved.label}`,
     actorId: ctx.userId,
-    meta: { from: card.statusKey, to: approved.key, action: "approve", orderName },
+    meta: withVia({ from: card.statusKey, to: approved.key, action: "approve", orderName }, ctx.via),
     createdAt: now,
-    source: "app" as const,
+    source: eventSource(ctx.via),
   };
   const statusExists = sql`exists (select 1 from ${statuses} where ${statuses.workspaceId} = ${ctx.workspaceId} and ${statuses.key} = ${approved.key})`;
   const moved = sql`exists (select 1 from ${orders} where ${orders.id} = ${card.id} and ${orders.statusKey} = ${approved.key} and ${orders.statusSetAt} = ${now} and ${orders.statusSetBy} = ${ctx.userId})`;
@@ -724,9 +725,9 @@ async function decideRejection(
     type: "status" as const,
     text: `Rejected the request. Status set to ${rejected.label}`,
     actorId: ctx.userId,
-    meta: { from: card.statusKey, to: rejected.key, action: "reject" },
+    meta: withVia({ from: card.statusKey, to: rejected.key, action: "reject" }, ctx.via),
     createdAt: now,
-    source: "app" as const,
+    source: eventSource(ctx.via),
   };
   const noteEvent = {
     id: crypto.randomUUID(),
@@ -735,9 +736,9 @@ async function decideRejection(
     type: "note" as const,
     text: reason,
     actorId: ctx.userId,
-    meta: { rejectReason: true },
+    meta: withVia({ rejectReason: true }, ctx.via),
     createdAt: now,
-    source: "app" as const,
+    source: eventSource(ctx.via),
   };
   const statusExists = sql`exists (select 1 from ${statuses} where ${statuses.workspaceId} = ${ctx.workspaceId} and ${statuses.key} = ${rejected.key})`;
   const moved = sql`exists (select 1 from ${orders} where ${orders.id} = ${card.id} and ${orders.statusKey} = ${rejected.key} and ${orders.statusSetAt} = ${now} and ${orders.statusSetBy} = ${ctx.userId})`;

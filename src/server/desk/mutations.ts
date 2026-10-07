@@ -10,6 +10,7 @@ import { events, orders, statuses } from "@/db/schema";
 import { NOTE_MAX } from "@/lib/limits";
 import type { Role } from "@/lib/roles";
 import { BULK_STATUS_MAX, checkStatusMove } from "@/lib/status-rules";
+import { eventSource, withVia, type Via } from "@/lib/via";
 import { safeIndexOrders } from "@/server/search/index-orders";
 import { eventView, isRecord, type EventView } from "./shapes";
 
@@ -24,6 +25,9 @@ export type MutationContext = {
   role: Role;
   // Injectable clock for tests.
   now?: number;
+  // Set when the change comes through an AI app (src/mcp/): its entries get
+  // source "ai" and the app in meta.ai (src/lib/via.ts).
+  via?: Via;
 };
 
 export type StatusChangeResult =
@@ -60,9 +64,9 @@ type StatusEvent = {
   type: "status";
   text: string;
   actorId: string;
-  meta: Record<string, unknown>;
+  meta: Record<string, unknown> | null;
   createdAt: number;
-  source: "app";
+  source: "app" | "ai";
 };
 
 // The two statements of one status change: the order update and its status
@@ -150,9 +154,9 @@ export async function changeOrderStatus(
     type: "status",
     text: `Status set to ${status.label}`,
     actorId: ctx.userId,
-    meta: { from: order.statusKey, to: statusKey },
+    meta: withVia({ from: order.statusKey, to: statusKey }, ctx.via),
     createdAt: now,
-    source: "app",
+    source: eventSource(ctx.via),
   };
   const [updateResult] = await applyBatch(db, statusWrites(db, event, statusKey));
   if (rowsAffected(updateResult, "desk") === 0) {
@@ -193,9 +197,9 @@ export async function addOrderNote(
     type: "note" as const,
     text,
     actorId: ctx.userId,
-    meta: null,
+    meta: withVia(null, ctx.via),
     createdAt: ctx.now ?? Date.now(),
-    source: "app" as const,
+    source: eventSource(ctx.via),
   };
   await db.insert(events).values(event);
   return { kind: "added", event: eventView(event) };

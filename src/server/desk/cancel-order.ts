@@ -31,6 +31,7 @@ import { events, orders, statuses, storeConnections } from "@/db/schema";
 import { formatMoney } from "@/lib/format";
 import { NOTE_MAX } from "@/lib/limits";
 import { roleAtLeast } from "@/lib/roles";
+import { eventSource, withVia } from "@/lib/via";
 import { broadcast, broadcastSync } from "@/server/broadcast";
 import { notifyActivity } from "@/server/notify";
 import {
@@ -253,15 +254,15 @@ async function commitCancel(
   jobId: string | null,
   now: number,
 ): Promise<CancelResult> {
-  const base = { workspaceId: ctx.workspaceId, orderId: card.id, actorId: ctx.userId, createdAt: now, source: "app" as const };
+  const base = { workspaceId: ctx.workspaceId, orderId: card.id, actorId: ctx.userId, createdAt: now, source: eventSource(ctx.via) };
   const statusEvent = {
     ...base,
     id: crypto.randomUUID(),
     type: "status" as const,
     text: `Cancelled the order in Shopify. Status set to ${target.label}`,
-    meta: { from: card.statusKey, to: target.key, action: "cancel" },
+    meta: withVia({ from: card.statusKey, to: target.key, action: "cancel" }, ctx.via),
   };
-  const noteEvent = { ...base, id: crypto.randomUUID(), type: "note" as const, text: reason, meta: { cancelReason: true } };
+  const noteEvent = { ...base, id: crypto.randomUUID(), type: "note" as const, text: reason, meta: withVia({ cancelReason: true }, ctx.via) };
   const cancelEvent = {
     ...base,
     id: crypto.randomUUID(),
@@ -269,7 +270,7 @@ async function commitCancel(
     text: confirmed
       ? "Shopify cancelled the order: no email to the customer, no restock, no refund."
       : "Shopify accepted the cancellation and is finishing it: no email to the customer, no restock, no refund.",
-    meta: { confirmed, jobId },
+    meta: withVia({ confirmed, jobId }, ctx.via),
   };
   const statusExists = sql`exists (select 1 from ${statuses} where ${statuses.workspaceId} = ${ctx.workspaceId} and ${statuses.key} = ${target.key})`;
   const moved = sql`exists (select 1 from ${orders} where ${orders.id} = ${card.id} and ${orders.statusKey} = ${target.key} and ${orders.statusSetAt} = ${now} and ${orders.statusSetBy} = ${ctx.userId})`;

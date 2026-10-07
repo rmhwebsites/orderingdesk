@@ -427,6 +427,18 @@ describe("cancelOrder", () => {
       error: CANCEL_COPY.gone,
     });
   });
+
+  it("records source ai and the app on its three entries when cancelled through an AI app", async () => {
+    const db = await setup();
+    const shop = fakeShop();
+    expect((await cancelOrder(db, { ...ctx(), via: { client: "claude" } }, { reason: "Duplicate order" }, deps(shop.impl))).kind).toBe("cancelled");
+    const entries = await timeline(db);
+    expect(entries.map((event) => [event.type, event.source, (event.meta as { ai?: unknown }).ai]).sort()).toEqual([
+      ["note", "ai", { client: "claude" }],
+      ["order_cancelled", "ai", { client: "claude" }],
+      ["status", "ai", { client: "claude" }],
+    ]);
+  });
 });
 
 describe("followCancellation", () => {

@@ -478,3 +478,19 @@ describe("changeOrderStatus and the search index", () => {
     expect(row).toMatchObject({ statusKey: "processing", statusSetAt: NOW });
   });
 });
+
+describe("changes made through an AI app", () => {
+  it("record source ai and the app on the status entry and on the note", async () => {
+    const db = await setup();
+    const via = { client: "claude" as const };
+    expect((await changeOrderStatus(db, { ...ctx(), via }, { statusKey: "processing" })).kind).toBe("changed");
+    expect((await addOrderNote(db, { ...ctx(), via }, { text: "Checked the stock" })).kind).toBe("added");
+    const rows = await eventsOf(db);
+    expect(rows.map((row) => [row.type, row.source, row.meta])).toEqual(
+      expect.arrayContaining([
+        ["status", "ai", { from: "new", to: "processing", ai: { client: "claude" } }],
+        ["note", "ai", { ai: { client: "claude" } }],
+      ]),
+    );
+  });
+});
