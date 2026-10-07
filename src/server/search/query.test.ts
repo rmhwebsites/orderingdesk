@@ -2,9 +2,9 @@ import { describe, it, expect } from "vitest";
 import { eq } from "drizzle-orm";
 import type { Db } from "@/db";
 import * as schema from "@/db/schema";
-import { DESK_PAGE_MAX, EMPTY_QUERY, type DeskQuery } from "@/lib/desk-query";
+import { DESK_PAGE_MAX, EMPTY_QUERY, parseDeskQuery, type DeskQuery } from "@/lib/desk-query";
 import { indexOrders } from "./index-orders";
-import { decodeCursor, likePattern, searchOrders, type SearchPage } from "./query";
+import { decodeCursor, likePattern, QUERY_WORDS_MAX, searchConditions, searchOrders, type SearchPage } from "./query";
 import {
   draftSnapshotOf,
   openTestDb,
@@ -104,6 +104,23 @@ describe("searchOrders filters", () => {
     expect(ids(await searchOrders(db, WS, q({ person: "avery", view: "all" }), ctx))).toEqual(["o_cards"]);
   });
 
+  // Review fix (Tasks 9 to 13), the AI contract: an AI answer never writes
+  // q; its leftover words need every word, like typed words, but stay
+  // inside the view the answer chose.
+  it("matches an AI answer's leftover words inside the view it chose", async () => {
+    const db = await setup();
+    expect(ids(await searchOrders(db, WS, q({ words: "HARD white" }), ctx))).toEqual(["o_hat"]);
+    expect(ids(await searchOrders(db, WS, q({ words: "business" }), ctx))).toEqual([]);
+    expect(ids(await searchOrders(db, WS, q({ words: "business", view: "closed" }), ctx))).toEqual(["o_cards"]);
+    expect(ids(await searchOrders(db, WS, q({ words: "white business", view: "all" }), ctx))).toEqual([]);
+    expect(ids(await searchOrders(db, WS, q({ q: "hard", words: "business" }), ctx))).toEqual([]);
+    // Each list is capped on its own, so the bound parameters stay well
+    // inside D1's 100.
+    const many = Array.from({ length: 12 }, (_, i) => `w${i}`).join(" ");
+    const base = searchConditions(WS, q({ view: "all" }), ctx).length;
+    expect(searchConditions(WS, q({ view: "all", q: many, words: many }), ctx).length).toBe(base + 2 * QUERY_WORDS_MAX);
+  });
+
   it("needs every word, ignores case, and matches SKUs, sizes and personalization", async () => {
     const db = await setup();
     expect(ids(await searchOrders(db, WS, q({ q: "HARD white" }), ctx))).toEqual(["o_hat"]);
@@ -184,6 +201,17 @@ describe("searchOrders filters", () => {
 });
 
 describe("searchOrders sorting and pages", () => {
+  // Review fix (Tasks 9 to 13): words search all history, so a search
+  // started from the approval queue (sorted waiting longest by default)
+  // lists the newest cards first, not the oldest card of all history.
+  it("lists a search from the approval queue newest first over all history", async () => {
+    const db = await setup();
+    const query = parseDeskQuery(new URLSearchParams("view=approval&q=1024"));
+    expect(ids(await searchOrders(db, WS, query, ctx))).toEqual(["o_hat", "o_cards"]);
+    const waiting = parseDeskQuery(new URLSearchParams("view=approval&q=1024&sort=waiting"));
+    expect(ids(await searchOrders(db, WS, waiting, ctx))).toEqual(["o_cards", "o_hat"]);
+  });
+
   it("sorts oldest first and by time waiting", async () => {
     const db = await setup();
     expect(ids(await searchOrders(db, WS, q({ sort: "oldest" }), ctx))).toEqual(["o_pct", "o_hat", "d_new"]);

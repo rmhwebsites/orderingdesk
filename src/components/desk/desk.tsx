@@ -9,6 +9,7 @@ import {
   deskParams,
   listScope,
   parseDeskQuery,
+  querySortDefault,
   reloadLimit,
   type DeskQuery,
   type DeskView,
@@ -1137,6 +1138,7 @@ export function Desk() {
             asking={false}
             aiHint={aiSearch}
             sort={deskQuery.sort}
+            sortDefault={querySortDefault(deskQuery)}
             onSort={(sort) => updateDeskQuery({ sort })}
             kindFilter={
               showKindFilter && view !== "approval"

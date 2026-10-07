@@ -5,12 +5,14 @@
 // counts at once and a card is listed before the index has it; words read
 // order_search.haystack with LIKE (% and _ escaped) and the person filter
 // reads order_search.requester_id. Plain words search every card, open and
-// closed, whatever view is picked (owner decision, listScope). No FTS5: D1
-// cannot export databases with virtual tables. Keyset pages reach any depth
-// of history. At most about 50 bound parameters (20 locations, 8 words),
-// inside D1's 100. Each row comes with its synced location name (locations
-// joined on the Shopify location id that orders.location_id holds, as Wave
-// 1b's list does) and whether it has a purchase order.
+// closed, whatever view is picked (owner decision, listScope); an AI
+// answer's leftover words (words) match the same way inside its view. No
+// FTS5: D1 cannot export databases with virtual tables. Keyset pages reach
+// any depth of history. At most about 55 bound parameters (20 locations, 8
+// typed words, 8 leftover words), inside D1's 100. Each row comes with its
+// synced location name (locations joined on the Shopify location id that
+// orders.location_id holds, as Wave 1b's list does) and whether it has a
+// purchase order.
 
 import { and, asc, count, desc, eq, inArray, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "../../db";
@@ -39,6 +41,13 @@ export function likePattern(text: string): string {
 
 function contains(text: string): SQL {
   return sql`${orderSearch.haystack} like ${likePattern(normalizeSearchText(text))} escape '\\'`;
+}
+
+function wordsOf(text: string): string[] {
+  return normalizeSearchText(text)
+    .split(" ")
+    .filter((word) => word.length > 0)
+    .slice(0, QUERY_WORDS_MAX);
 }
 
 export type SearchContext = { now: number; timeZone: string };
@@ -85,8 +94,9 @@ export function searchConditions(workspaceId: string, query: DeskQuery, ctx: Sea
   if (query.requester) {
     conditions.push(eq(orderSearch.requesterId, query.requester));
   }
-  const words = normalizeSearchText(query.q).split(" ").filter((word) => word.length > 0).slice(0, QUERY_WORDS_MAX);
-  for (const word of words) {
+  // Every word must match: the typed words, then an AI answer's leftover
+  // words, each list capped on its own.
+  for (const word of [...wordsOf(query.q), ...wordsOf(query.words)]) {
     conditions.push(contains(word));
   }
   for (const text of [query.person, query.item, query.pz]) {

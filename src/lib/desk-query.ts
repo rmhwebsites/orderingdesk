@@ -4,8 +4,8 @@
 // server owns the default: Open), and the desk reads and writes its address
 // with it. Unknown values fall back to the defaults. Wave 1c adds the search
 // filters AI search fills in (location, requester, person, item,
-// personalization, order number, dates, days waiting); they are plain URL
-// params too.
+// personalization, leftover words, order number, dates, days waiting); they
+// are plain URL params too.
 
 export const DESK_VIEWS = ["open", "approval", "all", "closed"] as const;
 export type DeskView = (typeof DESK_VIEWS)[number];
@@ -51,6 +51,9 @@ export type SearchFilters = {
   person: string;
   item: string;
   pz: string;
+  // An AI answer's leftover words (every word must match, like q's), kept
+  // inside the view the answer chose. AI search never writes q (listScope).
+  words: string;
   // "#1024" or "#d19", lowercased.
   number: string;
   date: DatePreset | null;
@@ -68,6 +71,7 @@ export const SEARCH_DEFAULTS: SearchFilters = {
   person: "",
   item: "",
   pz: "",
+  words: "",
   number: "",
   date: null,
   from: null,
@@ -158,6 +162,7 @@ function searchFiltersOf(source: ParamSource): SearchFilters {
     person: cleanText(read(source, "person") ?? "", FILTER_TEXT_MAX),
     item: cleanText(read(source, "item") ?? "", FILTER_TEXT_MAX),
     pz: cleanText(read(source, "pz") ?? "", FILTER_TEXT_MAX),
+    words: cleanText(read(source, "words") ?? "", DESK_QUERY_MAX),
     number: normalizeOrderNumber(read(source, "number") ?? ""),
     date: range ? null : oneOf(read(source, "date"), DATE_PRESETS),
     from: range?.from ?? null,
@@ -170,12 +175,13 @@ function searchFiltersOf(source: ParamSource): SearchFilters {
 export function parseDeskQuery(source: ParamSource): DeskQuery {
   const view = oneOf(read(source, "view"), DESK_VIEWS) ?? "open";
   const status = read(source, "status");
+  const q = (read(source, "q") ?? "").slice(0, DESK_QUERY_MAX);
   return {
     view,
     status: status !== null && STATUS_KEY.test(status) ? status : null,
     kind: oneOf(read(source, "kind"), DESK_KINDS) ?? "all",
-    q: (read(source, "q") ?? "").slice(0, DESK_QUERY_MAX),
-    sort: oneOf(read(source, "sort"), DESK_SORTS) ?? defaultSort(view),
+    q,
+    sort: oneOf(read(source, "sort"), DESK_SORTS) ?? querySortDefault({ view, q }),
     ...searchFiltersOf(source),
   };
 }
@@ -187,12 +193,13 @@ export function deskParams(query: DeskQuery): URLSearchParams {
   if (query.status) params.set("status", query.status);
   if (query.kind !== "all") params.set("kind", query.kind);
   if (query.q.trim().length > 0) params.set("q", query.q);
-  if (query.sort !== defaultSort(query.view)) params.set("sort", query.sort);
+  if (query.sort !== querySortDefault(query)) params.set("sort", query.sort);
   if (query.locations.length > 0) params.set("location", query.locations.join(","));
   if (query.requester) params.set("requester", query.requester);
   if (query.person) params.set("person", query.person);
   if (query.item) params.set("item", query.item);
   if (query.pz) params.set("pz", query.pz);
+  if (query.words) params.set("words", query.words);
   if (query.number) params.set("number", query.number);
   if (query.from && query.to) {
     params.set("from", query.from);
@@ -216,14 +223,17 @@ export function deskSearch(query: DeskQuery, order: string | null = null): strin
 }
 
 // The address's query string after a filter change: the current query with
-// patch applied, the open order kept. A sort left at its view's default
-// follows the view (the approval queue waits longest first).
+// patch applied, the open order kept. A sort left at its default follows
+// the default (querySortDefault): the approval queue waits longest first, a
+// search lists newest first, and clearing the words gives the queue its
+// own sort back. (A newest sort picked while searching reads as the
+// search's default, so it too goes back to the view's sort.)
 export function mergeDeskSearch(currentSearch: string, patch: Partial<DeskQuery>): string {
   const params = new URLSearchParams(currentSearch);
   const current = parseDeskQuery(params);
   const next: DeskQuery = { ...current, ...patch };
-  if (patch.view !== undefined && patch.sort === undefined && current.sort === defaultSort(current.view)) {
-    next.sort = defaultSort(patch.view);
+  if (patch.sort === undefined && current.sort === querySortDefault(current)) {
+    next.sort = querySortDefault(next);
   }
   return deskSearch(next, params.get("order"));
 }
@@ -236,16 +246,31 @@ export function isEmptyQuery(query: DeskQuery): boolean {
   return deskParams({ ...query, view: "open", sort: defaultSort("open") }).toString() === "";
 }
 
+// The view a query's list covers: All while plain words search, the picked
+// view otherwise (listScope).
+function scopeView(query: Pick<DeskQuery, "view" | "q">): DeskView {
+  return query.q.trim().length > 0 ? "all" : query.view;
+}
+
+// The sort a query has when its address names none: the default of the
+// view its list really covers, so a search started from the approval queue
+// lists the newest cards of all history first instead of the oldest.
+export function querySortDefault(query: Pick<DeskQuery, "view" | "q">): SortKey {
+  return defaultSort(scopeView(query));
+}
+
 // Which cards a query's list covers, by view and kind. Owner decision
 // (Wave 1c): plain words search every card, open and closed, over all
 // history, whatever view is picked, and clearing them goes back to that
-// view (it stays in the address); the filters AI search fills in keep the
-// view it chose. The approval queue shows every kind (the desk hides the
-// kind filter there). One rule for the server search
+// view (it stays in the address). Every other filter keeps the view, so an
+// AI answer keeps the view (state) it chose. The contract that makes this
+// hold: q holds only words a person typed; AI search never writes q, and
+// its leftover words go to words. The approval queue shows every kind (the
+// desk hides the kind filter there). One rule for the server search
 // (src/server/search/query.ts) and the desk's list filter.
 export function listScope(query: DeskQuery): { view: DeskView; kind: DeskKind } {
   return {
-    view: query.q.trim().length > 0 ? "all" : query.view,
+    view: scopeView(query),
     kind: query.view === "approval" ? "all" : query.kind,
   };
 }
@@ -294,6 +319,7 @@ export function filterChips(query: DeskQuery, vocab: ChipVocabulary): FilterChip
   if (query.person) chips.push({ key: "person", label: `Person: ${query.person}`, patch: { person: "" } });
   if (query.item) chips.push({ key: "item", label: `Item: ${query.item}`, patch: { item: "" } });
   if (query.pz) chips.push({ key: "pz", label: `Printed: ${query.pz}`, patch: { pz: "" } });
+  if (query.words) chips.push({ key: "words", label: `Words: ${query.words}`, patch: { words: "" } });
   if (query.number) chips.push({ key: "number", label: query.number.toUpperCase(), patch: { number: "" } });
   if (query.from && query.to) {
     chips.push({ key: "range", label: `${dayLabel(query.from)} to ${dayLabel(query.to)}`, patch: { from: null, to: null } });

@@ -41,9 +41,10 @@ Repo: `/Users/ryboss/Documents/RMH LLC/Clients/Impact Rentals/order-desk`, branc
 - **Daily cap:** 0013 adds `ai_usage (workspace_id, principal_id, day, kind, count)` with primary key `(workspace_id, principal_id, day, kind)`. AI search uses `kind = 'search'`, 100 questions per person per UTC day and 2,000 per workspace per day (the Workers AI allowance resets at 00:00 UTC). Wave 2 reuses the table with other kinds.
 - **Freshness:** the desk list reads its filters (view, status, kind, location, dates, sort) from the live `orders` and `statuses` rows and only its words from `order_search.haystack` and its person filter from `order_search.requester_id`. A card is therefore listed and filtered correctly the moment it is written, and a closed flag edited in Settings counts at once, even before the index catches up. `order_search` filter columns are still written on every change (for Wave 2 and the CSV export) and the cron's repair sweep keeps them equal to `orders`.
 - **Views:** Wave 1a's rule stands: no `view` param means Open, and words search inside the chosen view. When words find nothing in Open, Closed or the approval queue, the empty state offers "Search all cards" (one click to All). An AI answer always sets a view ("any" means All), and the People and Locations pages link to the desk with `view=all`. Search covers all history (keyset pages, no 1,000 card cap).
+- **Owner decisions, settled in the Tasks 9 to 13 review (they win over the Views bullet above):** plain words (`q`) search every card, open and closed, over all history, whatever view is picked, and clearing them returns to the view the person was on (Open by default); "Search all cards" is gone. A query's default sort follows the view its list really covers (`querySortDefault` in `src/lib/desk-query.ts`), so a search started from the approval queue lists newest first instead of the oldest card of all history. AI search applies the filter it understood, its own state and view, shown as removable chips. The contract that keeps that view: `q` holds only words a person typed and an AI answer never writes it; the model's leftover text goes to the `words` param (every word must match, like `q`, but inside the chosen view; chip "Words: ..."). `listScope` widens the view only for `q`, pinned by "keeps the view for every filter but typed words" in `src/lib/desk-query.test.ts`. Task 15 maps `text` to `words`, and after an AI answer the search box is empty and every part of the understanding is a chip.
 - **Older/newer days** mean days in the card's current status (`coalesce(status_set_at, created_at)`), labelled "Waiting over n days".
 - **Requesters of cards stored before 1c:** their snapshots carry no customer id, so the backfill pass asks Shopify for the customer and company contact of those cards (one `nodes(ids:)` read per 50 cards) and links people from that; a later re-index keeps the link (`coalesce`).
-- **URL params** (fixed by Wave 1a, extended here): `view`, `status` (one key), `kind`, `q`, `sort`, plus `location` (comma list of Shopify location ids, the value `orders.location_id` holds), `requester` (a people id), `person`, `item`, `pz` (personalization text), `number`, `date` (preset), `from` and `to` (YYYY-MM-DD), `older`, `newer`, and for paging `cursor` and `limit` (API only). AI search picks at most one status, like the status strip.
+- **URL params** (fixed by Wave 1a, extended here): `view`, `status` (one key), `kind`, `q`, `sort`, plus `location` (comma list of Shopify location ids, the value `orders.location_id` holds), `requester` (a people id), `person`, `item`, `pz` (personalization text), `words` (an AI answer's leftover words), `number`, `date` (preset), `from` and `to` (YYYY-MM-DD), `older`, `newer`, and for paging `cursor` and `limit` (API only). AI search picks at most one status, like the status strip.
 - **Pages:** `/w/[slug]/people`, `/w/[slug]/people/[id]`, `/w/[slug]/locations`, `/w/[slug]/locations/[id]` on the hub; `/people`, `/people/[id]`, `/locations`, `/locations/[id]` on the client host. Team members only (staff and up).
 
 ## What exists after Waves 1a and 1b (verify in Task 0)
@@ -4547,7 +4548,7 @@ git commit -m "feat: Workers AI binding and the AI search model call" -m "Co-Aut
 
 ```ts
 import { describe, it, expect } from "vitest";
-import { isEmptyQuery } from "@/lib/desk-query";
+import { isEmptyQuery, listScope } from "@/lib/desk-query";
 import { AI_FILTER_KEYS, aiFilterSchema, aiSystemPrompt, validateAiFilter, type SearchVocabulary } from "./ai-filter";
 
 const vocab: SearchVocabulary = {
@@ -4654,7 +4655,8 @@ describe("validateAiFilter", () => {
       vocab,
     );
     expect(query).toMatchObject({ person: "Avery Stone", number: "#d19", older: 365, newer: 3, pz: "Yard Lead" });
-    expect(query?.q).toHaveLength(100);
+    expect(query?.words).toHaveLength(100);
+    expect(query?.q).toBe("");
   });
 
   it("prefers a listed item title, and keeps other product words as item text", () => {
@@ -4667,6 +4669,14 @@ describe("validateAiFilter", () => {
     expect(validateAiFilter(full({ date: "custom", from: "2026-09-30", to: "2026-09-01" }), vocab)).toMatchObject({ from: null, to: null });
     expect(validateAiFilter(full({ date: "custom", from: "2026-02-30", to: "2026-03-01" }), vocab)).toMatchObject({ from: null });
     expect(validateAiFilter(full({ date: "custom", from: "2020-01-01", to: "2026-01-01" }), vocab)).toMatchObject({ from: null });
+  });
+
+  // The AI contract (Decisions): an answer never writes q, so the state it
+  // understood holds; its leftover text goes to words.
+  it("never writes q, so the state it understood holds", () => {
+    const query = validateAiFilter(full({ state: "open", text: "hard hat" }), vocab)!;
+    expect(query).toMatchObject({ view: "open", q: "", words: "hard hat" });
+    expect(listScope(query).view).toBe("open");
   });
 
   it("says nothing was understood when every field is empty", () => {
@@ -4924,7 +4934,8 @@ export function validateAiFilter(raw: unknown, vocab: SearchVocabulary): DeskQue
     to: range?.to ?? null,
     older: older ?? null,
     newer: newer ?? null,
-    q: text ?? "",
+    // Never q: q holds only words a person typed (listScope widens it to All).
+    words: text ?? "",
   };
 }
 ```
@@ -7957,7 +7968,7 @@ Do not push.
 ## Open points (decide or verify; none blocks starting)
 
 1. Wave 1a and 1b names follow those waves' plans as drafted (the table near the top). Task 0 confirms them against the merged code; where they differ, the merged names win.
-2. Words search inside the chosen view (Wave 1a's rule; no view means Open), with "Search all cards" in the empty state. Searching All by default whenever words are typed is the alternative; confirm with Ryan which he wants.
+2. Words search inside the chosen view (Wave 1a's rule; no view means Open), with "Search all cards" in the empty state. Searching All by default whenever words are typed is the alternative; confirm with Ryan which he wants. Settled: the owner chose All for plain words; see the owner decisions bullet under Decisions.
 3. "Older or newer than n days" means days in the current status, shown as "Waiting over n days". Confirm.
 4. Weeks start on Monday for "this week" and "last week". A US workspace may prefer Sunday.
 5. Caps: 100 AI questions per person per UTC day, 2,000 per workspace. The `ai_usage` shape (`principal_id`, `kind`) is meant for Wave 2's read and write counters; Wave 2 should reuse it.

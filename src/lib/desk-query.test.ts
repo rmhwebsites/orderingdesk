@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   DESK_PAGE_MAX,
   DESK_PAGE_SIZE,
+  DESK_QUERY_MAX,
   EMPTY_QUERY,
   FILTER_TEXT_MAX,
   SEARCH_DEFAULTS,
@@ -13,6 +14,7 @@ import {
   mergeDeskSearch,
   normalizeOrderNumber,
   parseDeskQuery,
+  querySortDefault,
   reloadLimit,
   searchBoxText,
   type DeskQuery,
@@ -40,6 +42,21 @@ describe("parseDeskQuery", () => {
     expect(parseDeskQuery(new URLSearchParams("view=approval&sort=newest")).sort).toBe("newest");
   });
 
+  // Review fix (Tasks 9 to 13): words search all history (listScope), so a
+  // search started from the approval queue lists the newest cards first,
+  // not the oldest card of all history.
+  it("sorts a search newest first, whatever view it started from, unless told otherwise", () => {
+    expect(parseDeskQuery(new URLSearchParams("view=approval&q=hat")).sort).toBe("newest");
+    expect(parseDeskQuery(new URLSearchParams("view=approval&q=hat&sort=waiting")).sort).toBe("waiting");
+    // Blank words search nothing, so the queue keeps its own sort.
+    expect(parseDeskQuery(new URLSearchParams("view=approval&q=%20%20")).sort).toBe("waiting");
+    expect(querySortDefault({ ...EMPTY_QUERY, view: "approval", q: "hat" })).toBe("newest");
+    expect(querySortDefault({ ...EMPTY_QUERY, view: "approval" })).toBe("waiting");
+    // An AI answer's leftover words keep the view, and so its sort.
+    const answer: DeskQuery = { ...EMPTY_QUERY, view: "approval", words: "blue logo" };
+    expect(querySortDefault(answer)).toBe("waiting");
+  });
+
   it("falls back to the defaults for anything it does not know", () => {
     expect(parseDeskQuery(new URLSearchParams("view=everything&status=New Status!&kind=x&sort=total"))).toEqual({
       ...SEARCH_DEFAULTS,
@@ -61,6 +78,13 @@ describe("deskSearch", () => {
       "?status=new&kind=drafts&q=hard+hat&sort=oldest",
     );
   });
+
+  it("writes a search's sort only when it is not the search's default", () => {
+    const parse = (search: string) => parseDeskQuery(new URLSearchParams(search));
+    expect(deskSearch(parse("view=approval&q=hat"))).toBe("?view=approval&q=hat");
+    expect(deskSearch(parse("view=approval&q=hat&sort=waiting"))).toBe("?view=approval&q=hat&sort=waiting");
+    expect(parse(deskSearch(parse("view=approval&q=hat&sort=waiting")).slice(1))).toEqual(parse("view=approval&q=hat&sort=waiting"));
+  });
 });
 
 describe("mergeDeskSearch", () => {
@@ -73,6 +97,18 @@ describe("mergeDeskSearch", () => {
     expect(mergeDeskSearch("", { view: "approval", status: null })).toBe("?view=approval");
     expect(mergeDeskSearch("?view=approval", { view: "open" })).toBe("");
     expect(mergeDeskSearch("?sort=oldest", { view: "approval" })).toBe("?view=approval&sort=oldest");
+  });
+
+  it("lists a search newest first, and gives the queue its own sort back once the words are cleared", () => {
+    const sortOf = (search: string) => parseDeskQuery(new URLSearchParams(search)).sort;
+    expect(mergeDeskSearch("?view=approval", { q: "hat" })).toBe("?view=approval&q=hat");
+    expect(sortOf(mergeDeskSearch("?view=approval", { q: "hat" }))).toBe("newest");
+    expect(mergeDeskSearch("?view=approval&q=hat", { q: "" })).toBe("?view=approval");
+    expect(sortOf(mergeDeskSearch("?view=approval&q=hat", { q: "" }))).toBe("waiting");
+    // A sort picked while searching stays.
+    expect(mergeDeskSearch("?view=approval&q=hat&sort=oldest", { q: "" })).toBe("?view=approval&sort=oldest");
+    // A view picked while searching keeps the search's sort.
+    expect(sortOf(mergeDeskSearch("?q=hat", { view: "approval" }))).toBe("newest");
   });
 });
 
@@ -100,7 +136,7 @@ describe("search filters in the URL", () => {
   it("reads every search filter param next to Wave 1a's five", () => {
     expect(
       parse(
-        "view=closed&status=on_hold&kind=orders&q=hard%20hat&sort=waiting&location=101,102&requester=p1&person=Avery&item=Hard%20Hat&pz=Yard%20Lead&number=%23D19&date=last_month&older=3&newer=10",
+        "view=closed&status=on_hold&kind=orders&q=hard%20hat&sort=waiting&location=101,102&requester=p1&person=Avery&item=Hard%20Hat&pz=Yard%20Lead&words=blue%20logo&number=%23D19&date=last_month&older=3&newer=10",
       ),
     ).toEqual({
       view: "closed",
@@ -113,6 +149,7 @@ describe("search filters in the URL", () => {
       person: "Avery",
       item: "Hard Hat",
       pz: "Yard Lead",
+      words: "blue logo",
       number: "#d19",
       date: "last_month",
       from: null,
@@ -126,6 +163,8 @@ describe("search filters in the URL", () => {
     const query = parse(`location=${encodeURIComponent("101,'; drop")}&older=999&newer=-1&number=abc&date=someday&person=${"x".repeat(100)}`);
     expect(query).toMatchObject({ locations: ["101"], older: null, newer: null, number: "", date: null });
     expect(query.person).toHaveLength(FILTER_TEXT_MAX);
+    expect(parse(`words=${encodeURIComponent(" blue\u0000  logo ")}`).words).toBe("blue logo");
+    expect(parse(`words=${"w".repeat(300)}`).words).toHaveLength(DESK_QUERY_MAX);
   });
 
   it("takes a custom range only as two real dates in order, and it wins over a preset", () => {
@@ -135,7 +174,7 @@ describe("search filters in the URL", () => {
   });
 
   it("round-trips through deskSearch, keeps the open order, and writes nothing for defaults", () => {
-    const search = "view=all&status=new&kind=drafts&q=hat&location=101&number=%231024&date=today&older=2";
+    const search = "view=all&status=new&kind=drafts&q=hat&location=101&words=blue+logo&number=%231024&date=today&older=2";
     expect(parseDeskQuery(new URLSearchParams(deskSearch(parse(search)).slice(1)))).toEqual(parse(search));
     expect(deskSearch(EMPTY_QUERY)).toBe("");
     expect(deskParams(EMPTY_QUERY).toString()).toBe("");
@@ -146,6 +185,7 @@ describe("search filters in the URL", () => {
     expect(isEmptyQuery({ ...EMPTY_QUERY, view: "all", sort: "oldest" })).toBe(true);
     expect(isEmptyQuery({ ...EMPTY_QUERY, kind: "orders" })).toBe(false);
     expect(isEmptyQuery({ ...EMPTY_QUERY, locations: ["101"] })).toBe(false);
+    expect(isEmptyQuery({ ...EMPTY_QUERY, words: "blue" })).toBe(false);
   });
 });
 
@@ -160,6 +200,33 @@ describe("listScope", () => {
     }
     // The filters AI search fills in keep the view it chose.
     expect(listScope({ ...EMPTY_QUERY, view: "closed", person: "Avery", item: "Hard Hat" }).view).toBe("closed");
+  });
+
+  // Review fix (Tasks 9 to 13), the AI contract: q holds only words a person
+  // typed. An AI answer never writes q; its leftover words go to words,
+  // which, like every filter but q, keeps the view (state) the answer chose.
+  it("keeps the view for every filter but typed words, so an AI answer's view holds", () => {
+    const answer: DeskQuery = {
+      ...EMPTY_QUERY,
+      status: "new",
+      kind: "orders",
+      locations: ["101"],
+      requester: "p1",
+      person: "Avery",
+      item: "Hard Hat",
+      pz: "Yard Lead",
+      words: "blue logo",
+      number: "#1024",
+      date: "last_month",
+      older: 2,
+      newer: 30,
+    };
+    for (const view of ["open", "approval", "all", "closed"] as const) {
+      expect(listScope({ ...answer, view }).view, view).toBe(view);
+    }
+    expect(listScope({ ...answer, from: "2026-09-01", to: "2026-09-30", date: null }).view).toBe("open");
+    // Words typed into the box afterwards are plain words again.
+    expect(listScope({ ...answer, view: "open", q: "hat" }).view).toBe("all");
   });
 
   it("keeps the kind filter, except in the approval queue, which shows every kind", () => {
@@ -196,6 +263,7 @@ describe("filterChips", () => {
       person: "Avery",
       item: "Hard Hat",
       pz: "Yard Lead",
+      words: "blue logo",
       number: "#d19",
       date: "last_month",
       older: 1,
@@ -208,13 +276,15 @@ describe("filterChips", () => {
       "Person: Avery",
       "Item: Hard Hat",
       "Printed: Yard Lead",
+      "Words: blue logo",
       "#D19",
       "Last month",
       "Waiting over 1 day",
     ]);
     expect(chips[0].patch).toEqual({ locations: ["999"] });
     expect(chips[2].patch).toEqual({ requester: null });
-    expect(chips[8].patch).toEqual({ older: null });
+    expect(chips[6].patch).toEqual({ words: "" });
+    expect(chips[9].patch).toEqual({ older: null });
   });
 
   it("labels a custom range", () => {

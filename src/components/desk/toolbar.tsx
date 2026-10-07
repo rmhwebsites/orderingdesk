@@ -5,7 +5,7 @@ import { CaretDownIcon } from "@phosphor-icons/react/CaretDown";
 import { FunnelSimpleIcon } from "@phosphor-icons/react/FunnelSimple";
 import { MagnifyingGlassIcon } from "@phosphor-icons/react/MagnifyingGlass";
 import { XIcon } from "@phosphor-icons/react/X";
-import { defaultSort, type DeskView, type ViewCounts } from "@/lib/desk-query";
+import type { DeskView, ViewCounts } from "@/lib/desk-query";
 import type { DeskKind, SortKey, StatusChip } from "@/lib/desk-state";
 import { Segmented, type SegmentedOption } from "@/components/kit";
 import { ui } from "@/components/ui";
@@ -44,6 +44,10 @@ export type ToolbarProps = {
   asking: boolean;
   aiHint: boolean;
   sort: SortKey;
+  // The sort the query has when the address names none
+  // (src/lib/desk-query.ts querySortDefault): another sort counts as a
+  // filter that is on.
+  sortDefault: SortKey;
   onSort: (sort: SortKey) => void;
   // The requests and orders filter, when the workspace has requests.
   kindFilter: KindFilter | null;
@@ -231,6 +235,7 @@ function PhoneToolbar({
   asking,
   aiHint,
   sort,
+  sortDefault,
   onSort,
   kindFilter,
   count,
@@ -252,7 +257,7 @@ function PhoneToolbar({
     }
   }, [searching]);
   const active =
-    (statusKey ? 1 : 0) + (kindFilter && kindFilter.kind !== "all" ? 1 : 0) + (sort !== defaultSort(view) ? 1 : 0);
+    (statusKey ? 1 : 0) + (kindFilter && kindFilter.kind !== "all" ? 1 : 0) + (sort !== sortDefault ? 1 : 0);
   // The search keeps filtering when its row is closed, so the button says
   // so (blank words search nothing, src/lib/desk-query.ts).
   const searchOn = query.trim().length > 0;

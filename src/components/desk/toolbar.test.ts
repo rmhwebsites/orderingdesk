@@ -21,6 +21,7 @@ const base: ToolbarProps = {
   asking: false,
   aiHint: false,
   sort: "newest",
+  sortDefault: "newest",
   onSort: () => {},
   kindFilter: { kind: "all", onKind: () => {}, draftCount: 5, deletedCount: 0 },
   count: 34,
@@ -62,6 +63,14 @@ describe("Toolbar", () => {
     expect(searching).toContain('id="desk-search"');
     expect(searching).toContain('value="vest"');
     expect(render({ layout: "phone", sort: "oldest" })).toContain("More filters, 1 on");
+  });
+
+  // Review fix (Tasks 9 to 13): a search started from the approval queue
+  // sorts newest first by default, so that sort is not a filter that is on.
+  it("counts the sort as on only when it is not the query's own default", () => {
+    const search = render({ layout: "phone", view: "approval", sort: "newest", sortDefault: "newest" });
+    expect(search).toContain('<span class="sr-only">More filters</span>');
+    expect(render({ layout: "phone", view: "approval", sort: "waiting", sortDefault: "newest" })).toContain("More filters, 1 on");
   });
 
   it("marks the phone search button while a search is set, so closing the row never hides it", () => {
