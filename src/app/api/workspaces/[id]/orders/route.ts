@@ -10,13 +10,23 @@ type RouteContext = { params: Promise<{ id: string }> };
 // order summaries (full snapshots come from GET /api/orders/[orderId]),
 // every view's count, the request counts, whether draft orders sync for the
 // store, and the work queue settings. ?view=open|approval|all|closed; the
-// server owns the default, Open (src/lib/desk-query.ts).
+// server owns the default, Open (src/lib/desk-query.ts). The URL's search
+// params (src/lib/desk-query.ts) filter the list on the server, one page at
+// a time (limit 1 to 1000, default 200; cursor from nextCursor); the
+// workspace is the guard's.
 export async function GET(request: Request, context: RouteContext) {
   try {
     const { id } = await context.params;
     const { db, role } = await requireMember(id, "staff");
-    const query = parseDeskQuery(new URL(request.url).searchParams);
-    const desk = await loadDesk(db, id, { view: query.view });
+    const params = new URL(request.url).searchParams;
+    const query = parseDeskQuery(params);
+    const limit = Number(params.get("limit"));
+    const desk = await loadDesk(db, id, {
+      query,
+      limit: Number.isInteger(limit) && limit > 0 ? limit : undefined,
+      cursor: params.get("cursor"),
+      now: Date.now(),
+    });
     if (!desk) {
       throw new AuthError(404, "Not found");
     }
@@ -34,6 +44,12 @@ export async function GET(request: Request, context: RouteContext) {
       view: desk.view,
       viewCounts: desk.viewCounts,
       queue: desk.queue,
+      nextCursor: desk.nextCursor,
+      matchCount: desk.matchCount,
+      searchReady: desk.searchReady,
+      locations: desk.locations,
+      aiSearch: desk.aiSearch,
+      requester: desk.requester,
     });
   } catch (e) {
     return guardResponse(e);

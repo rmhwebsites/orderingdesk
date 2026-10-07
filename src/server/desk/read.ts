@@ -2,14 +2,27 @@
 // full, and the activity feed. Callers authorize first (route guards); every
 // query here is still scoped to the workspace it is given.
 
-import { and, asc, count, desc, eq, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import type { Db } from "@/db";
-import { events, locations, orders, purchaseOrders, statuses, storeConnections, user, workspaceSettings, workspaces } from "@/db/schema";
+import {
+  events,
+  locations,
+  orderSearch,
+  orders,
+  people,
+  statuses,
+  storeConnections,
+  user,
+  workspaceSettings,
+  workspaces,
+} from "@/db/schema";
 import { placeLabel } from "@/lib/address";
-import type { DeskView, ViewCounts } from "@/lib/desk-query";
+import { DEFAULT_TIME_ZONE, isTimeZone } from "@/lib/date-range";
+import { EMPTY_QUERY, type DeskQuery, type DeskView, type ViewCounts } from "@/lib/desk-query";
 import type { QueueSettingsView } from "@/lib/queue-settings";
 import { requestFieldsOf } from "@/lib/request-fields";
 import { draftsEnabled, missingDraftScopes } from "@/server/shopify/admin";
+import { awaitingApproval, searchOrders } from "@/server/search/query";
 import { getLocation, type LocationView } from "@/server/sync/locations";
 import {
   eventView,
@@ -23,9 +36,6 @@ import {
 } from "./shapes";
 import { queueSettingsView } from "./queue-settings";
 
-// The desk list carries at most this many orders, newest first; hasMore tells
-// the client there are older ones it was not sent.
-export const ORDER_LIST_CAP = 1000;
 export const EVENT_FEED_CAP = 300;
 const PREVIEW_ITEMS = 3;
 
@@ -76,6 +86,9 @@ export type OrderSummary = {
   cancelled: boolean;
   // What a desk search matches besides the name, customer, email and items.
   searchText: string[];
+  // people.id of the requester (order_search), or null: their name links
+  // to their page.
+  requesterId: string | null;
   // The card has at least one purchase order, of any state (an order whose
   // status triggers one says "PO not created" until it does).
   hasPo: boolean;
@@ -112,6 +125,19 @@ export type DeskPayload = {
   viewCounts: ViewCounts;
   // Age thresholds and price display (src/server/desk/queue-settings.ts).
   queue: QueueSettingsView;
+  // Where the next page starts (send it back as ?cursor=), or null.
+  nextCursor: string | null;
+  // Cards matching the filter over all history.
+  matchCount: number;
+  // False while the search backfill still indexes older cards: words may
+  // miss some of those until it finishes.
+  searchReady: boolean;
+  // Active company locations by Shopify location id, for the filter chips.
+  locations: { id: string; name: string }[];
+  // AI search on for this workspace (Settings > Search).
+  aiSearch: boolean;
+  // The person a requester filter is about, for its chip.
+  requester: { id: string; name: string } | null;
 };
 
 function text(value: unknown): string {
@@ -127,8 +153,14 @@ function quantity(item: Record<string, unknown>): number {
 // The list ships summaries only, derived from the stored snapshot; the full
 // snapshot is served per order by getOrderDetail. Snapshots are read
 // defensively: a malformed one degrades to empty fields instead of failing
-// the whole desk.
-function summarize(row: typeof orders.$inferSelect, hasPo: boolean, locationName: string | null): OrderSummary {
+// the whole desk. Every argument is required, so a list that forgets the
+// purchase order flag does not say "PO not created" by mistake.
+export function orderSummaryOf(
+  row: typeof orders.$inferSelect,
+  locationName: string | null,
+  requesterId: string | null,
+  hasPo: boolean,
+): OrderSummary {
   const snapshot = isRecord(row.shopify) ? row.shopify : {};
   const items = Array.isArray(snapshot.items) ? snapshot.items.filter(isRecord) : [];
   const kind = row.shopifyOrderId === null ? "draft" : "order";
@@ -173,6 +205,7 @@ function summarize(row: typeof orders.$inferSelect, hasPo: boolean, locationName
       request.branch,
       locationName ?? "",
     ].filter((part) => part.length > 0),
+    requesterId,
     hasPo,
   };
 }
@@ -180,53 +213,29 @@ function summarize(row: typeof orders.$inferSelect, hasPo: boolean, locationName
 // A card's status row, for the closed flag (migration 0011). A key with no
 // status row (one removed while cards still had it) counts as open.
 const statusJoin = and(eq(statuses.workspaceId, orders.workspaceId), eq(statuses.key, orders.statusKey));
-const isOpen = sql`coalesce(${statuses.closed}, 0) = 0`;
-const isClosed = sql`coalesce(${statuses.closed}, 0) = 1`;
-// A request still waiting for a manager: a draft that Shopify has not
-// deleted, in an open status that is not the one linked to draft_rejected
-// (a rejected request never waits, whether or not its status is closed).
-// The one fragment for the approval view, its count in every view's sizes
-// and the top bar's badge; the desk applies the same rule
-// (src/lib/desk-state.ts viewMatches).
-const awaitingApproval = sql`(${orders.shopifyOrderId} is null and ${orders.draftDeletedAt} is null and coalesce(${statuses.closed}, 0) = 0 and coalesce(${statuses.shopifyLink}, '') <> 'draft_rejected')`;
-// Whether a card has any purchase order (one indexed lookup per card).
-const hasPurchaseOrder = sql<number>`exists (select 1 from ${purchaseOrders} where ${purchaseOrders.orderId} = ${orders.id} and ${purchaseOrders.workspaceId} = ${orders.workspaceId})`;
 
-// Which cards a view loads (comprehensive desk design section 1). Deleted
-// requests come with Open, All and Closed; the desk's Deleted filter shows
-// them. The approval queue is requests still waiting (awaitingApproval).
-function viewCondition(view: DeskView): SQL | undefined {
-  switch (view) {
-    case "all":
-      return undefined;
-    case "open":
-      return isOpen;
-    case "closed":
-      return isClosed;
-    case "approval":
-      return awaitingApproval;
-  }
-}
-
-// Requests waiting for a manager: the approval view's size (the top bar's
-// badge).
+// Requests waiting for a manager (awaitingApproval, shared with the server
+// search in src/server/search/query.ts): the approval view's size (the top
+// bar's badge).
 export async function countNeedsApproval(db: Db, workspaceId: string): Promise<number> {
   const rows = await db
     .select({ count: count() })
     .from(orders)
     .leftJoin(statuses, statusJoin)
-    .where(and(eq(orders.workspaceId, workspaceId), viewCondition("approval")));
+    .where(and(eq(orders.workspaceId, workspaceId), awaitingApproval));
   return Number(rows[0]?.count ?? 0);
 }
 
+// The desk payload. The list is one page of the server search
+// (src/server/search/query.ts) for query, from cursor; callers that pass
+// only a view get that view with no other filter (All when none).
 export async function loadDesk(
   db: Db,
   workspaceId: string,
-  opts?: { limit?: number; view?: DeskView },
+  opts?: { limit?: number; view?: DeskView; query?: DeskQuery; cursor?: string | null; now?: number },
 ): Promise<DeskPayload | null> {
-  const limit = opts?.limit ?? ORDER_LIST_CAP;
-  const view = opts?.view ?? "all";
-  const [workspaceRows, statusRows, settingsRows, countRows, orderRows, draftRows, connectionRows, viewRows] = await Promise.all([
+  const query: DeskQuery = opts?.query ?? { ...EMPTY_QUERY, view: opts?.view ?? "all" };
+  const [workspaceRows, statusRows, settingsRows, countRows, draftRows, connectionRows, viewRows, locationRows] = await Promise.all([
     db
       .select({
         id: workspaces.id,
@@ -247,21 +256,12 @@ export async function loadDesk(
       .from(workspaceSettings)
       .where(eq(workspaceSettings.workspaceId, workspaceId))
       .limit(1),
-    // Counts cover every order, not just the capped list below.
+    // Counts cover every order, not just the page of the list.
     db
       .select({ statusKey: orders.statusKey, count: count() })
       .from(orders)
       .where(eq(orders.workspaceId, workspaceId))
       .groupBy(orders.statusKey),
-    // One row past the cap answers hasMore without a second count query.
-    db
-      .select({ order: orders, hasPo: hasPurchaseOrder, locationName: locations.name })
-      .from(orders)
-      .leftJoin(statuses, statusJoin)
-      .leftJoin(locations, and(eq(locations.workspaceId, orders.workspaceId), eq(locations.shopifyLocationId, orders.locationId)))
-      .where(and(eq(orders.workspaceId, workspaceId), viewCondition(view)))
-      .orderBy(desc(orders.createdAt), desc(orders.id))
-      .limit(limit + 1),
     // Draft cards over every card, split by whether Shopify deleted them.
     db
       .select({ deleted: isNotNull(orders.draftDeletedAt), count: count() })
@@ -283,12 +283,36 @@ export async function loadDesk(
       .from(orders)
       .leftJoin(statuses, statusJoin)
       .where(eq(orders.workspaceId, workspaceId)),
+    db
+      .select({ id: locations.shopifyLocationId, name: locations.name })
+      .from(locations)
+      .where(and(eq(locations.workspaceId, workspaceId), sql`${locations.active} = 1`))
+      .orderBy(asc(locations.name))
+      .limit(200),
   ]);
 
   const workspace = workspaceRows[0];
   if (!workspace) {
     return null;
   }
+  const settingsRow = settingsRows[0];
+  const zone = settingsRow?.timeZone;
+  const [page, requesterRows] = await Promise.all([
+    searchOrders(db, workspaceId, query, {
+      now: opts?.now ?? Date.now(),
+      timeZone: isTimeZone(zone) ? zone : DEFAULT_TIME_ZONE,
+      limit: opts?.limit,
+      cursor: opts?.cursor ?? null,
+    }),
+    query.requester
+      ? db
+          .select({ id: people.id, name: people.name, email: people.email })
+          .from(people)
+          .where(and(eq(people.workspaceId, workspaceId), eq(people.id, query.requester)))
+          .limit(1)
+      : Promise.resolve([]),
+  ]);
+  const requester = requesterRows[0];
 
   // Every status gets an entry (0 when unused) so the count strip needs no
   // fallback. A key with orders but no status row (one removed while an
@@ -307,20 +331,26 @@ export async function loadDesk(
   return {
     workspace,
     statuses: statusRows.map(statusView),
-    settings: settingsView(settingsRows[0]),
+    settings: settingsView(settingsRow),
     statusCounts,
-    orders: orderRows.slice(0, limit).map((row) => summarize(row.order, Boolean(row.hasPo), row.locationName)),
-    hasMore: orderRows.length > limit,
+    orders: page.orders.map((entry) => orderSummaryOf(entry.row, entry.locationName, entry.requesterId, entry.hasPo)),
+    hasMore: page.nextCursor !== null,
     draftCount: draftsCounted(false),
     deletedDraftCount: draftsCounted(true),
     drafts: { enabled: draftsEnabled(scopes), missingScopes: scopes ? missingDraftScopes(scopes) : [] },
-    view,
+    view: query.view,
     viewCounts: (() => {
       const all = Number(viewRows[0]?.all ?? 0);
       const closed = Number(viewRows[0]?.closed ?? 0);
       return { open: all - closed, approval: Number(viewRows[0]?.approval ?? 0), all, closed };
     })(),
-    queue: queueSettingsView(settingsRows[0]),
+    queue: queueSettingsView(settingsRow),
+    nextCursor: page.nextCursor,
+    matchCount: page.total,
+    searchReady: (settingsRow?.searchIndexedAt ?? null) !== null,
+    locations: locationRows,
+    aiSearch: settingsRow ? Boolean(settingsRow.aiSearch) : true,
+    requester: requester ? { id: requester.id, name: requester.name || requester.email || "Unknown person" } : null,
   };
 }
 
@@ -332,6 +362,8 @@ export type OrderDetail = {
   itemsTruncated: boolean;
   // The card's synced company location, or null.
   location: LocationView | null;
+  // people.id of the card's requester (order_search), or null.
+  requesterId: string | null;
 };
 
 export async function getOrderDetail(
@@ -349,7 +381,12 @@ export async function getOrderDetail(
     return null;
   }
   const location = order.locationId ? await getLocation(db, workspaceId, order.locationId) : null;
-  return { order, itemsTruncated: itemsTruncatedOf(order.shopify), location };
+  const search = await db
+    .select({ requesterId: orderSearch.requesterId })
+    .from(orderSearch)
+    .where(and(eq(orderSearch.orderId, order.id), eq(orderSearch.workspaceId, workspaceId)))
+    .limit(1);
+  return { order, itemsTruncated: itemsTruncatedOf(order.shopify), location, requesterId: search[0]?.requesterId ?? null };
 }
 
 export type EventsResult = { kind: "ok"; events: EventView[] } | { kind: "not-found" };

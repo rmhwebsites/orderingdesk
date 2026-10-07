@@ -59,6 +59,7 @@ function order(id: string, overrides: Partial<OrderSummary> = {}): OrderSummary 
     locationName: "",
     cancelled: false,
     searchText: [],
+    requesterId: null,
     hasPo: false,
     ...overrides,
   };

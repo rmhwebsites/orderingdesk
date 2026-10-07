@@ -2,9 +2,10 @@ import { describe, it, expect } from "vitest";
 import { and, eq } from "drizzle-orm";
 import type { Db } from "@/db";
 import * as schema from "@/db/schema";
+import { DESK_PAGE_SIZE, EMPTY_QUERY } from "@/lib/desk-query";
+import { indexOrders } from "@/server/search/index-orders";
 import {
   EVENT_FEED_CAP,
-  ORDER_LIST_CAP,
   countNeedsApproval,
   getOrderDetail,
   listEvents,
@@ -19,6 +20,7 @@ import {
   seedOrder,
   seedUser,
   seedWorkspace,
+  setOrderLocation,
   snapshotOf,
 } from "./test-helpers";
 
@@ -140,6 +142,7 @@ describe("loadDesk", () => {
         locationName: "",
         cancelled: false,
         searchText: [],
+        requesterId: null,
         hasPo: false,
       },
     ]);
@@ -183,7 +186,10 @@ describe("loadDesk", () => {
       branch: "Buford HQ",
       searchText: ["#D12", "Impact Rentals", "Buford, GA", "Casey Lin", "Buford HQ"],
     });
-    expect(byId.get("d2")).toMatchObject({ kind: "draft", draftDeleted: true, branch: "Buford, GA" });
+    // A request whose draft Shopify deleted comes with the Deleted filter.
+    expect(byId.has("d2")).toBe(false);
+    const deleted = await loadDesk(db, WS, { query: { ...EMPTY_QUERY, view: "all", kind: "deleted" } });
+    expect(deleted?.orders.find((order) => order.id === "d2")).toMatchObject({ kind: "draft", draftDeleted: true, branch: "Buford, GA" });
     expect(byId.get("o1")).toMatchObject({
       kind: "order",
       name: "#1234",
@@ -282,10 +288,9 @@ describe("loadDesk", () => {
     });
   });
 
-  it("lists orders newest first and pins the list cap at 1000 with hasMore", async () => {
+  it("lists one page of cards newest first, with where the next page starts", async () => {
     const db = await setup();
-    expect(ORDER_LIST_CAP).toBe(1000);
-    const rows = Array.from({ length: ORDER_LIST_CAP + 1 }, (_, i) => ({
+    const rows = Array.from({ length: DESK_PAGE_SIZE + 1 }, (_, i) => ({
       id: `o${String(i).padStart(4, "0")}`,
       workspaceId: WS,
       shopifyOrderId: String(9000 + i),
@@ -295,16 +300,17 @@ describe("loadDesk", () => {
       createdAt: 100000 + i,
       syncedAt: 1,
     }));
-    for (let i = 0; i < rows.length; i += 200) {
-      await db.insert(schema.orders).values(rows.slice(i, i + 200));
+    for (let i = 0; i < rows.length; i += 50) {
+      await db.insert(schema.orders).values(rows.slice(i, i + 50));
     }
-
     const desk = await loadDesk(db, WS);
-    expect(desk?.orders).toHaveLength(ORDER_LIST_CAP);
+    expect(desk?.orders).toHaveLength(DESK_PAGE_SIZE);
     expect(desk?.hasMore).toBe(true);
-    // The oldest order is the one left out.
-    expect(desk?.orders[0].id).toBe("o1000");
-    expect(desk?.orders[ORDER_LIST_CAP - 1].id).toBe("o0001");
+    expect(desk?.nextCursor).not.toBeNull();
+    expect(desk?.matchCount).toBe(DESK_PAGE_SIZE + 1);
+    expect(desk?.orders[0].id).toBe(`o${String(DESK_PAGE_SIZE).padStart(4, "0")}`);
+    const next = await loadDesk(db, WS, { cursor: desk?.nextCursor ?? null });
+    expect(next?.orders.map((order) => order.id)).toEqual(["o0000"]);
   });
 
   it("reports hasMore only when more orders exist than the limit", async () => {
@@ -366,6 +372,51 @@ describe("loadDesk", () => {
   });
 });
 
+describe("loadDesk with a search", () => {
+  it("filters on the server and names each card's requester and location", async () => {
+    const db = await setup();
+    await seedLocation(db, WS, { shopifyLocationId: "101", name: "North Yard" });
+    await seedOrder(db, WS, { id: "o1", createdAt: 1, shopify: snapshotOf({ customerId: "77", items: [{ title: "Hard Hat", qty: 1, sku: "HH-1", variant: "", props: [] }] }) });
+    await seedOrder(db, WS, { id: "o2", createdAt: 2, shopify: snapshotOf({ items: [{ title: "Safety Vest", qty: 1, sku: "SV-2", variant: "", props: [] }] }) });
+    await setOrderLocation(db, "o1", "101");
+    await indexOrders(db, WS, ["o1", "o2"]);
+    const desk = await loadDesk(db, WS, { query: { ...EMPTY_QUERY, q: "hard hat" } });
+    expect(desk?.orders.map((order) => order.id)).toEqual(["o1"]);
+    expect(desk?.orders[0]).toMatchObject({ locationId: "101", locationName: "North Yard" });
+    expect(desk?.orders[0].requesterId).not.toBeNull();
+    expect(desk?.view).toBe("open");
+    expect(desk?.matchCount).toBe(1);
+  });
+
+  it("says whether the search backfill is done, lists active locations and names a requester filter", async () => {
+    const db = await setup();
+    await seedLocation(db, WS, { shopifyLocationId: "101", name: "North Yard" });
+    await seedLocation(db, WS, { shopifyLocationId: "102", name: "Old Yard", active: false });
+    await seedOrder(db, WS, { id: "o1", shopify: snapshotOf({ customerId: "77", customerName: "Riley Oakes" }) });
+    await indexOrders(db, WS, ["o1"]);
+    const [person] = await db.select().from(schema.people);
+    const before = await loadDesk(db, WS, { query: { ...EMPTY_QUERY, requester: person.id } });
+    expect(before).toMatchObject({
+      searchReady: false,
+      aiSearch: true,
+      locations: [{ id: "101", name: "North Yard" }],
+      requester: { id: person.id, name: "Riley Oakes" },
+    });
+    await db.update(schema.workspaceSettings).set({ searchIndexedAt: 5 }).where(eq(schema.workspaceSettings.workspaceId, WS));
+    expect((await loadDesk(db, WS))?.searchReady).toBe(true);
+  });
+});
+
+describe("getOrderDetail requester", () => {
+  it("carries the card's requester id", async () => {
+    const db = await setup();
+    await seedOrder(db, WS, { id: "o1", shopify: snapshotOf({ customerId: "77" }) });
+    expect((await getOrderDetail(db, WS, "o1"))?.requesterId).toBeNull();
+    await indexOrders(db, WS, ["o1"]);
+    expect((await getOrderDetail(db, WS, "o1"))?.requesterId).not.toBeNull();
+  });
+});
+
 describe("getOrderDetail", () => {
   it("returns the full row including the full snapshot", async () => {
     const db = await setup();
@@ -401,6 +452,7 @@ describe("getOrderDetail", () => {
       },
       itemsTruncated: false,
       location: null,
+      requesterId: null,
     });
   });
 
@@ -575,12 +627,13 @@ describe("loadDesk views", () => {
     const db = await seeded();
     const ids = async (view: "open" | "closed" | "approval" | "all") =>
       (await loadDesk(db, WS, { view }))?.orders.map((order) => order.id);
-    expect(await ids("open")).toEqual(["o_new", "d_wait", "d_gone", "o_legacy"]);
+    expect(await ids("open")).toEqual(["o_new", "d_wait", "o_legacy"]);
     expect(await ids("closed")).toEqual(["o_shipped", "d_rejected"]);
     expect(await ids("approval")).toEqual(["d_wait"]);
-    expect(await ids("all")).toHaveLength(6);
+    expect(await ids("all")).toHaveLength(5);
     // No view given: everything (the route always passes one).
-    expect((await loadDesk(db, WS))?.orders).toHaveLength(6);
+    expect((await loadDesk(db, WS))?.orders).toHaveLength(5);
+    expect((await loadDesk(db, WS, { query: { ...EMPTY_QUERY, view: "open", kind: "deleted" } }))?.orders.map((order) => order.id)).toEqual(["d_gone"]);
   });
 
   it("counts every view over all cards, leaving deleted requests out", async () => {

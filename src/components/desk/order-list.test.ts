@@ -41,6 +41,7 @@ function card(id: string, overrides: Partial<OrderSummary> = {}): OrderSummary {
     locationName: "",
     cancelled: false,
     searchText: [],
+    requesterId: null,
     hasPo: false,
     ...overrides,
   };

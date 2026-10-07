@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { and, eq } from "drizzle-orm";
 import type { Db } from "@/db";
 import * as schema from "@/db/schema";
-import { openTestDb, seedMember, seedOrder, seedUser, seedWorkspace } from "@/server/desk/test-helpers";
+import { openTestDb, seedMember, seedOrder, seedUser, seedWorkspace, snapshotOf } from "@/server/desk/test-helpers";
+import { indexOrders } from "@/server/search/index-orders";
 
 const state: { db: Db | null; session: { user: { id: string; email: string } } | null } = { db: null, session: null };
 
@@ -61,5 +62,25 @@ describe("GET /api/workspaces/[id]/orders", () => {
     expect(all.orders).toHaveLength(2);
     const unknown = (await (await GET(get("?view=nope"), context)).json()) as { view: string };
     expect(unknown.view).toBe("open");
+  });
+});
+
+describe("GET /api/workspaces/[id]/orders search", () => {
+  it("filters by the URL's words and pages by its limit and cursor", async () => {
+    const db = state.db!;
+    await seedOrder(db, "ws_impact", { id: "s1", createdAt: 1, shopify: snapshotOf({ items: [{ title: "Hard Hat", qty: 1, sku: "HH-1", variant: "", props: [] }] }) });
+    await seedOrder(db, "ws_impact", { id: "s2", createdAt: 2, shopify: snapshotOf({ items: [{ title: "Safety Vest", qty: 1, sku: "SV-2", variant: "", props: [] }] }) });
+    await indexOrders(db, "ws_impact", ["s1", "s2"]);
+    state.session = { user: { id: "u_staff", email: "staff@example.com" } };
+    type Page = { orders: { id: string }[]; matchCount: number; nextCursor: string };
+    const get = async (search: string) =>
+      (await (await GET(new Request(`https://orderingdesk.test/api/workspaces/ws_impact/orders${search}`), context)).json()) as Page;
+    const found = await get("?view=all&q=hard%20hat");
+    expect(found.orders.map((order) => order.id)).toEqual(["s1"]);
+    const first = await get("?view=all&limit=1");
+    expect(first.orders).toHaveLength(1);
+    expect(first.matchCount).toBeGreaterThanOrEqual(2);
+    const second = await get(`?view=all&limit=1&cursor=${encodeURIComponent(first.nextCursor)}`);
+    expect(second.orders[0].id).not.toBe(first.orders[0].id);
   });
 });
