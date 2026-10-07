@@ -13,11 +13,12 @@
 // exactly as read), the purchasing entity's company location, and for a new
 // location its shipping address. Nothing else on the draft is sent, so tags,
 // notes, cart attributes and the order discount stay as they are. A refusal
-// changes nothing; a timeout or transport failure is followed by a read,
-// never a resend. The updated draft is written onto the card through the
-// sync's own writer, a draft_edited entry names the actor and the changes,
-// and a total above $0 afterwards comes back as a warning (Approve needs
-// $0).
+// changes nothing; any other failure is followed by a read, never a resend,
+// and an error Shopify answered with (a GraphQL error, a rejected token) is
+// then reported in Shopify's own words. The updated draft is written onto
+// the card through the sync's own writer, a draft_edited entry names the
+// actor and the changes, and a total above $0 afterwards comes back as a
+// warning (Approve needs $0).
 
 import { and, eq } from "drizzle-orm";
 import type { Db } from "@/db";
@@ -80,6 +81,8 @@ export const EDIT_REFUSALS = {
   location: "Pick one of the company's locations. The list was refreshed.",
   noContact: "Shopify has no company contact on this request, so its location cannot change. Quantities can still change.",
   noAddress: (name: string) => `Shopify has no shipping address for ${name}. Add one to that location in Shopify, then try again.`,
+  notSaved: (detail: string, unchanged: boolean) =>
+    `Shopify did not save the changes: ${sentence(detail)}. ${unchanged ? "Nothing changed." : "Check the request in Shopify before editing it again."}`,
   noAnswerUnchanged: "Shopify did not answer. Nothing changed. Try again.",
   noAnswer: "Shopify did not answer. Check the request in Shopify before editing it again. The card updates on the next sync.",
   calculating: "Shopify is still calculating the new total. Approve checks it again before it creates the order.",
@@ -382,16 +385,27 @@ export async function editRequest(db: Db, ctx: ReviewContext, body: unknown, dep
   if (sent.kind === "ok") {
     node = sent.node;
   } else if (sent.kind === "refused") {
-    return refused(409, `Shopify did not save the changes: ${sentence(sent.detail)}. Nothing changed.`);
+    return refused(409, EDIT_REFUSALS.notSaved(sent.detail, true));
   } else {
-    // A timeout or transport failure: read, never send again.
+    // Anything but userErrors: read, never send again. A timeout or a
+    // transport failure may have run, and so may an internal error Shopify
+    // reports as a GraphQL error.
     const after = await fetchDraftForEdit(access.shopDomain, access.token, gid, access.fetchImpl);
-    if (after.kind !== "ok" || after.draft === null) {
-      return refused(502, EDIT_REFUSALS.noAnswer);
-    }
-    const current = { lines: after.draft.lines, locationId: after.draft.company?.locationId ?? null };
-    if (!editLanded(current, parsed)) {
-      return refused(502, after.draft.updatedAt === parsed.updatedAt ? EDIT_REFUSALS.noAnswerUnchanged : EDIT_REFUSALS.noAnswer);
+    const current = after.kind === "ok" ? after.draft : null;
+    const landed = current !== null && editLanded({ lines: current.lines, locationId: current.company?.locationId ?? null }, parsed);
+    if (!landed) {
+      const unchanged = current !== null && current.updatedAt === parsed.updatedAt;
+      if (sent.kind === "fatal" || sent.kind === "auth") {
+        // Shopify answered, with an error: its own words for the manager, and
+        // ids plus the kind for whoever looks (never the words, which can
+        // quote the input).
+        console.warn(
+          "[edit] " +
+            JSON.stringify({ workspaceId: ctx.workspaceId, orderRowId: card.id, shopifyDraftId: card.shopifyDraftId, failure: sent.kind }),
+        );
+        return refused(409, EDIT_REFUSALS.notSaved(failureText(sent), unchanged));
+      }
+      return refused(502, unchanged ? EDIT_REFUSALS.noAnswerUnchanged : EDIT_REFUSALS.noAnswer);
     }
     const full = await fetchDraftNode(access.shopDomain, access.token, gid, access.fetchImpl);
     node = full.kind === "ok" ? full.node : null;

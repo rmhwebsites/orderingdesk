@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import type { Db } from "@/db";
 import * as schema from "@/db/schema";
@@ -476,6 +476,79 @@ describe("editRequest", () => {
     });
     expect(await card(db)).toEqual(before);
     expect(await timeline(db)).toEqual([]);
+  });
+
+  it("reports Shopify's own words when it answers the edit with an error, after reading the draft", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const db = await setup();
+      const before = await card(db);
+      const invalid = fakeShop(
+        {},
+        { handle: { EditDraft: () => Response.json({ errors: [{ message: "Variable $input of type DraftOrderInput! was provided invalid value." }] }) } },
+      );
+      expect(await editRequest(db, ctx(), body(), deps(invalid.impl))).toEqual({
+        kind: "refused",
+        status: 409,
+        error: "Shopify did not save the changes: Variable $input of type DraftOrderInput! was provided invalid value. Nothing changed.",
+      });
+      expect(invalid.ops()).toEqual(["DraftForEdit", "EditDraft", "DraftForEdit"]);
+      expect(await card(db)).toEqual(before);
+      expect(await timeline(db)).toEqual([]);
+
+      // A rejected token is Shopify's answer too, not a missing one.
+      const denied = fakeShop({}, { handle: { EditDraft: () => new Response("", { status: 401 }) } });
+      expect(await editRequest(await setup(), ctx(), body(), deps(denied.impl))).toEqual({
+        kind: "refused",
+        status: 409,
+        error: "Shopify did not save the changes: Shopify rejected the access token. Nothing changed.",
+      });
+      expect(denied.ops()).toEqual(["DraftForEdit", "EditDraft", "DraftForEdit"]);
+
+      // The draft moved meanwhile without the edit: no promise that nothing changed.
+      const moved = fakeShop(
+        {},
+        {
+          handle: {
+            EditDraft: () => {
+              moved.state.updatedAt = "2026-10-06T15:00:09Z";
+              return Response.json({ errors: [{ message: "Internal error. Looks like something went wrong on our end." }] });
+            },
+          },
+        },
+      );
+      expect(await editRequest(await setup(), ctx(), body(), deps(moved.impl))).toEqual({
+        kind: "refused",
+        status: 409,
+        error:
+          "Shopify did not save the changes: Internal error. Looks like something went wrong on our end. Check the request in Shopify before editing it again.",
+      });
+
+      // An internal error that ran anyway: the read finds the edit, so it counts.
+      const ran = fakeShop(
+        {},
+        {
+          handle: {
+            EditDraft: (call) => {
+              ran.applyEdit(call.variables.input as Record<string, unknown>);
+              return Response.json({ errors: [{ message: "Internal error. Looks like something went wrong on our end." }] });
+            },
+          },
+        },
+      );
+      const landed = await setup();
+      expect(await editRequest(landed, ctx(), body(), deps(ran.impl))).toMatchObject({ kind: "edited", warning: null });
+      expect(ran.ops()).toEqual(["DraftForEdit", "EditDraft", "DraftForEdit", "DraftOrderById", "DraftBeforeApprove"]);
+      expect((await card(landed)).locationId).toBe("102");
+
+      // Ids and the failure kind only, never Shopify's words or the token.
+      const logged = warn.mock.calls.map((call) => String(call[0]));
+      const line = (failure: string) => "[edit] " + JSON.stringify({ workspaceId: WS, orderRowId: "d1", shopifyDraftId: "12", failure });
+      expect(logged).toEqual([line("fatal"), line("auth"), line("fatal")]);
+      expect(logged.join(" ")).not.toContain(TOKEN);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("reads after a timeout and never sends the edit twice", async () => {
