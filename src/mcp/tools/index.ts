@@ -1,5 +1,6 @@
 // Every MCP tool, in the order tools/list shows them. Later tasks append.
 import { getMyAccess } from "./access";
+import { confirmCancel, confirmEditRequest, prepareCancel, prepareEditRequest } from "./cancel-edit";
 import type { ToolDef } from "./define";
 import { findPeople, getLocation, getPerson, listLocations } from "./lookup";
 import { getOrder, listStatuses, searchOrders } from "./orders";
@@ -23,4 +24,8 @@ export const ALL_TOOLS: ToolDef[] = [
   confirmApprove,
   prepareReject,
   confirmReject,
+  prepareCancel,
+  confirmCancel,
+  prepareEditRequest,
+  confirmEditRequest,
 ];
