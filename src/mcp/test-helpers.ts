@@ -19,6 +19,8 @@ import {
   seedWorkspace,
   snapshotOf,
 } from "@/server/desk/test-helpers";
+import { runTool } from "./registry";
+import type { ToolDef, ToolDeps } from "./tools/define";
 import type { Principal } from "./types";
 
 export const WS = "ws_impact";
@@ -211,4 +213,25 @@ export function fakeCtx(props: Record<string, unknown> = {}): ExecutionContext &
     },
     passThroughOnException: () => undefined,
   } as unknown as ExecutionContext & { pending: Promise<unknown>[] };
+}
+
+export function toolDeps(db: Db, principal: Principal = principalFor(), overrides: Partial<ToolDeps> = {}): ToolDeps {
+  return {
+    db,
+    env: testEnv(),
+    principal,
+    now: () => NOW,
+    // Follow-ups are not run in tool tests (they would reach Shopify and the
+    // realtime room); tests that care capture them with their own after.
+    after: () => undefined,
+    ...overrides,
+  };
+}
+
+// Runs a tool the way the MCP server does (input parsed by its schema, then
+// the run wrapper) and returns the result and its structured content.
+export async function call(tool: ToolDef, args: Record<string, unknown>, deps: ToolDeps) {
+  const result = await runTool(tool, tool.input.parse(args), deps);
+  // eslint-free any: tests read nested fields freely.
+  return { result, data: result.structuredContent as Record<string, any> };
 }
