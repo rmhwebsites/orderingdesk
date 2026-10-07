@@ -13,22 +13,34 @@ export const TEXT_MAX = 500;
 export const LONG_TEXT_MAX = 4000;
 export const NAME_MAX = 120;
 
-// C0 except tab and line feed, DEL and C1, zero-width and bidi controls,
-// word joiners, the line and paragraph separators, and the BOM.
-const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2064\ufeff]/g;
+// Hidden characters, which a person cannot see in the app but a chat app's
+// model reads: every Unicode "other" character except tab and line feed (C0
+// and C1 controls, DEL, format characters such as zero-width spaces, bidi
+// controls and isolates, the BOM and the tags block of "ASCII smuggling",
+// lone surrogates, private use, unassigned), every default-ignorable code
+// point (soft hyphen, variation selectors, Hangul fillers), and the line and
+// paragraph separators.
+const HIDDEN = /[^\P{C}\t\n]|[\p{Default_Ignorable_Code_Point}\u{2028}\u{2029}]/gu;
 const MD_IMAGE = /!\[([^\]]*)\]\([^)]*\)/g;
 const MD_LINK = /\[([^\]]*)\]\([^)]*\)/g;
 const TAG = /<\/?[a-z][^>]*>/gi;
 const URL_LIKE = /\b(?:https?:\/\/|www\.|javascript:|mailto:|ftp:\/\/|data:[a-z]+\/)[^\s<>"']*/gi;
 const SHOPIFY_CDN = "https://cdn.shopify.com/";
 
+// A carriage return becomes a line feed (alone it is a line break too), then
+// hidden characters go, then the Unicode compatibility form is taken (after
+// stripping, so a hidden character cannot block it; it never makes a hidden
+// character out of a visible one). The confirm echoes (src/mcp/echo.ts)
+// compare text in this same form, so they match what the person saw.
+export function withoutHidden(value: string): string {
+  return value.replace(/\r\n?/g, "\n").replace(HIDDEN, "").normalize("NFKC");
+}
+
 export function plainText(value: unknown, max = TEXT_MAX): string {
   if (typeof value !== "string") {
     return "";
   }
-  const text = value
-    .normalize("NFKC")
-    .replace(CONTROL, "")
+  const text = withoutHidden(value)
     .replace(MD_IMAGE, "$1")
     .replace(MD_LINK, "$1")
     .replace(TAG, "")
