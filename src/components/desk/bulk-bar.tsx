@@ -118,8 +118,9 @@ export function BulkBar({
   onDismissResult: () => void;
 }) {
   const [target, setTarget] = useState<StatusView | null>(null);
-  // Reject has its own step with a reason; it is never a bulk move.
-  const options = statuses.filter((status) => status.shopifyLink !== "draft_rejected");
+  // Reject has its own step with a reason, and Cancel order has its own step
+  // too (it cancels the order in Shopify); neither is ever a bulk move.
+  const options = statuses.filter((status) => status.shopifyLink !== "draft_rejected" && status.shopifyLink !== "cancelled");
   if (cards.length === 0 && !result) {
     return null;
   }

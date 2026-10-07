@@ -54,6 +54,30 @@ describe("BulkBar", () => {
     expect(html).toContain(">Clear</button>");
   });
 
+  it("never offers the cancelled status, which belongs to Cancel order and Shopify", () => {
+    const withCancelled: StatusView[] = [
+      ...STATUSES,
+      { key: "cancelled", label: "Cancelled", color: "slate", sort: 3, triggersPo: false, shopifyLink: "cancelled", closed: true },
+    ];
+    for (const role of ["staff", "manager"] as const) {
+      const html = renderToStaticMarkup(
+        createElement(BulkBar, {
+          cards: CARDS,
+          statuses: withCancelled,
+          role,
+          busy: false,
+          result: null,
+          onMove: async () => {},
+          onClear: () => {},
+          onDismissResult: () => {},
+        }),
+      );
+      expect(html).toContain(">Shipped</option>");
+      expect(html).not.toContain(">Cancelled</option>");
+      expect(html).not.toContain('value="cancelled"');
+    }
+  });
+
   it("shows the outcome with every card that stayed", () => {
     const html = renderToStaticMarkup(
       createElement(BulkBar, {
