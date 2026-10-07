@@ -406,7 +406,9 @@ describe("schema migrations", () => {
     expect(indexes("ai_grants")).toEqual(["ai_grants_user", "ai_grants_ws_user"]);
     expect(indexes("ai_actions")).toEqual(["ai_actions_expires", "ai_actions_grant"]);
     expect(indexes("ai_sign_in_codes")).toEqual(["ai_codes_email", "ai_codes_expires", "ai_codes_ip"]);
-    expect(indexes("audit_log")).toEqual(["audit_grant", "audit_ws_created"]);
+    // audit_created (0015): the cron's 400-day prune deletes by created_at
+    // alone, every 10 minutes, so it must not scan the table.
+    expect(indexes("audit_log")).toEqual(["audit_created", "audit_grant", "audit_ws_created"]);
   });
 
   // The AI switch for team members starts off in every workspace (owner

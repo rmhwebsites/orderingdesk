@@ -639,4 +639,10 @@ export const auditLog = sqliteTable("audit_log", {
   // ok, or the tool error code.
   outcome: text("outcome").notNull(),
   createdAt: integer("created_at").notNull(),
-}, (t) => [index("audit_ws_created").on(t.workspaceId, t.createdAt), index("audit_grant").on(t.grantId, t.createdAt)]);
+}, (t) => [
+  index("audit_ws_created").on(t.workspaceId, t.createdAt),
+  index("audit_grant").on(t.grantId, t.createdAt),
+  // The cron's 400-day prune deletes by created_at alone (migration 0015):
+  // without it every run scans the whole table.
+  index("audit_created").on(t.createdAt),
+]);
