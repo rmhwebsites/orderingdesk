@@ -42,14 +42,16 @@ export function EmptyDesk({ basePath, canConnect }: { basePath: string; canConne
 // the review queue (draft orders spec section 11.2), empty whenever every
 // request has been handled, so it reads as a normal state, not a failed
 // search. An empty view with nothing else filtering it says so in its own
-// words (comprehensive desk design section 1).
+// words (comprehensive desk design section 1). Search filters with chips
+// (an AI answer's location, item, dates and the like) speak like a search.
 function noMatchesCopy(
   query: string,
   kind: DeskKind,
   statusLabel: string | null,
   view: DeskView,
+  filtered: boolean,
 ): { title: string; body: string } {
-  if (query.length === 0 && kind === "all" && statusLabel === null) {
+  if (query.length === 0 && !filtered && kind === "all" && statusLabel === null) {
     switch (view) {
       case "open":
         return { title: "Nothing open", body: "Every card is in a closed status. New requests and orders land here." };
@@ -64,10 +66,10 @@ function noMatchesCopy(
         break;
     }
   }
-  if (query.length > 0) {
+  if (query.length > 0 || filtered) {
     const where = statusLabel ? ` in ${statusLabel}` : "";
     const title = { all: "No orders match", drafts: "No requests match", orders: "No orders match", deleted: "No deleted requests match" }[kind];
-    return { title, body: `Nothing matches "${query}"${where}.` };
+    return { title, body: query.length > 0 ? `Nothing matches "${query}"${where}.` : `Nothing matches these filters${where}.` };
   }
   switch (kind) {
     case "drafts":
@@ -95,6 +97,7 @@ export function NoMatches({
   kind,
   statusLabel,
   view = "all",
+  filtered = false,
   onClear,
 }: {
   query: string;
@@ -103,13 +106,15 @@ export function NoMatches({
   statusLabel: string | null;
   // The view the list shows (src/lib/desk-query.ts).
   view?: DeskView;
+  // Search filters with chips are on (src/lib/desk-query.ts filterChips).
+  filtered?: boolean;
   // Clears the search and the status, and goes back to All.
   onClear: () => void;
 }) {
-  const copy = noMatchesCopy(query.trim(), kind, statusLabel, view);
+  const copy = noMatchesCopy(query.trim(), kind, statusLabel, view, filtered);
   const hintId = useId();
   // Clear filters only when something besides the view filters the list.
-  const canClear = query.trim().length > 0 || kind !== "all" || statusLabel !== null;
+  const canClear = query.trim().length > 0 || filtered || kind !== "all" || statusLabel !== null;
   // Owner decision (Wave 1c): words search every card, open and closed,
   // whatever the view (src/lib/desk-query.ts listScope), so a search that
   // misses says where it looked; a status or a kind narrows it.

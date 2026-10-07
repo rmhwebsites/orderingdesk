@@ -40,6 +40,7 @@ describe("NoMatches", () => {
     kind?: "all" | "drafts" | "orders" | "deleted";
     statusLabel?: string | null;
     view?: "open" | "approval" | "all" | "closed";
+    filtered?: boolean;
   }) =>
     renderToStaticMarkup(
       createElement(NoMatches, {
@@ -47,6 +48,7 @@ describe("NoMatches", () => {
         kind: props.kind ?? "all",
         statusLabel: props.statusLabel ?? null,
         view: props.view,
+        filtered: props.filtered,
         onClear: () => {},
       }),
     );
@@ -118,5 +120,17 @@ describe("NoMatches", () => {
     expect(render({ view: "open", query: "vest", statusLabel: "New" })).not.toContain("every card");
     expect(render({ view: "open", query: "vest", kind: "drafts" })).not.toContain("every card");
     expect(render({ view: "open", query: "   " })).not.toContain("every card");
+  });
+
+  // Search filters (an AI answer's chips: a location, an item, dates) that
+  // find nothing in a view are not an empty view.
+  it("says the search filters matched nothing instead of describing the view", () => {
+    const open = render({ view: "open", filtered: true });
+    expect(open).not.toContain("Nothing open");
+    expect(open).toContain("No orders match");
+    expect(open).toContain("Nothing matches these filters.");
+    expect(open).toContain(">Clear filters<");
+    expect(render({ view: "all", filtered: true, kind: "orders", statusLabel: "New" })).toContain("Nothing matches these filters in New.");
+    expect(render({ view: "all", filtered: true, kind: "orders" })).not.toContain("No orders yet");
   });
 });

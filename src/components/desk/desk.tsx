@@ -7,6 +7,7 @@ import {
   DESK_QUERY_MAX,
   SEARCH_DEFAULTS,
   deskParams,
+  filterChips,
   listScope,
   parseDeskQuery,
   querySortDefault,
@@ -40,6 +41,7 @@ import {
 } from "@/lib/desk-state";
 import { DEFAULT_QUEUE_SETTINGS, pricesShown, type QueueSettingsView } from "@/lib/queue-settings";
 import { roleAtLeast } from "@/lib/roles";
+import { shouldAskAi } from "@/lib/search-shortcut";
 import type { EditRequestBody, RequestEditor } from "@/lib/request-edit";
 import { selectAll, toggleSelection, type Selection } from "@/lib/selection";
 import { BULK_STATUS_MAX, type BulkCard } from "@/lib/status-rules";
@@ -55,6 +57,7 @@ import { BulkBar, type BulkResult } from "./bulk-bar";
 import { DeskSkeleton } from "./desk-skeleton";
 import type { EditSaveOutcome } from "./edit-request";
 import { DeskLoadError, EmptyDesk, NoMatches } from "./empty-states";
+import { aiFallbackNotice, FilterChips } from "./filter-chips";
 import { LoadMore } from "./load-more";
 import {
   DrawerShell,
@@ -138,6 +141,16 @@ function DraftsBanner({ settingsHref, onDismiss }: { settingsHref: string; onDis
 
 type LoadState = { status: "loading" } | { status: "error"; message: string } | { status: "ready" };
 
+// AI search for the question last submitted (design section 3): asking,
+// understood (the answer replaced the query) or a fallback (the keyword
+// results stand).
+type AiState =
+  | { status: "idle" }
+  | { status: "asking"; q: string }
+  | { status: "understood"; q: string }
+  | { status: "fallback"; q: string; reason: string };
+const AI_IDLE: AiState = { status: "idle" };
+
 const FLASH_MS = 1800;
 const MEMBERS_REFRESH_MS = 60000;
 const DRAWER_TITLE_ID = "order-drawer-title";
@@ -190,6 +203,14 @@ export function Desk() {
   const [loadingMore, setLoadingMore] = useState(false);
   // Bumped when the desk rewrites the words itself, so the search box shows them.
   const [searchReset, setSearchReset] = useState(0);
+  const [ai, setAi] = useState<AiState>(AI_IDLE);
+  // The question waiting for an answer ("" when none): a late answer to an
+  // abandoned question is dropped.
+  const asked = useRef("");
+  // The view the person was on when an AI answer replaced the query (its
+  // own view): clearing the search goes back to it, as clearing typed
+  // words does (owner decision). A view the person picks afterwards wins.
+  const viewBeforeAi = useRef<DeskView | null>(null);
 
   useEffect(() => {
     queryKeyRef.current = queryKey;
@@ -433,6 +454,8 @@ export function Desk() {
   const onQueryText = useCallback(
     (text: string) => {
       stopTyping();
+      asked.current = "";
+      setAi((current) => (current.status === "idle" ? current : AI_IDLE));
       typing.current = setTimeout(() => {
         typing.current = null;
         writeWords(text);
@@ -440,18 +463,64 @@ export function Desk() {
     },
     [stopTyping, writeWords],
   );
+  // Enter: keyword results at once, then a question of three words or
+  // more goes to AI search (when the workspace has it on). Its answer
+  // replaces the whole query (its own view, never q, the open drawer
+  // stays) and shows as removable chips; any fallback keeps the keyword
+  // results.
   const onSearchSubmit = useCallback(
-    (text: string) => {
+    async (text: string) => {
       stopTyping();
       writeWords(text);
       setSearchReset((count) => count + 1);
+      const q = text.trim().slice(0, DESK_QUERY_MAX);
+      asked.current = "";
+      if (!aiSearch || !shouldAskAi(q)) {
+        setAi(AI_IDLE);
+        return;
+      }
+      const fromView = parseDeskQuery(new URLSearchParams(window.location.search)).view;
+      asked.current = q;
+      setAi({ status: "asking", q });
+      try {
+        const response = await fetch(`/api/workspaces/${encodeURIComponent(workspace.id)}/search/ai`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ q }),
+        });
+        const body = (await response.json().catch(() => null)) as { params?: string; fallback?: string } | null;
+        if (asked.current !== q) {
+          return; // a newer search replaced this one
+        }
+        asked.current = "";
+        if (response.ok && typeof body?.params === "string") {
+          if (viewBeforeAi.current === null) {
+            viewBeforeAi.current = fromView;
+          }
+          writtenQ.current = "";
+          updateDeskQuery(parseDeskQuery(new URLSearchParams(body.params)));
+          setSearchReset((count) => count + 1);
+          setAi({ status: "understood", q });
+        } else {
+          setAi({ status: "fallback", q, reason: body?.fallback ?? "error" });
+        }
+      } catch {
+        if (asked.current === q) {
+          asked.current = "";
+          setAi({ status: "fallback", q, reason: "error" });
+        }
+      }
     },
-    [stopTyping, writeWords],
+    [stopTyping, writeWords, aiSearch, workspace.id, updateDeskQuery],
   );
   const clearFilters = useCallback(() => {
     stopTyping();
+    asked.current = "";
+    setAi(AI_IDLE);
     writtenQ.current = "";
-    updateDeskQuery({ ...SEARCH_DEFAULTS, q: "", status: null, kind: "all" });
+    const view = viewBeforeAi.current;
+    viewBeforeAi.current = null;
+    updateDeskQuery({ ...SEARCH_DEFAULTS, q: "", status: null, kind: "all", ...(view ? { view } : {}) });
     setSearchReset((count) => count + 1);
   }, [stopTyping, updateDeskQuery]);
   useEffect(() => {
@@ -1096,6 +1165,13 @@ export function Desk() {
   );
 
   const viewChips = useMemo(() => chipsForView(chips, view, closedKeys), [chips, view, closedKeys]);
+  // The search filters with no control of their own (the status filter
+  // has its own chips above), each removable.
+  const searchChips = useMemo(
+    () => filterChips(deskQuery, { locations: vocab.locations, requesterName: vocab.requester?.name ?? null }),
+    [deskQuery, vocab],
+  );
+  const fallbackText = ai.status === "fallback" ? aiFallbackNotice(ai.reason) : null;
   const total = totalOrders(desk.statusCounts);
   const drawerSummary = drawerOrderId ? desk.orders.find((order) => order.id === drawerOrderId) : undefined;
   const nextRequest = drawerOrderId ? nextWaitingRequest(visible, drawerOrderId, closedKeys, rejectedKeys) : null;
@@ -1125,7 +1201,10 @@ export function Desk() {
           <Toolbar
             layout={isDesk ? "row" : "phone"}
             view={view}
-            onView={(next) => updateDeskQuery({ view: next, status: null })}
+            onView={(next) => {
+              viewBeforeAi.current = null;
+              updateDeskQuery({ view: next, status: null });
+            }}
             viewCounts={viewCounts}
             showApproval={roleAtLeast(role, "manager")}
             statusKey={deskQuery.status}
@@ -1135,7 +1214,7 @@ export function Desk() {
             resetKey={searchReset}
             onQuery={onQueryText}
             onSubmit={onSearchSubmit}
-            asking={false}
+            asking={ai.status === "asking"}
             aiHint={aiSearch}
             sort={deskQuery.sort}
             sortDefault={querySortDefault(deskQuery)}
@@ -1156,6 +1235,21 @@ export function Desk() {
           />
         ) : null}
       </div>
+
+      {showToolbar ? (
+        <>
+          <FilterChips
+            chips={searchChips}
+            understood={ai.status === "understood"}
+            onRemove={(patch) => updateDeskQuery(patch)}
+            onClear={clearFilters}
+          />
+          {/* Kept in the page so a fallback is announced when it lands. */}
+          <p role="status" className={fallbackText ? "text-sm text-ink-2" : "sr-only"}>
+            {fallbackText}
+          </p>
+        </>
+      ) : null}
 
       {showBanner ? (
         <DraftsBanner
@@ -1213,6 +1307,7 @@ export function Desk() {
                 <NoMatches
                   view={loadedQuery.view}
                   query={deskQuery.q}
+                  filtered={searchChips.length > 0}
                   kind={filter.kind ?? "all"}
                   statusLabel={
                     filter.statusKey === null
