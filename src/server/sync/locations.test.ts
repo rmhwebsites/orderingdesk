@@ -219,6 +219,43 @@ describe("backfillLocationIds", () => {
     expect(await backfillLocationIds(db, WS)).toBe(0);
   });
 
+  // A card the backfill gives a location carries it in its search row (the
+  // filter column, the name in the haystack, its requester's home location)
+  // at once, during the one-time search backfill too, instead of waiting for
+  // the cron's repair sweep.
+  it("re-indexes the cards it gives a location, and only those", async () => {
+    const db = await setup();
+    await seedLocation(db, WS, { shopifyLocationId: "101", name: "Buford HQ" });
+    await seedDraft(db, WS, { id: "d1", shopify: draftSnapshotOf({ location: "Buford HQ", customerId: "77" }) });
+    await seedDraft(db, WS, { id: "d2", shopify: draftSnapshotOf({ location: "Elsewhere" }) });
+    await indexOrders(db, WS, ["d1", "d2"]);
+    // A stale haystack on the card it does not touch shows that one is left alone.
+    await db.update(schema.orderSearch).set({ haystack: "stale" }).where(eq(schema.orderSearch.orderId, "d2"));
+
+    expect(await backfillLocationIds(db, WS)).toBe(1);
+    const search = async (id: string) => (await db.select().from(schema.orderSearch).where(eq(schema.orderSearch.orderId, id)))[0];
+    expect(await search("d1")).toMatchObject({ locationId: "101" });
+    expect((await search("d1")).haystack).toContain("buford hq");
+    expect((await db.select().from(schema.people))[0]).toMatchObject({ shopifyCustomerId: "77", locationId: "101" });
+    expect(await search("d2")).toMatchObject({ locationId: null, haystack: "stale" });
+  });
+
+  it("re-indexes them from a location sync while the search backfill is still running", async () => {
+    const db = await setup();
+    await seedDraft(db, WS, { id: "d1", createdAt: 1000, shopify: draftSnapshotOf({ location: "Buford HQ" }) });
+    await indexOrders(db, WS, ["d1"]);
+    // The backfill already passed this card and is not finished.
+    await db
+      .update(schema.workspaceSettings)
+      .set({ searchIndexedAt: null, searchBackfillCursor: "1000~d1" })
+      .where(eq(schema.workspaceSettings.workspaceId, WS));
+    const shop = fakeShop(THREE);
+
+    expect(await syncLocations(db, env, WS, { fetchImpl: shop.impl, now: () => NOW })).toMatchObject({ kind: "ok", backfilled: 1 });
+    const [row] = await db.select().from(schema.orderSearch).where(eq(schema.orderSearch.orderId, "d1"));
+    expect(row.locationId).toBe("101");
+  });
+
   it("trims the stored name and stays inside the workspace", async () => {
     const db = await setup();
     await seedWorkspace(db, "ws_other");

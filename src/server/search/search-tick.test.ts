@@ -234,6 +234,19 @@ describe("runSearchTick repair", () => {
     ]);
   });
 
+  // The safety net behind every location writer (the name backfill in
+  // src/server/sync/locations.ts indexes the cards it touches, but an index
+  // failure is only logged): a card whose location changed behind the
+  // index's back is rewritten with the location's name on the next tick.
+  it("rewrites a card whose location was set behind the index's back", async () => {
+    const db = await indexedWorkspace();
+    await seedLocation(db, WS, { shopifyLocationId: "101", name: "North Yard" });
+    await db.update(schema.orders).set({ locationId: "101" }).where(eq(schema.orders.id, "o1"));
+    expect(await runSearchTick(db, env, WS, { now: () => NOW })).toEqual({ backfilled: 0, repaired: 1, removed: 0 });
+    expect(await searchRowOf(db, "o1")).toMatchObject({ locationId: "101" });
+    expect((await searchRowOf(db, "o1")).haystack).toContain("north yard");
+  });
+
   it("does nothing on a workspace whose index is current", async () => {
     const db = await indexedWorkspace();
     expect(await runSearchTick(db, env, WS, { now: () => NOW })).toEqual({ backfilled: 0, repaired: 0, removed: 0 });

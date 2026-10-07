@@ -7,8 +7,9 @@
 // company_locations/* webhooks apply one location at a time. A location
 // Shopify stops listing is kept, inactive, so cards still name it; rows are
 // never deleted. After each sync, cards stored before 0012 get their
-// location by name (backfillLocationIds). Needs a companies scope; never
-// throws. Relative imports on purpose: the cron path bundles this.
+// location by name and are indexed again (backfillLocationIds). Needs a
+// companies scope; never throws. Relative imports on purpose: the cron path
+// bundles this.
 
 import { and, asc, eq, isNull, lt, sql, type AnyColumn } from "drizzle-orm";
 import type { Db } from "../../db";
@@ -17,7 +18,7 @@ import { locations, orders, storeConnections } from "../../db/schema";
 import { readLocationAddress, type LocationAddress } from "../../lib/address";
 import { companiesEnabled, failureText } from "../shopify/admin";
 import { fetchCompanyLocation, fetchCompanyLocations, type CompanyLocationRecord } from "../shopify/locations";
-import { reindexLocation } from "../search/index-orders";
+import { reindexLocation, safeIndexOrders } from "../search/index-orders";
 import { companyLocationIdOf } from "../shopify/normalize";
 import { safeErrorReason } from "../shopify/status-sync";
 import { getAccessToken } from "../shopify/token";
@@ -111,9 +112,15 @@ const cardLocationName = sql`coalesce(${nameIn(orders.shopify)}, ${nameIn(orders
 // gives the card that location. Ambiguous or unknown names stay null. One
 // statement over every card of the workspace still without a location, so
 // cards that can never match (no name) cannot hide older ones that can.
+// The same statement returns the cards it touched, and they are indexed
+// again right away, so their search rows carry the location (the filter
+// column, its name in the haystack) during the one-time search backfill
+// too. Should that index call fail (logged, never thrown), the cron's
+// repair sweep rewrites them on its next tick once the search backfill is
+// done: their search row's location no longer matches the card's.
 export async function backfillLocationIds(db: Db, workspaceId: string): Promise<number> {
   const sameName = sql`${locations.workspaceId} = ${workspaceId} and ${locations.name} = ${cardLocationName}`;
-  const result = await db
+  const touched = await db
     .update(orders)
     .set({ locationId: sql`(select ${locations.shopifyLocationId} from ${locations} where ${sameName})` })
     .where(
@@ -124,8 +131,10 @@ export async function backfillLocationIds(db: Db, workspaceId: string): Promise<
         sql`${cardLocationName} is not null`,
         sql`(select count(*) from ${locations} where ${sameName}) = 1`,
       ),
-    );
-  return rowsAffected(result, "locations");
+    )
+    .returning({ id: orders.id });
+  await safeIndexOrders(db, workspaceId, touched.map((row) => row.id));
+  return touched.length;
 }
 
 // Records that a location sync just ran, so the cron's next one waits a
