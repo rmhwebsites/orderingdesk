@@ -1683,3 +1683,61 @@ request, never a real employee's first.
   submitted from the storefront arrives within seconds (Stage 0's first
   item). Optional read-only check of the row:
   `SELECT shop_domain, canonical_shop_domain FROM store_connections`.
+
+## STATE UPDATE, 2026-10-06 WAVE 1a polish and the work queue (supersedes above)
+
+- Branch build/m1-core on top of 4eae88d (Wave 0 checklist and Wave 1
+  plans). Commits df8ed6a through e1fd428 (30), built batch by batch from
+  docs/plans/2026-10-05-wave-1a-polish-work-queue.md, each batch reviewed
+  for spec compliance and then code quality. Gates at the end: 1708 tests in
+  159 files, `npx tsc --noEmit --incremental false` clean, `npm run build`
+  clean.
+- NEW MIGRATION 0011 (drizzle/0011_work_queue.sql): statuses.closed
+  (Delivered and Rejected closed by link or key), workspace_settings
+  age_amber_days (2), age_red_days (4), price_display ('auto'). Additive.
+  Proven on production-shaped data (the Oct 5 pre-0010 backup in a
+  throwaway local D1, 0000 to 0009, data rows, then 0010 and 0011): orders
+  9 and events 9 with identical content hashes before and after, statuses
+  7 to 8 (0010's Rejected), closed = 1 on exactly delivered and rejected,
+  settings 2, 4, auto, foreign_key_check clean, open plus closed equals
+  cards.
+- What shipped:
+  - One component kit (Chip in three sizes, InlineMessage, Section,
+    DetailRow, RadioCard, Segmented, Monogram, Spinner) used everywhere;
+    per-theme primary hover, secondary danger button, busy buttons at full
+    color with a spinner, styled invalid fields; one event map with
+    meaningful colors for the timeline and the bell.
+  - Account menu on every host (name, email, role, theme, switch
+    workspace, Sign out); one-row top bar; the hub header fits phones.
+  - Dense desk: one list per breakpoint, 44px rows, compact phone cards,
+    one toolbar row.
+  - Honest state: the sync chip turns amber after 30 minutes and red after
+    3 hours with a tip; error, global error and workspace error screens;
+    themed not-found on client hosts.
+  - Open by default (statuses' closed flag, server-owned views and counts:
+    Open, Needs approval, All, Closed); age on every card with the
+    workspace thresholds; Waiting longest replaces Highest total.
+  - Needs approval queue with a top bar count and Approve and next (same
+    400 ms armed confirmation). Owner decision: Approve and next skips the
+    automatic PO review; a toast says to create the PO from the order, and
+    orders whose status starts a PO but have none show a "PO not created"
+    chip and drawer hint. A single Approve still opens the PO review.
+  - Desk filters in the URL (view, status, kind, q, sort).
+  - Bulk status change (checkboxes, shift-click, one confirmation, server
+    re-check of every card through src/lib/status-rules.ts; cap 25; Shopify
+    tags written four at a time after the response).
+  - Show prices mode (automatic hides totals and the Paid chip on a $0
+    store); request state copy; phone ergonomics (drawer action bar, PO
+    confirm that fits, whole SKUs, 40px touch targets).
+- Deploy order: backup and bookmark, `npm run db:migrate:remote` (0011),
+  then deploy. The sync test pin is now 0011 (drizzle names every column in
+  inserts, so code before the migration would fail).
+- Known limits: bulk moves send no all-activity pushes; bulk Shopify tag
+  writes run in waitUntil with no queue (unwritten cards are logged after
+  20 seconds); the approval view is readable by staff through its URL (no
+  buttons); keyword search still searches the current view (Wave 1c makes
+  plain-word search cover all cards, by owner decision).
+- Verification note: the final verification agent stalled on a machine at
+  load average 60 (a stuck Gemini crash handler, stopped with Ryan's OK);
+  the lead ran the gates, read the migration proof and reviewed the
+  screenshots under the scratchpad's wave-1a/ui.
