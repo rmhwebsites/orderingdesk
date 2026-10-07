@@ -16,6 +16,12 @@
     }
   ],
   "r2_buckets": [{ "binding": "PO_BUCKET", "bucket_name": "orderingdesk" }],
+  // OAuth grants, tokens and registered clients of the MCP server
+  // (src/mcp/oauth/). The operator creates the namespace with
+  // `npx wrangler kv namespace create OAUTH_KV` and puts its id here before
+  // the first deploy (Deploy notes); until then the zeros work for local
+  // development only, and a deploy fails loudly.
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "00000000000000000000000000000000" }],
   // Cloudflare Email Service send binding (requires Workers Paid and an
   // onboarded sending domain before production email works)
   "send_email": [{ "name": "EMAIL" }],
