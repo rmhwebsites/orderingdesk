@@ -4,6 +4,7 @@ import { storeConnections, webhookDeliveries } from "../../db/schema";
 import { broadcastImported, broadcastMerges, broadcastSync, kickUsers } from "../broadcast";
 import { notifyNewOrders } from "../notify";
 import { safeIndexOrders } from "../search/index-orders";
+import { runSearchTick } from "../search/search-tick";
 import { shareShopifyMoves } from "../shopify/fanout";
 import { syncRoster } from "../shopify/roster-sync";
 import { runBackfillTick } from "./backfill";
@@ -115,6 +116,17 @@ export async function runAllSyncs(db: Db, env: CloudflareEnv, opts?: SyncOptions
       }
     } catch (e) {
       console.log("[backfill] " + JSON.stringify({ workspaceId, error: e instanceof Error ? e.name : "failed" }));
+    }
+
+    // The search index: the one-time backfill, then the repair sweep. Last,
+    // so it never delays the sync, the roster or the history import.
+    try {
+      const search = await runSearchTick(db, env, workspaceId, opts);
+      if (search.backfilled + search.repaired + search.removed > 0 || search.finished || search.skipped) {
+        console.log("[search] " + JSON.stringify({ workspaceId, ...search }));
+      }
+    } catch (e) {
+      console.log("[search] " + JSON.stringify({ workspaceId, error: e instanceof Error ? e.name : "failed" }));
     }
   }
 

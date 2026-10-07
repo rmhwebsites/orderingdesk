@@ -24,6 +24,9 @@ vi.mock("./locations", () => ({
   syncLocationsIfDue: vi.fn(async () => ({ kind: "skipped", reason: "no-companies-scope" })),
 }));
 vi.mock("../search/index-orders", () => ({ safeIndexOrders: vi.fn(async () => undefined) }));
+vi.mock("../search/search-tick", () => ({
+  runSearchTick: vi.fn(async () => ({ backfilled: 0, repaired: 0, removed: 0 })),
+}));
 
 const { runSync } = await import("./run");
 const { runBackfillTick } = await import("./backfill");
@@ -32,6 +35,7 @@ const { syncRoster } = await import("../shopify/roster-sync");
 const { notifyNewOrders } = await import("../notify");
 const { syncLocationsIfDue } = await import("./locations");
 const { safeIndexOrders } = await import("../search/index-orders");
+const { runSearchTick } = await import("../search/search-tick");
 const { runAllSyncs, WEBHOOK_DELIVERY_RETENTION_MS } = await import("./cron");
 
 const env = { ENCRYPTION_KEY: "unused" } as CloudflareEnv;
@@ -65,6 +69,7 @@ beforeEach(() => {
   vi.mocked(broadcastImported).mockClear();
   vi.mocked(syncLocationsIfDue).mockClear();
   vi.mocked(safeIndexOrders).mockClear();
+  vi.mocked(runSearchTick).mockClear();
   vi.spyOn(console, "log").mockImplementation(() => undefined);
 });
 
@@ -235,5 +240,18 @@ describe("runAllSyncs and the search index", () => {
     );
     await runAllSyncs(db, env);
     expect(vi.mocked(safeIndexOrders).mock.calls.map((call) => [call[1], call[2]])).toEqual([["ws_a", ["i1", "i2"]]]);
+  });
+
+  it("runs the search tick for every connected workspace, and one failure stops nothing", async () => {
+    const db = await setup();
+    vi.mocked(runSync).mockResolvedValue(result());
+    vi.mocked(runSearchTick).mockImplementation(async (_db, _env, workspaceId) => {
+      if (workspaceId === "ws_a") {
+        throw new Error("boom");
+      }
+      return { backfilled: 3, repaired: 0, removed: 0 };
+    });
+    await runAllSyncs(db, env);
+    expect(vi.mocked(runSearchTick).mock.calls.map((call) => call[2]).sort()).toEqual(["ws_a", "ws_b"]);
   });
 });
