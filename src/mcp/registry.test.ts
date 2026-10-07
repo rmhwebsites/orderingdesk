@@ -1,9 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
+import { sql } from "drizzle-orm";
 import * as z from "zod";
 import * as schema from "@/db/schema";
 import { runTool, toolsFor } from "./registry";
 import { CONFIRM_DESTRUCTIVE, READ, defineTool, fail, ok, type ToolDeps } from "./tools/define";
-import { NOW, principalFor, setupMcp, testEnv } from "./test-helpers";
+import { MANAGER, NOW, WS, principalFor, setupMcp, testEnv } from "./test-helpers";
 
 const lookup = defineTool({
   name: "lookup",
@@ -72,6 +73,32 @@ describe("runTool", () => {
     expect(result.structuredContent).toMatchObject({ error: { code: "internal", retryable: true } });
     expect(JSON.stringify(result)).not.toContain("secret detail");
     expect(JSON.stringify(warn.mock.calls)).not.toContain("secret detail");
+    warn.mockRestore();
+  });
+
+  // A failed count (D1 dropped the connection or timed out) must not escape
+  // the wrapper: the MCP SDK would send the error's message, which for a
+  // Drizzle query names the SQL and its ids, to the chat app as raw text.
+  it("turns a failed lookup count into the same internal error, and audits it", async () => {
+    const d = await deps();
+    await d.db.run(sql`drop table ai_usage`);
+    const warn = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    let ran = false;
+    const counted = defineTool({ ...lookup, name: "counted", run: async () => { ran = true; return ok({}); } });
+    const result = await runTool(counted, { q: "x" }, d);
+    expect(ran).toBe(false);
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toEqual({
+      error: { code: "internal", message: "Ordering Desk hit an error. Check the card in Ordering Desk before trying again.", retryable: true },
+    });
+    for (const leak of ["ai_usage", "no such table", "insert", WS, MANAGER]) {
+      expect(JSON.stringify(result), leak).not.toContain(leak);
+    }
+    // The log line carries ids, the tool and the error's name only.
+    for (const leak of ["ai_usage", "no such table", "insert"]) {
+      expect(JSON.stringify(warn.mock.calls), leak).not.toContain(leak);
+    }
+    expect((await d.db.select().from(schema.auditLog)).map((row) => [row.tool, row.outcome])).toEqual([["counted", "internal"]]);
     warn.mockRestore();
   });
 

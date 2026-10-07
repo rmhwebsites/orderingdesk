@@ -1,8 +1,10 @@
 // Which tools a principal sees, and the wrapper every tool call goes
 // through (Wave 2 plan, Decisions 9, 13, 14 and 16): a lookup is counted
-// before the tool runs (refused over the limit), a thrown error becomes a
-// structured internal error that names nothing, and every call writes one
-// audit row. Relative imports only.
+// before the tool runs (refused over the limit), a thrown error (in the
+// count or in the tool) becomes a structured internal error that names
+// nothing, and every call writes one audit row. Nothing may escape: the MCP
+// SDK would send an escaped error's message, for a failed D1 query its SQL
+// and ids, to the chat app as raw text. Relative imports only.
 
 import { roleAtLeast } from "../lib/roles";
 import { writeAudit } from "./audit";
@@ -21,13 +23,12 @@ export function toolsFor(p: Pick<Principal, "role" | "scopes">, all: readonly To
 export async function runTool(tool: ToolDef, args: unknown, deps: ToolDeps): Promise<ToolResult> {
   const { db, principal: p } = deps;
   const now = deps.now();
-  if (tool.counts === "read" && !(await claimRead(db, p, now))) {
-    await writeAudit(db, p, { tool: tool.name, outcome: "limit_reached" }, now);
-    return errorResult("limit_reached", `Today's limit of ${p.limits.reads} lookups is used up. It resets at 00:00 UTC.`);
-  }
   let outcome: ToolOutcome;
   try {
-    outcome = await tool.run(args as never, deps);
+    outcome =
+      tool.counts === "read" && !(await claimRead(db, p, now))
+        ? { ok: false, code: "limit_reached", message: `Today's limit of ${p.limits.reads} lookups is used up. It resets at 00:00 UTC.` }
+        : await tool.run(args as never, deps);
   } catch (e) {
     console.error("[mcp] " + JSON.stringify({ workspaceId: p.workspaceId, tool: tool.name, error: e instanceof Error ? e.name : "unknown" }));
     outcome = { ok: false, code: "internal", message: "Ordering Desk hit an error. Check the card in Ordering Desk before trying again." };

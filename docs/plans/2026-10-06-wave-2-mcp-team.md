@@ -4887,11 +4887,12 @@ git commit -m "feat: every MCP call re-reads the connection, the role and the AI
 
 ```ts
 import { describe, it, expect, vi } from "vitest";
+import { sql } from "drizzle-orm";
 import * as z from "zod";
 import * as schema from "@/db/schema";
 import { runTool, toolsFor } from "./registry";
 import { CONFIRM_DESTRUCTIVE, READ, defineTool, fail, ok, type ToolDeps } from "./tools/define";
-import { NOW, principalFor, setupMcp, testEnv } from "./test-helpers";
+import { MANAGER, NOW, WS, principalFor, setupMcp, testEnv } from "./test-helpers";
 
 const lookup = defineTool({
   name: "lookup",
@@ -4960,6 +4961,32 @@ describe("runTool", () => {
     expect(result.structuredContent).toMatchObject({ error: { code: "internal", retryable: true } });
     expect(JSON.stringify(result)).not.toContain("secret detail");
     expect(JSON.stringify(warn.mock.calls)).not.toContain("secret detail");
+    warn.mockRestore();
+  });
+
+  // A failed count (D1 dropped the connection or timed out) must not escape
+  // the wrapper: the MCP SDK would send the error's message, which for a
+  // Drizzle query names the SQL and its ids, to the chat app as raw text.
+  it("turns a failed lookup count into the same internal error, and audits it", async () => {
+    const d = await deps();
+    await d.db.run(sql`drop table ai_usage`);
+    const warn = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    let ran = false;
+    const counted = defineTool({ ...lookup, name: "counted", run: async () => { ran = true; return ok({}); } });
+    const result = await runTool(counted, { q: "x" }, d);
+    expect(ran).toBe(false);
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toEqual({
+      error: { code: "internal", message: "Ordering Desk hit an error. Check the card in Ordering Desk before trying again.", retryable: true },
+    });
+    for (const leak of ["ai_usage", "no such table", "insert", WS, MANAGER]) {
+      expect(JSON.stringify(result), leak).not.toContain(leak);
+    }
+    // The log line carries ids, the tool and the error's name only.
+    for (const leak of ["ai_usage", "no such table", "insert"]) {
+      expect(JSON.stringify(warn.mock.calls), leak).not.toContain(leak);
+    }
+    expect((await d.db.select().from(schema.auditLog)).map((row) => [row.tool, row.outcome])).toEqual([["counted", "internal"]]);
     warn.mockRestore();
   });
 
@@ -5130,9 +5157,11 @@ Create `src/mcp/registry.ts`:
 ```ts
 // Which tools a principal sees, and the wrapper every tool call goes
 // through (Wave 2 plan, Decisions 9, 13, 14 and 16): a lookup is counted
-// before the tool runs (refused over the limit), a thrown error becomes a
-// structured internal error that names nothing, and every call writes one
-// audit row. Relative imports only.
+// before the tool runs (refused over the limit), a thrown error (in the
+// count or in the tool) becomes a structured internal error that names
+// nothing, and every call writes one audit row. Nothing may escape: the MCP
+// SDK would send an escaped error's message, for a failed D1 query its SQL
+// and ids, to the chat app as raw text. Relative imports only.
 
 import { roleAtLeast } from "../lib/roles";
 import { writeAudit } from "./audit";
@@ -5151,13 +5180,12 @@ export function toolsFor(p: Pick<Principal, "role" | "scopes">, all: readonly To
 export async function runTool(tool: ToolDef, args: unknown, deps: ToolDeps): Promise<ToolResult> {
   const { db, principal: p } = deps;
   const now = deps.now();
-  if (tool.counts === "read" && !(await claimRead(db, p, now))) {
-    await writeAudit(db, p, { tool: tool.name, outcome: "limit_reached" }, now);
-    return errorResult("limit_reached", `Today's limit of ${p.limits.reads} lookups is used up. It resets at 00:00 UTC.`);
-  }
   let outcome: ToolOutcome;
   try {
-    outcome = await tool.run(args as never, deps);
+    outcome =
+      tool.counts === "read" && !(await claimRead(db, p, now))
+        ? { ok: false, code: "limit_reached", message: `Today's limit of ${p.limits.reads} lookups is used up. It resets at 00:00 UTC.` }
+        : await tool.run(args as never, deps);
   } catch (e) {
     console.error("[mcp] " + JSON.stringify({ workspaceId: p.workspaceId, tool: tool.name, error: e instanceof Error ? e.name : "unknown" }));
     outcome = { ok: false, code: "internal", message: "Ordering Desk hit an error. Check the card in Ordering Desk before trying again." };
