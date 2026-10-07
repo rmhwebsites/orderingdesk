@@ -8,8 +8,13 @@
 // press within CONFIRM_ARM_MS of opening ignored). The server re-reads the
 // draft and refuses when it changed since the editor opened; the editor
 // then reloads with the latest version and says why.
+//
+// The editor owns focus while it is open. Each change of view removes the
+// control that held focus (Edit request, Back to editing, Save changes), so
+// something in the editor takes it (editFocus), or focus would drop to the
+// page and the drawer would stop answering Escape and Tab.
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type Ref } from "react";
 import { ArrowUUpLeftIcon } from "@phosphor-icons/react/ArrowUUpLeft";
 import { CheckIcon } from "@phosphor-icons/react/Check";
 import { MinusIcon } from "@phosphor-icons/react/Minus";
@@ -33,12 +38,41 @@ import { confirmArmed } from "./po-send-confirm";
 // changed meanwhile), or saved with an optional warning (a total above $0).
 export type EditSaveOutcome = { error: string; editor?: RequestEditor } | { warning: string | null };
 
+// What the editor shows: loading, the load error, the form, or the review.
+// `editor` is the loaded editor object (compared by identity), null before
+// one loads.
+export type EditStep = { view: "loading" | "error" | "form" | "review"; editor: object | null };
+export type EditFocusTarget = "loading" | "error" | "heading" | "review-button";
+
+// Where focus goes when the editor moves from `prev` to `next`: the loading
+// region when it opens or tries again, the message when it does not load,
+// the heading when the form is ready (first load or a reload after a stale
+// save, whose notice the heading carries), Review changes after Back to
+// editing. The review puts focus on its own question.
+export function editFocus(prev: EditStep | null, next: EditStep): EditFocusTarget | null {
+  if (prev && prev.view === next.view && prev.editor === next.editor) {
+    return null;
+  }
+  switch (next.view) {
+    case "loading":
+      return "loading";
+    case "error":
+      return "error";
+    case "review":
+      return null;
+    case "form":
+      return prev?.view === "review" && prev.editor === next.editor ? "review-button" : "heading";
+  }
+}
+
 export function EditRequestForm({
   name,
   editor,
   notice,
   onReview,
   onClose,
+  headingRef,
+  reviewRef,
 }: {
   name: string;
   editor: RequestEditor;
@@ -46,6 +80,9 @@ export function EditRequestForm({
   notice: string | null;
   onReview: (body: EditRequestBody, summary: EditSummary) => void;
   onClose: () => void;
+  // Focus targets for EditRequest (see editFocus).
+  headingRef?: Ref<HTMLHeadingElement>;
+  reviewRef?: Ref<HTMLButtonElement>;
 }) {
   const id = useId();
   const [quantities, setQuantities] = useState<Record<string, string>>(() =>
@@ -99,8 +136,19 @@ export function EditRequestForm({
         }
       }}
     >
-      <h4 className="font-display text-sm font-semibold text-ink">Edit request {name}</h4>
-      {notice ? <InlineMessage tone="warn">{notice}</InlineMessage> : null}
+      <h4
+        ref={headingRef}
+        tabIndex={-1}
+        aria-describedby={notice ? `${id}-notice` : undefined}
+        className="font-display text-sm font-semibold text-ink outline-none"
+      >
+        Edit request {name}
+      </h4>
+      {notice ? (
+        <InlineMessage id={`${id}-notice`} tone="warn">
+          {notice}
+        </InlineMessage>
+      ) : null}
       <ul className="flex flex-col gap-3" aria-label="Items">
         {editor.lines.map((line) => {
           const gone = removed.has(line.uuid);
@@ -189,6 +237,7 @@ export function EditRequestForm({
       ) : null}
       <div className="flex flex-wrap gap-2">
         <button
+          ref={reviewRef}
           type="button"
           onClick={review}
           disabled={summary !== null && summary.changes.length === 0}
@@ -324,6 +373,34 @@ export function EditRequest({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const mounted = useRef(true);
+  const loadingRef = useRef<HTMLDivElement>(null);
+  const failedRef = useRef<HTMLDivElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const reviewRef = useRef<HTMLButtonElement>(null);
+  const shown = useRef<EditStep | null>(null);
+  const view: EditStep["view"] = state.status === "ready" ? (review ? "review" : "form") : state.status;
+  const shownEditor = state.status === "ready" ? state.editor : null;
+
+  // Move focus into the view that just replaced the one holding it.
+  useEffect(() => {
+    const next: EditStep = { view, editor: shownEditor };
+    const target = editFocus(shown.current, next);
+    shown.current = next;
+    if (target) {
+      focusSoon(() => {
+        switch (target) {
+          case "loading":
+            return loadingRef.current;
+          case "error":
+            return failedRef.current;
+          case "heading":
+            return headingRef.current;
+          case "review-button":
+            return reviewRef.current && !reviewRef.current.disabled ? reviewRef.current : headingRef.current;
+        }
+      });
+    }
+  }, [view, shownEditor]);
 
   const load = useCallback(
     async (notice: string | null) => {
@@ -381,17 +458,20 @@ export function EditRequest({
 
   if (state.status === "loading") {
     return (
-      <div aria-label="Loading the request from Shopify" className="flex flex-col gap-2">
-        <span className="od-skeleton h-4 w-40" />
-        <span className="od-skeleton h-16 w-full rounded-panel" />
-        <span className="od-skeleton h-16 w-full rounded-panel" />
+      <div ref={loadingRef} role="status" tabIndex={-1} className="flex flex-col gap-2 outline-none">
+        <span className="sr-only">Loading the request from Shopify</span>
+        <span aria-hidden className="od-skeleton h-4 w-40" />
+        <span aria-hidden className="od-skeleton h-16 w-full rounded-panel" />
+        <span aria-hidden className="od-skeleton h-16 w-full rounded-panel" />
       </div>
     );
   }
   if (state.status === "error") {
     return (
       <div className="flex flex-col items-start gap-3">
-        <InlineMessage tone="bad">{state.message}</InlineMessage>
+        <div ref={failedRef} tabIndex={-1} className="outline-none">
+          <InlineMessage tone="bad">{state.message}</InlineMessage>
+        </div>
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={() => void load(null)} className={ui.buttonSecondary}>
             Try again
@@ -414,6 +494,8 @@ export function EditRequest({
           notice={state.notice}
           onReview={(body, summary) => setReview({ body, summary })}
           onClose={() => onClose()}
+          headingRef={headingRef}
+          reviewRef={reviewRef}
         />
       </div>
       {review ? (

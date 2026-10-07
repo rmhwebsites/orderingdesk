@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { RequestEditor } from "@/lib/request-edit";
-import { EditRequestForm, EditReview } from "./edit-request";
+import { EditRequest, EditRequestForm, EditReview, editFocus, type EditStep } from "./edit-request";
 
 // The request editor (comprehensive design section 2) as the drawer renders
 // it. The server enforces every rule again.
@@ -51,6 +51,88 @@ describe("EditRequestForm", () => {
     expect(one).toContain("A request keeps at least one item.");
     expect(one).toContain("This request changed in Shopify since you opened the editor.");
     expect(one).toContain("Ships to");
+  });
+
+  // Opening the editor and a reload after a stale save both remove the
+  // control that held focus. The heading takes it (so Escape and Tab stay in
+  // the drawer), and a reload notice is read out with it.
+  it("can take focus on its heading, which is described by the reload notice", () => {
+    const plain = renderForm();
+    const heading = plain.match(/<h4[^>]*>Edit request #D12<\/h4>/)?.[0] ?? "";
+    expect(heading).toContain('tabindex="-1"');
+    expect(heading).not.toContain("aria-describedby");
+    const notice = "This request changed in Shopify since you opened the editor.";
+    const html = renderForm(EDITOR, notice);
+    const describedBy = html.match(/<h4[^>]*aria-describedby="([^"]+)"[^>]*>Edit request #D12</)?.[1] ?? "";
+    expect(describedBy).toBeTruthy();
+    const region = html.match(/<div id="([^"]+)"[^>]*>(?:(?!<\/div>).)*<div[^>]*>([^<]*)</);
+    expect(region?.[1]).toBe(describedBy);
+    expect(region?.[2]).toBe(notice);
+  });
+});
+
+describe("EditRequest", () => {
+  // The editor opens on a skeleton while the draft is read from Shopify. An
+  // aria-label on a plain div is not announced, so the words are real
+  // (visually hidden) text in a status region that can hold focus.
+  it("says it is loading in a status region that can take focus", () => {
+    const html = renderToStaticMarkup(
+      createElement(EditRequest, {
+        orderId: "order-1",
+        name: "#D12",
+        onSave: async () => ({ warning: null }),
+        onClose: () => undefined,
+      }),
+    );
+    const tag = html.match(/^<div[^>]*>/)?.[0] ?? "";
+    expect(tag).toContain('role="status"');
+    expect(tag).toContain('tabindex="-1"');
+    expect(tag).not.toContain("aria-label");
+    expect(html).toContain('<span class="sr-only">Loading the request from Shopify</span>');
+  });
+});
+
+// Where focus goes as the editor moves between its views. Every view change
+// removes the control that held focus, so something in the editor must take
+// it, or focus drops to the page and the drawer stops answering Escape.
+describe("editFocus", () => {
+  const first = { lines: 1 };
+  const fresh = { lines: 2 };
+  const at = (view: EditStep["view"], editor: object | null = null): EditStep => ({ view, editor });
+
+  it("puts focus on the loading region when the editor opens or tries again", () => {
+    expect(editFocus(null, at("loading"))).toBe("loading");
+    expect(editFocus(at("error"), at("loading"))).toBe("loading");
+  });
+
+  it("puts focus on the message when the request does not load", () => {
+    expect(editFocus(at("loading"), at("error"))).toBe("error");
+  });
+
+  it("puts focus on the heading when the editor is ready", () => {
+    expect(editFocus(at("loading"), at("form", first))).toBe("heading");
+  });
+
+  // Back to editing: the form kept what was typed, so focus returns to the
+  // button that opened the review.
+  it("gives focus back to Review changes after Back to editing", () => {
+    expect(editFocus(at("review", first), at("form", first))).toBe("review-button");
+  });
+
+  // A stale save (409): the editor reloads with the latest version. The
+  // heading takes focus and reads out why.
+  it("puts focus on the heading when a stale save reloads the editor", () => {
+    expect(editFocus(at("review", first), at("form", fresh))).toBe("heading");
+  });
+
+  it("leaves focus to the review, which puts it on its question", () => {
+    expect(editFocus(at("form", first), at("review", first))).toBeNull();
+  });
+
+  it("leaves focus alone when the view did not change", () => {
+    expect(editFocus(at("loading"), at("loading"))).toBeNull();
+    expect(editFocus(at("form", first), at("form", first))).toBeNull();
+    expect(editFocus(at("review", first), at("review", first))).toBeNull();
   });
 });
 

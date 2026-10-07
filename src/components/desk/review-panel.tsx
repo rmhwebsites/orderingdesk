@@ -412,6 +412,9 @@ export function ReviewActions({
     );
   }
 
+  // The editor owns focus while it is open (the Edit request button that
+  // held it is gone): EditRequest moves it to its loading region, then to its
+  // heading. Closing it gives focus back to Edit request.
   if (mode === "edit") {
     return (
       <div>
