@@ -9000,6 +9000,60 @@ describe("placing a request through an AI app", () => {
     ]);
   });
 
+  // The prepare/confirm contract: the confirm carries out exactly the
+  // preview. The draft's note (which the desk drawer and get_order show to
+  // the managers who approve) and the reason are sent as the preview shows
+  // them: no hidden characters (the tags block of "ASCII smuggling", bidi
+  // overrides, zero-width characters) and no links (Decision 13).
+  it("shows the note and the reason in the preview and sends exactly the text it showed", async () => {
+    const db = await setup();
+    let marker = "";
+    const shop = fakeShop({
+      ContactOfCustomer: () => profiles(),
+      CalculateRequest: (variables) => {
+        marker = (variables.input as { tags: string[] }).tags[1];
+        return calculated();
+      },
+      PlaceRequest: () => ({ draftOrderCreate: { draftOrder: created(["via AI", marker]), userErrors: [] } }),
+    });
+    const deps = toolDeps(db, principalFor(), { fetchImpl: shop.impl });
+    const hidden = String.fromCodePoint(0xe0041, 0xe0042, 0x200b, 0x202e);
+    const note = `Rush it,${hidden} the branch opens Monday.\nCall the yard first: https://evil.example.com/x`;
+    const reason = `New hire${hidden}, see https://evil.example.com/form`;
+    const prepared = (await call(preparePlaceRequest, { ...request, note, reason }, deps)).data;
+    const calculatedInput = shop.calls.find((entry) => entry.op === "CalculateRequest")!.variables.input as { note?: string; customAttributes: { key: string; value: string }[] };
+    expect(calculatedInput.note).toBe("Rush it, the branch opens Monday.\nCall the yard first: [link removed]");
+    expect(prepared.preview.note).toEqual({ untrusted: calculatedInput.note });
+    const sentReason = calculatedInput.customAttributes.find((attribute) => attribute.key === "Reason for Request")!.value;
+    expect(sentReason).toBe("New hire, see [link removed]");
+    expect(prepared.preview.reason).toEqual({ untrusted: sentReason });
+    // The summary says there is a note, without its text.
+    expect(prepared.preview.summary).toContain("It has a note, shown under note.");
+    expect(prepared.preview.summary).not.toContain("Rush");
+    const done = await call(confirmPlaceRequest, confirmed(prepared.confirmation_id), deps);
+    expect(done.data).toMatchObject({ done: true, request: "#D40" });
+    const sent = shop.calls.find((entry) => entry.op === "PlaceRequest")!.variables.input as { note?: string; customAttributes: { key: string; value: string }[] };
+    expect(sent.note).toBe(prepared.preview.note.untrusted);
+    expect(sent.customAttributes.find((attribute) => attribute.key === "Reason for Request")!.value).toBe(prepared.preview.reason.untrusted);
+    expect(JSON.stringify(sent)).not.toContain("evil.example.com");
+    expect([...JSON.stringify(sent)].some((ch) => ch.codePointAt(0)! >= 0xe0000 || ch === "​" || ch === "‮")).toBe(false);
+  });
+
+  it("says nothing about a note when there is none, and refuses a note that cannot be shown as it would be sent", async () => {
+    const db = await setup();
+    const shop = fakeShop({ ContactOfCustomer: () => profiles(), CalculateRequest: () => calculated() });
+    const deps = toolDeps(db, principalFor(), { fetchImpl: shop.impl });
+    const plain = (await call(preparePlaceRequest, request, deps)).data;
+    expect(plain.preview.note).toBeNull();
+    expect(plain.preview.summary).not.toContain("note");
+    expect(shop.calls.find((entry) => entry.op === "CalculateRequest")!.variables.input).not.toHaveProperty("note");
+    // Removing the inner tag leaves another tag: cleaning it once more would
+    // change it, so what is sent could differ from what is shown.
+    const nested = await call(preparePlaceRequest, { ...request, note: "Call <<b>b>first" }, deps);
+    expect(nested.data.error).toMatchObject({ code: "invalid_input" });
+    expect(shop.ops().filter((op) => op === "CalculateRequest")).toHaveLength(1);
+  });
+
   it("creates the draft once on confirm, writes the card and a via AI entry, and announces it after the answer", async () => {
     const db = await setup();
     let marker = "";
@@ -9288,9 +9342,10 @@ Create `src/mcp/tools/place-request.ts`:
 // those details, then sends draftOrderCreate once; after a timeout or any
 // error other than userErrors it looks the draft up by its marker, and a
 // create it cannot find stays "unknown" so the same confirmation can only
-// look it up again. The new draft is written onto the desk like a
-// webhook would write it, gets a "request_placed" entry via AI, and is
-// announced like any new request. Relative imports only.
+// look it up again. The reason and the note are sent exactly as the
+// preview shows them (requestText). The new draft is written onto the desk
+// like a webhook would write it, gets a "request_placed" entry via AI, and
+// is announced like any new request. Relative imports only.
 
 import { and, eq, or, sql } from "drizzle-orm";
 import * as z from "zod";
@@ -9331,6 +9386,8 @@ const LINK = /https?:\/\/|www\.|javascript:|data:/i;
 // src/mcp/output.ts, here with tab and line feed too, since confirm_details
 // returns these values verbatim.
 const CONTROL = /[\p{C}\p{Default_Ignorable_Code_Point}\u{2028}\u{2029}]/u;
+const REASON_MAX = 500;
+const DRAFT_NOTE_MAX = 1000;
 
 type PlacePayload = {
   input: Record<string, unknown>;
@@ -9393,6 +9450,18 @@ const LineInput = z
   })
   .strict();
 
+// Text typed for the request (the reason and the draft's note) reaches
+// Shopify, the desk drawer and get_order exactly as the preview shows it:
+// cleaned as every tool output is (Decision 13: no control or hidden
+// characters, HTML tags, markdown images or links, or links), so the confirm
+// carries out what the person saw. Null when cleaning it once more would
+// still change it (a tag left by removing the tag inside it): the preview
+// could then differ from what is sent.
+function requestText(value: string, max: number): string | null {
+  const text = plainText(value, max);
+  return plainText(text, max) === text ? text : null;
+}
+
 function splitName(name: string): { firstName: string; lastName: string } {
   const parts = name.trim().split(/\s+/);
   return parts.length > 1 ? { firstName: parts.slice(0, -1).join(" "), lastName: parts[parts.length - 1] } : { firstName: parts[0] ?? "", lastName: "" };
@@ -9412,8 +9481,8 @@ export const preparePlaceRequest = defineTool({
       for_person: z.string().min(1).max(64).describe("A person id from find_people"),
       location: z.string().min(1).max(80).describe("A company location name or id from list_locations"),
       lines: z.array(LineInput).min(1).max(20),
-      reason: z.string().max(500).optional().describe("Why it is needed; shown on the request"),
-      note: z.string().max(1000).optional().describe("A note on the draft"),
+      reason: z.string().max(REASON_MAX).optional().describe("Why it is needed; shown on the request"),
+      note: z.string().max(DRAFT_NOTE_MAX).optional().describe("A note on the draft, shown in the preview; plain text, links are removed"),
     })
     .strict(),
   async run(args, deps) {
@@ -9432,6 +9501,12 @@ export const preparePlaceRequest = defineTool({
           return fail("invalid_input", "Personalization labels and values cannot be blank.");
         }
       }
+    }
+    // A reason is one line, as the desk shows request fields.
+    const reason = requestText((args.reason ?? "").replace(/\s+/g, " "), REASON_MAX);
+    const note = requestText(args.note ?? "", DRAFT_NOTE_MAX);
+    if (reason === null || note === null) {
+      return fail("invalid_input", "Write the reason and the note as plain text, without HTML tags.");
     }
     const persons = await deps.db.select().from(people).where(and(eq(people.workspaceId, p.workspaceId), eq(people.id, args.for_person))).limit(1);
     const person = persons[0];
@@ -9465,8 +9540,6 @@ export const preparePlaceRequest = defineTool({
       return fail("refused", `${plainText(person.name, NAME_MAX)} is not a contact of this company in Shopify. Add them as a company contact in Shopify first.`);
     }
     const marker = markerTag(randomHex(8));
-    const reason = args.reason ? cleanText(args.reason, 500) : "";
-    const note = args.note ? args.note.replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, "").trim().slice(0, 1000) : "";
     const lineItems = args.lines.map((line) => ({
       variantId: `gid://shopify/ProductVariant/${line.variant_id}`,
       quantity: line.quantity,
@@ -9519,13 +9592,15 @@ export const preparePlaceRequest = defineTool({
     const where = plainText(place.name, NAME_MAX);
     const warnings = profile.locationIds.includes(place.shopifyLocationId) ? [] : [`${name} has no role at ${where} in Shopify; Shopify may refuse the request.`];
     return preparedResult(prepared, {
-      summary: `Place a request for ${name} at ${where}: ${lines.join(", ")}. Total $0.00. It ships to ${where} and waits for approval like any request.`,
+      // The note's text stays out of the summary (typed text is untrusted).
+      summary: `Place a request for ${name} at ${where}: ${lines.join(", ")}. Total $0.00. It ships to ${where} and waits for approval like any request.${note ? " It has a note, shown under note." : ""}`,
       details: {
         for_person: name,
         location: where,
         ship_to: locationAddressLines({ ...place.address, phone: "" }).map((line) => plainText(line, 200)),
         lines,
         reason: untrusted(reason),
+        note: untrusted(note),
       },
       warnings,
       // Verbatim, not through plainText: these are the values the person
@@ -9698,6 +9773,8 @@ export const confirmPlaceRequest = defineTool({
   },
 });
 ```
+
+(Review fix of Oct 7: the reason and the draft's note are sent exactly as the preview shows them. Both are cleaned as tool output is (Decision 13: no control or hidden characters, HTML tags, markdown links or links) by `requestText`, the preview returns them as `reason` and `note` (untrusted), the summary only says "It has a note, shown under note.", and a note or reason that a second cleaning would still change is refused as `invalid_input`. The confirm echo is unchanged: the note is covered by the action's content hash with the rest of the draft input.)
 
 (`followDeps` includes `sleep`; `notifyNewOrders` takes `{ fetchImpl, now }` and ignores the rest. If tsc flags the cast on the broadcast event, build the live event with `orderId` typed as string, since `orderId` is set in that branch.)
 

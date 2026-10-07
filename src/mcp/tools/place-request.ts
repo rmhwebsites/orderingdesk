@@ -13,7 +13,8 @@
 // create it cannot find stays "unknown" so the same confirmation can only
 // look it up again. The person is named by their stored name through
 // personLabel (Decision 13): a stored name that is Shopify's email or phone
-// fallback is no name, and the request is refused.
+// fallback is no name, and the request is refused. The reason and the note
+// are sent exactly as the preview shows them (requestText).
 // The new draft is written onto the desk like a webhook would write it, gets
 // a "request_placed" entry via AI, and is announced like any new request.
 // Relative imports only.
@@ -57,6 +58,8 @@ const LINK = /https?:\/\/|www\.|javascript:|data:/i;
 // src/mcp/output.ts, here with tab and line feed too, since confirm_details
 // returns these values verbatim.
 const CONTROL = /[\p{C}\p{Default_Ignorable_Code_Point}\u{2028}\u{2029}]/u;
+const REASON_MAX = 500;
+const DRAFT_NOTE_MAX = 1000;
 
 type PlacePayload = {
   input: Record<string, unknown>;
@@ -120,6 +123,18 @@ const LineInput = z
   })
   .strict();
 
+// Text typed for the request (the reason and the draft's note) reaches
+// Shopify, the desk drawer and get_order exactly as the preview shows it:
+// cleaned as every tool output is (Decision 13: no control or hidden
+// characters, HTML tags, markdown images or links, or links), so the confirm
+// carries out what the person saw. Null when cleaning it once more would
+// still change it (a tag left by removing the tag inside it): the preview
+// could then differ from what is sent.
+function requestText(value: string, max: number): string | null {
+  const text = plainText(value, max);
+  return plainText(text, max) === text ? text : null;
+}
+
 function splitName(name: string): { firstName: string; lastName: string } {
   const parts = name.trim().split(/\s+/);
   return parts.length > 1 ? { firstName: parts.slice(0, -1).join(" "), lastName: parts[parts.length - 1] } : { firstName: parts[0] ?? "", lastName: "" };
@@ -139,8 +154,8 @@ export const preparePlaceRequest = defineTool({
       for_person: z.string().min(1).max(64).describe("A person id from find_people"),
       location: z.string().min(1).max(80).describe("A company location name or id from list_locations"),
       lines: z.array(LineInput).min(1).max(20),
-      reason: z.string().max(500).optional().describe("Why it is needed; shown on the request"),
-      note: z.string().max(1000).optional().describe("A note on the draft"),
+      reason: z.string().max(REASON_MAX).optional().describe("Why it is needed; shown on the request"),
+      note: z.string().max(DRAFT_NOTE_MAX).optional().describe("A note on the draft, shown in the preview; plain text, links are removed"),
     })
     .strict(),
   async run(args, deps) {
@@ -159,6 +174,12 @@ export const preparePlaceRequest = defineTool({
           return fail("invalid_input", "Personalization labels and values cannot be blank.");
         }
       }
+    }
+    // A reason is one line, as the desk shows request fields.
+    const reason = requestText((args.reason ?? "").replace(/\s+/g, " "), REASON_MAX);
+    const note = requestText(args.note ?? "", DRAFT_NOTE_MAX);
+    if (reason === null || note === null) {
+      return fail("invalid_input", "Write the reason and the note as plain text, without HTML tags.");
     }
     const persons = await deps.db.select().from(people).where(and(eq(people.workspaceId, p.workspaceId), eq(people.id, args.for_person))).limit(1);
     const person = persons[0];
@@ -196,8 +217,6 @@ export const preparePlaceRequest = defineTool({
       return fail("refused", `${name} is not a contact of this company in Shopify. Add them as a company contact in Shopify first.`);
     }
     const marker = markerTag(randomHex(8));
-    const reason = args.reason ? cleanText(args.reason, 500) : "";
-    const note = args.note ? args.note.replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, "").trim().slice(0, 1000) : "";
     const lineItems = args.lines.map((line) => ({
       variantId: `gid://shopify/ProductVariant/${line.variant_id}`,
       quantity: line.quantity,
@@ -249,13 +268,15 @@ export const preparePlaceRequest = defineTool({
     const where = plainText(place.name, NAME_MAX);
     const warnings = profile.locationIds.includes(place.shopifyLocationId) ? [] : [`${name} has no role at ${where} in Shopify; Shopify may refuse the request.`];
     return preparedResult(prepared, {
-      summary: `Place a request for ${name} at ${where}: ${lines.join(", ")}. Total $0.00. It ships to ${where} and waits for approval like any request.`,
+      // The note's text stays out of the summary (typed text is untrusted).
+      summary: `Place a request for ${name} at ${where}: ${lines.join(", ")}. Total $0.00. It ships to ${where} and waits for approval like any request.${note ? " It has a note, shown under note." : ""}`,
       details: {
         for_person: name,
         location: where,
         ship_to: locationAddressLines(place.address).map((line) => plainText(line, 200)),
         lines,
         reason: untrusted(reason),
+        note: untrusted(note),
       },
       warnings,
       // Verbatim, not through plainText: these are the values the person

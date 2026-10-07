@@ -167,6 +167,60 @@ describe("placing a request through an AI app", () => {
     ]);
   });
 
+  // The prepare/confirm contract: the confirm carries out exactly the
+  // preview. The draft's note (which the desk drawer and get_order show to
+  // the managers who approve) and the reason are sent as the preview shows
+  // them: no hidden characters (the tags block of "ASCII smuggling", bidi
+  // overrides, zero-width characters) and no links (Decision 13).
+  it("shows the note and the reason in the preview and sends exactly the text it showed", async () => {
+    const db = await setup();
+    let marker = "";
+    const shop = fakeShop({
+      ContactOfCustomer: () => profiles(),
+      CalculateRequest: (variables) => {
+        marker = (variables.input as { tags: string[] }).tags[1];
+        return calculated();
+      },
+      PlaceRequest: () => ({ draftOrderCreate: { draftOrder: created(["via AI", marker]), userErrors: [] } }),
+    });
+    const deps = toolDeps(db, principalFor(), { fetchImpl: shop.impl });
+    const hidden = String.fromCodePoint(0xe0041, 0xe0042, 0x200b, 0x202e);
+    const note = `Rush it,${hidden} the branch opens Monday.\nCall the yard first: https://evil.example.com/x`;
+    const reason = `New hire${hidden}, see https://evil.example.com/form`;
+    const prepared = (await call(preparePlaceRequest, { ...request, note, reason }, deps)).data;
+    const calculatedInput = shop.calls.find((entry) => entry.op === "CalculateRequest")!.variables.input as { note?: string; customAttributes: { key: string; value: string }[] };
+    expect(calculatedInput.note).toBe("Rush it, the branch opens Monday.\nCall the yard first: [link removed]");
+    expect(prepared.preview.note).toEqual({ untrusted: calculatedInput.note });
+    const sentReason = calculatedInput.customAttributes.find((attribute) => attribute.key === "Reason for Request")!.value;
+    expect(sentReason).toBe("New hire, see [link removed]");
+    expect(prepared.preview.reason).toEqual({ untrusted: sentReason });
+    // The summary says there is a note, without its text.
+    expect(prepared.preview.summary).toContain("It has a note, shown under note.");
+    expect(prepared.preview.summary).not.toContain("Rush");
+    const done = await call(confirmPlaceRequest, confirmed(prepared.confirmation_id), deps);
+    expect(done.data).toMatchObject({ done: true, request: "#D40" });
+    const sent = shop.calls.find((entry) => entry.op === "PlaceRequest")!.variables.input as { note?: string; customAttributes: { key: string; value: string }[] };
+    expect(sent.note).toBe(prepared.preview.note.untrusted);
+    expect(sent.customAttributes.find((attribute) => attribute.key === "Reason for Request")!.value).toBe(prepared.preview.reason.untrusted);
+    expect(JSON.stringify(sent)).not.toContain("evil.example.com");
+    expect([...JSON.stringify(sent)].some((ch) => ch.codePointAt(0)! >= 0xe0000 || ch === "​" || ch === "‮")).toBe(false);
+  });
+
+  it("says nothing about a note when there is none, and refuses a note that cannot be shown as it would be sent", async () => {
+    const db = await setup();
+    const shop = fakeShop({ ContactOfCustomer: () => profiles(), CalculateRequest: () => calculated() });
+    const deps = toolDeps(db, principalFor(), { fetchImpl: shop.impl });
+    const plain = (await call(preparePlaceRequest, request, deps)).data;
+    expect(plain.preview.note).toBeNull();
+    expect(plain.preview.summary).not.toContain("note");
+    expect(shop.calls.find((entry) => entry.op === "CalculateRequest")!.variables.input).not.toHaveProperty("note");
+    // Removing the inner tag leaves another tag: cleaning it once more would
+    // change it, so what is sent could differ from what is shown.
+    const nested = await call(preparePlaceRequest, { ...request, note: "Call <<b>b>first" }, deps);
+    expect(nested.data.error).toMatchObject({ code: "invalid_input" });
+    expect(shop.ops().filter((op) => op === "CalculateRequest")).toHaveLength(1);
+  });
+
   it("creates the draft once on confirm, writes the card and a via AI entry, and announces it after the answer", async () => {
     const db = await setup();
     let marker = "";
