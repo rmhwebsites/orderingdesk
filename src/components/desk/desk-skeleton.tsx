@@ -1,5 +1,6 @@
 // Loading placeholders shaped like the real desk: the toolbar row, then
-// 44px table rows (880px and up) or compact cards (below).
+// 44px table rows (880px and up, the Branch track from 1280px as in
+// OrderTable) or compact cards (below).
 
 const ROWS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 
@@ -25,7 +26,10 @@ export function DeskSkeleton() {
           ))}
         </div>
         {ROWS.map((row) => (
-          <div key={row} className="grid h-11 grid-cols-[3.5rem_10rem_6.5rem_24%_1fr_5.5rem_9rem_11rem] items-center border-t border-line">
+          <div
+            key={row}
+            className="grid h-11 grid-cols-[3.5rem_10rem_6.5rem_24%_1fr_5.5rem_11rem] items-center border-t border-line xl:grid-cols-[3.5rem_10rem_6.5rem_24%_1fr_5.5rem_9rem_11rem]"
+          >
             <div className="pl-4">
               <Bar className="size-4" />
             </div>
@@ -44,7 +48,7 @@ export function DeskSkeleton() {
             <div className="px-3">
               <Bar className="h-5 w-10" />
             </div>
-            <div className="px-3">
+            <div className="hidden px-3 xl:block">
               <Bar className="h-3.5 w-20" />
             </div>
             <div className="px-4">

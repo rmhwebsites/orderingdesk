@@ -193,3 +193,98 @@ describe("Branch column", () => {
     expect(render("cards")).toContain("For Casey Lin · Buford HQ");
   });
 });
+
+// The table's column budget (Wave 1b review). A fixed table gives the rem
+// tracks their width first, then Customer its share, and Items (the one
+// column without a width) what is left. The desk is 880 px and up, inside
+// 24 px of padding a side, at most 1400 px wide, with a 1 px border. The
+// Branch column shows only from xl (1280 px), where it fits; below that the
+// branch stays in the customer line, as on the cards.
+describe("OrderTable column widths", () => {
+  const XL = 1280;
+  type Column = { label: string; className: string };
+
+  // Each column's width classes come from its <col> when the table has a
+  // colgroup, else from its header cell; it shows when neither hides it.
+  function columns(html: string): Column[] {
+    const head = html.match(/<thead>([^]*?)<\/thead>/)?.[1] ?? "";
+    const headers = [...head.matchAll(/<th[^>]*?class="([^"]*)"[^>]*>([^]*?)<\/th>/g)];
+    const cols = [...html.matchAll(/<col(?: class="([^"]*)")?\/?>/g)].map((col) => col[1] ?? "");
+    return headers.map((header, i) => ({
+      label: header[2].replace(/<[^>]*>/g, ""),
+      className: `${cols[i] ?? ""} ${header[1]}`,
+    }));
+  }
+
+  function shows(column: Column, viewport: number): boolean {
+    const hidden = /(^|\s)hidden(\s|$)/.test(column.className);
+    return !hidden || (viewport >= XL && /(^|\s)xl:table-(cell|column)(\s|$)/.test(column.className));
+  }
+
+  // Width in px, or a share of the table; null for the auto column.
+  function width(column: Column): { px: number } | { share: number } | null {
+    const rem = column.className.match(/(?:^|\s)w-\[([\d.]+)rem\]/);
+    if (rem) {
+      return { px: Number(rem[1]) * 16 };
+    }
+    const spacing = column.className.match(/(?:^|\s)w-(\d+)(?:\s|$)/);
+    if (spacing) {
+      return { px: Number(spacing[1]) * 4 };
+    }
+    const percent = column.className.match(/(?:^|\s)w-\[([\d.]+)%\]/);
+    return percent ? { share: Number(percent[1]) / 100 } : null;
+  }
+
+  function layout(html: string, viewport: number): Map<string, number> {
+    const table = Math.min(viewport, 1400) - 48 - 2;
+    const shown = columns(html).filter((column) => shows(column, viewport));
+    let fixed = 0;
+    let shares = 0;
+    for (const column of shown) {
+      const w = width(column);
+      if (w && "px" in w) {
+        fixed += w.px;
+      } else if (w) {
+        shares += w.share * table;
+      }
+    }
+    const shareRoom = Math.max(0, Math.min(shares, table - fixed));
+    const autoRoom = Math.max(0, table - fixed - shareRoom);
+    return new Map(
+      shown.map((column) => {
+        const w = width(column);
+        const px = w === null ? autoRoom : "px" in w ? w.px : shares > 0 ? (shareRoom * w.share * table) / shares : 0;
+        return [column.label, Math.round(px)];
+      }),
+    );
+  }
+
+  it("keeps the item preview readable at every desk width, with Branch only where it fits", () => {
+    const html = render("table");
+    // The narrowest desk (880 px) keeps what it had before the Branch
+    // column; half a 1920 screen (960 px) and an iPad on its side (1024 px)
+    // keep a real preview; from 1280 px Branch has its own column, and from
+    // 1400 px the desk stops growing.
+    const floors: [number, number][] = [
+      [880, 40],
+      [960, 100],
+      [1024, 150],
+      [1120, 200],
+      [1280, 200],
+      [1440, 280],
+    ];
+    for (const [viewport, floor] of floors) {
+      const widths = layout(html, viewport);
+      expect(widths.has("Items"), `Items at ${viewport} px`).toBe(true);
+      expect(widths.get("Items")!, `Items at ${viewport} px`).toBeGreaterThanOrEqual(floor);
+      expect(widths.get("Customer")!, `Customer at ${viewport} px`).toBeGreaterThanOrEqual(190);
+      expect(widths.has("Branch"), `Branch at ${viewport} px`).toBe(viewport >= XL);
+    }
+  });
+
+  it("names the branch in the customer line wherever the Branch column is hidden", () => {
+    const html = render("table");
+    expect(html).toMatch(/<span class="[^"]*xl:hidden[^"]*">[^<]*Buford HQ<\/span>/);
+    expect(html).toContain('title="Buford HQ">Buford HQ</span>');
+  });
+});

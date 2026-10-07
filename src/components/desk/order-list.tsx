@@ -42,7 +42,7 @@ export type ListProps = {
   } | null;
   // The phone cards' totals; when false, a card with a price shows it as an
   // amber chip. The desktop rows have a Branch column in place of the total
-  // and always mark a card with a price.
+  // (from 1280 px, see OrderTable) and always mark a card with a price.
   showPrices: boolean;
 };
 
@@ -55,7 +55,8 @@ function itemsLine(order: OrderSummary): string {
 }
 
 // "For Casey Lin · Buford HQ" when the request names them. The desktop row
-// has its own Branch column, so it leaves the branch out.
+// has its own Branch column, so it leaves the branch out (CustomerLine adds
+// it back where that column is hidden).
 export function requestLine(
   order: Pick<OrderSummary, "requestFor" | "branch">,
   opts: { withBranch: boolean },
@@ -102,12 +103,16 @@ function KindMark({ order }: { order: OrderSummary }) {
   ) : null;
 }
 
-function CustomerLine({ order, withBranch }: { order: OrderSummary; withBranch: boolean }) {
-  const line = requestLine(order, { withBranch });
+// The cards always name the branch here; a table row names it only below
+// xl, where its Branch column is hidden.
+function CustomerLine({ order, branch }: { order: OrderSummary; branch: "always" | "below-xl" }) {
+  const line = requestLine(order, { withBranch: branch === "always" });
+  const branchName = branch === "below-xl" ? branchText(order) : "";
   return (
     <span className="block truncate text-sm" title={order.email || undefined}>
       <span className="font-medium text-ink">{order.customerName || "No customer name"}</span>
       {line ? <span className="text-ink-2">{` · ${line}`}</span> : null}
+      {branchName ? <span className="text-ink-2 xl:hidden">{` · ${branchName}`}</span> : null}
     </span>
   );
 }
@@ -237,7 +242,12 @@ function AgeBadge({
 }
 
 // From 880px: one 44px line per card, so 15 to 18 fit above the fold at
-// 1440 by 900.
+// 1440 by 900. A fixed table gives the rem columns their width first, then
+// Customer its share, and Items what is left, so the Branch column shows
+// only from xl (1280px): below that it would leave Items no room (half a
+// 1920 screen, an iPad on its side), and the branch rides in the customer
+// line instead, as on the cards. The widths sit on the header cells, not a
+// colgroup, so hiding a column's cells drops its width with it.
 export function OrderTable({
   orders,
   statuses,
@@ -255,19 +265,9 @@ export function OrderTable({
   return (
     <div className="overflow-hidden rounded-panel border border-line bg-surface shadow-panel">
       <table className="w-full table-fixed border-collapse text-left">
-        <colgroup>
-          <col className="w-14" />
-          <col className="w-[10rem]" />
-          <col className="w-[6.5rem]" />
-          <col className="w-[24%]" />
-          <col />
-          <col className="w-[5.5rem]" />
-          <col className="w-[9rem]" />
-          <col className="w-[11rem]" />
-        </colgroup>
         <thead>
           <tr className="h-9 text-xs font-semibold text-ink-2">
-            <th scope="col" className="pl-2.5">
+            <th scope="col" className="w-14 pl-2.5">
               {selection ? (
                 <SelectBox
                   label="Select every card shown"
@@ -279,13 +279,13 @@ export function OrderTable({
                 <span className="sr-only">Select</span>
               )}
             </th>
-            <th scope="col" className="px-2 font-semibold">Order</th>
-            <th scope="col" className="px-3 font-semibold">Date</th>
-            <th scope="col" className="px-3 font-semibold">Customer</th>
+            <th scope="col" className="w-[10rem] px-2 font-semibold">Order</th>
+            <th scope="col" className="w-[6.5rem] px-3 font-semibold">Date</th>
+            <th scope="col" className="w-[24%] px-3 font-semibold">Customer</th>
             <th scope="col" className="px-3 font-semibold">Items</th>
-            <th scope="col" className="px-3 font-semibold">Age</th>
-            <th scope="col" className="px-3 font-semibold">Branch</th>
-            <th scope="col" className="px-4 font-semibold">Status</th>
+            <th scope="col" className="w-[5.5rem] px-3 font-semibold">Age</th>
+            <th scope="col" className="hidden w-[9rem] px-3 font-semibold xl:table-cell">Branch</th>
+            <th scope="col" className="w-[11rem] px-4 font-semibold">Status</th>
           </tr>
         </thead>
         <tbody>
@@ -327,7 +327,7 @@ export function OrderTable({
                   <DayText order={order} now={now} />
                 </td>
                 <td className={`px-3 ${flash}`}>
-                  <CustomerLine order={order} withBranch={false} />
+                  <CustomerLine order={order} branch="below-xl" />
                 </td>
                 <td className={`px-3 ${flash}`}>
                   <span className="flex min-w-0 items-center gap-2">
@@ -338,7 +338,7 @@ export function OrderTable({
                 <td className={`px-3 ${flash}`}>
                   <AgeBadge order={order} statuses={statuses} ageRule={ageRule} closedKeys={closedKeys} now={now} withLabel={false} />
                 </td>
-                <td className={`px-3 ${flash}`}>
+                <td className={`hidden px-3 xl:table-cell ${flash}`}>
                   <BranchCell order={order} />
                 </td>
                 <td className={`px-4 ${flash}`} onClick={(event) => event.stopPropagation()}>
@@ -407,7 +407,7 @@ export function OrderCards({
             </span>
           </div>
           <div className="mt-1">
-            <CustomerLine order={order} withBranch />
+            <CustomerLine order={order} branch="always" />
           </div>
           <div className="mt-0.5">
             <ItemsLine order={order} />
