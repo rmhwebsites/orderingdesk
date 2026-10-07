@@ -3,6 +3,8 @@
 // orders spec section 4). Defensive like the server's summarize(): a
 // malformed snapshot shows empty fields instead of breaking the drawer.
 
+import { shippingAddressLines } from "./address";
+
 export type SnapshotProperty = { key: string; value: string };
 
 export type SnapshotItem = {
@@ -147,12 +149,10 @@ export function itemsSubtotal(items: Array<Pick<SnapshotItem, "qty" | "price"> &
 }
 
 // The address as lines: name, company (a draft's), street, locality,
-// country. The phone is not an address line.
+// country. The phone is not an address line. One implementation with the
+// address formatter (src/lib/address.ts).
 export function shippingLines(shipping: Pick<SnapshotShipping, "name" | "a1" | "a2" | "city" | "prov" | "zip" | "country"> & { company?: string }): string[] {
-  const locality = [shipping.city, shipping.prov, shipping.zip].filter((part) => part.length > 0).join(" ");
-  return [shipping.name, shipping.company ?? "", shipping.a1, shipping.a2, locality, shipping.country].filter(
-    (line) => line.length > 0,
-  );
+  return shippingAddressLines(shipping, { withRecipient: true });
 }
 
 // Tone names (globals.css [data-tone]) for Shopify's own payment and
