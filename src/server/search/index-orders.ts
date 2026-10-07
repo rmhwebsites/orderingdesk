@@ -1,10 +1,11 @@
 // Keeps order_search and people current (design section 3). Every writer of
 // an orders row calls safeIndexOrders after its write commits (Tasks 5 and
 // 6 of the Wave 1c plan list them); the cron's search tick
-// (search-tick.ts) backfills and repairs whatever a writer missed. The
-// desk list reads its filters from orders itself, so a missed index call
-// only delays words and the person filter. Relative imports only: the sync
-// engine (cron bundle) imports this.
+// (search-tick.ts) backfills, repairs filter columns at once and verifies
+// every card's haystack and requester on a rolling pass, so a missed index
+// call heals within that pass. The desk list reads its filters from orders
+// itself, so a missed index call only delays words and the person filter.
+// Relative imports only: the sync engine (cron bundle) imports this.
 
 import { and, eq, inArray, notLike, sql } from "drizzle-orm";
 import type { Db } from "../../db";
@@ -19,9 +20,11 @@ export const INDEX_CHUNK = 50;
 // A requester found outside the snapshot (the search backfill asks Shopify
 // for cards stored before snapshots kept customer ids).
 export type RequesterHint = { customerId: string; contactId: string };
-export type IndexOptions = { requesters?: ReadonlyMap<string, RequesterHint> };
-// missing: ids that are not cards of this workspace (their search rows, if
-// any, are deleted).
+// onlyChanged: write (and count) only the search rows that differ from the
+// stored ones (the search tick's rolling verify pass, which mostly finds none).
+export type IndexOptions = { requesters?: ReadonlyMap<string, RequesterHint>; onlyChanged?: boolean };
+// indexed: search rows written. missing: ids that are not cards of this
+// workspace (their search rows, if any, are deleted).
 export type IndexResult = { indexed: number; missing: number };
 
 type PersonFacts = {
@@ -133,6 +136,30 @@ async function upsertPeople(
   return byCard;
 }
 
+// The rows an upsert would change. The requester follows the upsert's
+// coalesce: a row without one keeps the stored one.
+async function changedRows(db: Db, workspaceId: string, rows: readonly SearchRow[]): Promise<SearchRow[]> {
+  const stored = await db
+    .select()
+    .from(orderSearch)
+    .where(and(eq(orderSearch.workspaceId, workspaceId), inArray(orderSearch.orderId, rows.map((row) => row.orderId))));
+  const byId = new Map(stored.map((row) => [row.orderId, row]));
+  return rows.filter((row) => {
+    const old = byId.get(row.orderId);
+    return (
+      !old ||
+      old.haystack !== row.haystack ||
+      old.kind !== row.kind ||
+      old.statusKey !== row.statusKey ||
+      old.closed !== row.closed ||
+      old.locationId !== row.locationId ||
+      old.requesterId !== (row.requesterId ?? old.requesterId) ||
+      old.createdAt !== row.createdAt ||
+      old.statusSetAt !== row.statusSetAt
+    );
+  });
+}
+
 function upsertSearchRow(db: Db, row: SearchRow) {
   return db
     .insert(orderSearch)
@@ -232,14 +259,16 @@ export async function indexOrders(
         requesterId: requesterIds.get(card.id) ?? null,
       }),
     );
-    await applyBatch(db, rows.map((row) => upsertSearchRow(db, row)));
-    result.indexed += rows.length;
+    const writes = opts?.onlyChanged ? await changedRows(db, workspaceId, rows) : rows;
+    await applyBatch(db, writes.map((row) => upsertSearchRow(db, row)));
+    result.indexed += writes.length;
   }
   return result;
 }
 
 // What every writer calls after its own write committed: an index failure
-// never fails the write. The search tick repairs what this missed.
+// never fails the write. The search tick's rolling verify pass heals what
+// this missed (filter columns on its next tick).
 export async function safeIndexOrders(
   db: Db,
   workspaceId: string,

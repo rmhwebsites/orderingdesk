@@ -354,7 +354,9 @@ export const workspaceSettings = sqliteTable("workspace_settings", {
   // When the search backfill (src/server/search/search-tick.ts) finished its
   // first full pass over the workspace's cards; null while it runs.
   searchIndexedAt: integer("search_indexed_at"),
-  // "<createdAt>~<orderId>" of the last card that pass indexed.
+  // "<createdAt>~<orderId>" of the last card that pass indexed. Once the
+  // pass finished, the same position for the tick's rolling verify pass
+  // (null: start from the oldest card).
   searchBackfillCursor: text("search_backfill_cursor"),
 });
 

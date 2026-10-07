@@ -10,10 +10,17 @@
 // 2. Repair, every tick once the backfill is done: up to REPAIR_ROWS cards
 //    whose search row is missing or disagrees with orders and statuses on a
 //    filter column are indexed again, and rows whose card is gone are
-//    deleted. The haystack itself is kept current by the writers.
+//    deleted.
+// 3. Verify, every tick after the repair: the next VERIFY_ROWS cards by
+//    (created_at, id) are indexed again with onlyChanged, so a haystack or
+//    requester a writer missed (a swallowed index error, a webhook resend
+//    that upserts as unchanged, two indexers racing) is rewritten within one
+//    pass over the workspace. The position lives in search_backfill_cursor,
+//    which the backfill no longer needs; past the newest card it wraps to
+//    null and starts over.
 // Relative imports only (cron bundle). Logs carry counts, never text.
 
-import { and, asc, eq, gt, isNull, ne, or, sql } from "drizzle-orm";
+import { and, asc, eq, gt, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import type { Db } from "../../db";
 import { rowsAffected } from "../../db/batch";
 import { orderSearch, orders, statuses, workspaceSettings } from "../../db/schema";
@@ -24,6 +31,8 @@ import { indexOrders, type RequesterHint } from "./index-orders";
 
 export const BACKFILL_ROWS = 200;
 export const REPAIR_ROWS = 200;
+// Cards verified per tick: at a tick every 10 minutes, 7,200 cards a day.
+export const VERIFY_ROWS = 50;
 
 export type SearchTickResult = {
   backfilled: number;
@@ -105,6 +114,14 @@ async function requesterHints(
   return hints;
 }
 
+// Cards after a (created_at, id) cursor, oldest first.
+function afterCursor(cursor: string | null) {
+  const after = parseBackfillCursor(cursor);
+  return after
+    ? or(gt(orders.createdAt, after.createdAt), and(eq(orders.createdAt, after.createdAt), gt(orders.id, after.id)))
+    : undefined;
+}
+
 async function backfillStep(
   db: Db,
   env: CloudflareEnv,
@@ -113,7 +130,6 @@ async function backfillStep(
   now: number,
   opts: SearchTickOptions | undefined,
 ): Promise<SearchTickResult> {
-  const after = parseBackfillCursor(cursor);
   const cards: BackfillCard[] = await db
     .select({
       id: orders.id,
@@ -124,14 +140,7 @@ async function backfillStep(
       draftSnapshot: orders.draftSnapshot,
     })
     .from(orders)
-    .where(
-      and(
-        eq(orders.workspaceId, workspaceId),
-        after
-          ? or(gt(orders.createdAt, after.createdAt), and(eq(orders.createdAt, after.createdAt), gt(orders.id, after.id)))
-          : undefined,
-      ),
-    )
+    .where(and(eq(orders.workspaceId, workspaceId), afterCursor(cursor)))
     .orderBy(asc(orders.createdAt), asc(orders.id))
     .limit(BACKFILL_ROWS);
   const hints = await requesterHints(db, env, workspaceId, cards, opts);
@@ -152,7 +161,27 @@ async function backfillStep(
   return { backfilled: indexed.indexed, repaired: 0, removed: 0, ...(finished ? { finished: true } : {}) };
 }
 
-async function repairStep(db: Db, workspaceId: string): Promise<SearchTickResult> {
+async function verifyStep(db: Db, workspaceId: string, cursor: string | null): Promise<number> {
+  const cards = await db
+    .select({ id: orders.id, createdAt: orders.createdAt })
+    .from(orders)
+    .where(and(eq(orders.workspaceId, workspaceId), afterCursor(cursor)))
+    .orderBy(asc(orders.createdAt), asc(orders.id))
+    .limit(VERIFY_ROWS);
+  const rewritten =
+    cards.length > 0 ? (await indexOrders(db, workspaceId, cards.map((card) => card.id), { onlyChanged: true })).indexed : 0;
+  const last = cards[cards.length - 1];
+  const next = cards.length < VERIFY_ROWS ? null : backfillCursor(last.createdAt, last.id);
+  if (next !== cursor) {
+    await db
+      .update(workspaceSettings)
+      .set({ searchBackfillCursor: next })
+      .where(and(eq(workspaceSettings.workspaceId, workspaceId), isNotNull(workspaceSettings.searchIndexedAt)));
+  }
+  return rewritten;
+}
+
+async function repairStep(db: Db, workspaceId: string, cursor: string | null): Promise<SearchTickResult> {
   const kindNow = sql`case when ${orders.shopifyOrderId} is null then 'draft' else 'order' end`;
   const closedNow = sql`coalesce(${statuses.closed}, 0)`;
   const stale = await db
@@ -184,7 +213,8 @@ async function repairStep(db: Db, workspaceId: string): Promise<SearchTickResult
         sql.raw("not exists (select 1 from orders o where o.id = order_search.order_id)"),
       ),
     );
-  return { backfilled: 0, repaired, removed: rowsAffected(orphans, "search") };
+  const verified = await verifyStep(db, workspaceId, cursor);
+  return { backfilled: 0, repaired: repaired + verified, removed: rowsAffected(orphans, "search") };
 }
 
 export async function runSearchTick(
@@ -206,5 +236,5 @@ export async function runSearchTick(
   if (settings.indexedAt === null) {
     return backfillStep(db, env, workspaceId, settings.cursor, now, opts);
   }
-  return repairStep(db, workspaceId);
+  return repairStep(db, workspaceId, settings.cursor);
 }

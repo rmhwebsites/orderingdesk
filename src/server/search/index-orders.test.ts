@@ -104,6 +104,22 @@ describe("indexOrders", () => {
     expect(await searchRow(db, "x1")).toBeUndefined();
   });
 
+  it("with onlyChanged, writes and counts only the rows that differ from the stored ones", async () => {
+    const db = await setup();
+    await seedOrder(db, WS, { id: "o1", shopify: snapshotOf({ customerId: "77" }) });
+    await seedOrder(db, WS, { id: "o2", shopify: snapshotOf({ customerId: "77" }) });
+    await indexOrders(db, WS, ["o1", "o2"]);
+    expect(await indexOrders(db, WS, ["o1", "o2"], { onlyChanged: true })).toEqual({ indexed: 0, missing: 0 });
+    await db
+      .update(schema.orders)
+      .set({ shopify: snapshotOf({ customerId: "77", items: [{ title: "Safety Vest", qty: 1, sku: "SV-2", variant: "", props: [] }] }) })
+      .where(eq(schema.orders.id, "o2"));
+    await seedOrder(db, WS, { id: "o3" });
+    expect(await indexOrders(db, WS, ["o1", "o2", "o3"], { onlyChanged: true })).toEqual({ indexed: 2, missing: 0 });
+    expect((await searchRow(db, "o2")).haystack).toContain("safety vest");
+    expect(await searchRow(db, "o3")).toBeDefined();
+  });
+
   it("indexes more cards than one chunk", async () => {
     const db = await setup();
     const ids = Array.from({ length: INDEX_CHUNK * 2 + 7 }, (_, i) => `o${i}`);
