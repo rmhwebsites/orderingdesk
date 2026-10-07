@@ -2181,10 +2181,11 @@ request, never a real employee's first.
     not disabled. Two writers indexing the same card at the same instant
     can leave its haystack one write behind until the rolling verify pass
     reaches it (50 cards a tick).
-  - The requester backfill needs `read_companies` for the company contact
-    (IMPACT has it). A store without a companies scope gets a fatal answer
-    for every chunk; those old cards are indexed without a requester, and
-    new cards still link theirs from the snapshot.
+  - The requester backfill reads the company contact and location only
+    when the connection has `read_companies` or `write_companies` (IMPACT
+    has both); without them it reads the customer only, so old cards still
+    get their requester but no company contact or location (fixed before
+    deploy in a3d73dc, which also fills orders.location_id for old orders).
   - AI search picks at most one status, and keeps it only when the
     question names its label.
   - The kind counts (Drafts, Deleted) are over every card, not per view.
@@ -2226,3 +2227,21 @@ request, never a real employee's first.
   schema behavior, the requester fetch against the real store, the
   backfill on production, and "Show older cards" in the dev server (35
   sample cards; covered by tests and the Task 13 harness, 200 to 300).
+
+
+## STATE UPDATE, 2026-10-07 WAVE 1c DEPLOYED, plus pre-deploy fixes
+
+- Pre-deploy fixes on top of 77f07b4, each reviewed for spec and quality:
+  6aa7a33 (AI answers that set only a state or a sort now apply it instead
+  of falling back), a3d73dc (the requester backfill also fills
+  orders.location_id for old orders and only reads company data with a
+  companies scope), 07cb243 (inactive locations keep their name in desk
+  chips), f827d18 (backfillLocationIds re-indexes the cards it touches).
+  2063 tests, tsc and build clean.
+- Deployed: backup orderingdesk-before-0013-2026-10-07.sql and a time
+  travel bookmark, migration 0013 applied remotely (13 orders and events
+  intact, foreign keys clean), then main fast-forwarded (version
+  1c28f10e). The Workers AI binding came with the deploy.
+- Live checks still open for Ryan (Wave 0 list): about 50 AI search
+  questions on the live desk (latency inside 2.5 s, strict schema
+  followed), the people and location pages, Refresh connection.

@@ -10,7 +10,7 @@ is a Claude action on a real request unless Ryan asks for it in chat.
 
 1. **Refresh connection.** Settings > Store connection > Refresh connection.
    - Pass: the panel shows the draft scopes, the webhooks list includes the
-     draft topics, no error. Claude confirms `webhooks_registered_at` moved
+     draft and company location topics, no error. Claude confirms `webhooks_registered_at` moved
      and `canonical_shop_domain` is still `40kra0-b6.myshopify.com`.
 2. **Live webhooks.** Ryan changes something small on a test order in
    Shopify (for example adds then removes a tag on #1024).
@@ -43,6 +43,23 @@ is a Claude action on a real request unless Ryan asks for it in chat.
      alerts; the regular sync keeps running.
 8. **Open in Shopify.** Click it on one order and one draft.
    - Pass: both open the right page in Shopify admin (store 40kra0-b6).
+
+9. **Edit a request (quantity only).** Change one quantity on a test
+   draft and save.
+   - Pass: in Shopify the draft keeps its shipping address and its $0
+     prices (Wave 1b sends the company location on every edit).
+10. **Cancel an approved test order** from the desk.
+   - Pass: Shopify shows it cancelled with no customer email, no restock and
+     no refund; the card moves to Cancelled with the reason as a note.
+11. **AI search.** Ask about 50 plain questions on the live desk (for
+   example "open requests from Athens", "business cards last month",
+   "show me the closed ones").
+   - Pass: answers arrive within about 2.5 seconds and the chips match the
+     question; anything unreadable falls back to keyword search.
+12. **People and locations.** Open an employee page and a location page
+   from a card.
+   - Pass: history, counts and items look right; the five company
+     locations show with their addresses.
 
 ## After the checks
 

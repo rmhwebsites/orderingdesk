@@ -5,6 +5,14 @@ session, every section confirmed). Builds on the platform amendment
 (2026-10-02), the draft orders spec (2026-10-04) and what is live at
 orderingdesk.com (production 0959a824, migration 0010).
 
+Amended on Oct 7, 2026 with Ryan's owner decisions for the MCP waves
+(connection lifetime, the employee catalog through Locksmith, the platform
+admin's hub connection, personalized items, PENDING APPROVAL). The owner
+decisions table, section 4 and section 6 below include them. The Wave 2 plan
+(`docs/plans/2026-10-06-wave-2-mcp-team.md`, migration 0014) and the Wave 3
+plan (`docs/plans/2026-10-06-wave-3-mcp-employees.md`, migration 0015) build
+them.
+
 Inputs: a taste v2 audit of the live UI (130 screenshots, desktop and phone,
 light and dark), a frontend code audit, a product inventory, a market scan
 (order desks, B2B approval apps, company merch platforms, Linear-style
@@ -30,8 +38,12 @@ own AI chatbot with guardrails.
 | AI model | A cheap Workers AI model chosen by research: `@cf/zai-org/glm-4.7-flash`. |
 | MCP server | Yes. Employees can place requests through their chatbot (still manager-approved); team members manage from their chatbot. |
 | AI ordering scope | Employees order only for themselves at their own location. Managers can order for anyone at any location through AI. |
+| Employee catalog | An employee may order only the items Locksmith allows that employee on the store (their Locksmith permissions), read through Locksmith's Admin API with a token a platform admin saves in Settings. Only conditions Ordering Desk can check from Shopify data count; anything else leaves the product out (fail closed). Every line is checked again right before the request is created in Shopify. Replaces the earlier plan rule "free at their location or tagged". |
+| Platform admin connection | A platform admin's connection made on the hub may act in any workspace with AI turned on. The tools ask which workspace; the server re-checks on every call that the person is still a platform admin and that the workspace has AI on. |
+| PENDING APPROVAL | A contact whose Shopify customer is tagged PENDING APPROVAL, even when also tagged APPROVED, is blocked from AI ordering: no connection and no requests until the pending tag is removed in Shopify. |
 | AI guardrails | Preview then confirm for every change, same role rules as the app, logged "via AI", daily limits per person. |
-| Personalized items via AI | Allowed; the card is flagged **Proof needed**. Approval shows a warning but is not blocked. |
+| AI connection lifetime | 90 days, fixed, for team members and employees: using a connection does not extend it, and the person connects again after 90 days. Revoke stays instant. |
+| Personalized items via AI | Allowed, with no "Proof needed" flag: no tag, chip, notification line or Approve warning. Before a request is sent, the chatbot shows every personalization detail (name, title, phones, email, address) exactly as it will go to Shopify and asks the person to confirm it is correct. Enforced by the server: the prepare step returns the details verbatim with the instruction "Ask the person to confirm these details are correct.", and the confirm step must repeat the same details plus `details_confirmed: true`, bound by the prepared action's content hash. |
 | After approval | Managers can cancel from the desk: Shopify cancel with no customer email, no restock, no refund. Orders cancelled in Shopify also move their card to Cancelled. |
 | Employees on the web | Nothing new. Employees use Ordering Desk only through AI (status, reasons, ordering). |
 | Rejection reasons | Employees can see the reason through AI; the Reject form says so. |
@@ -232,6 +244,9 @@ Architecture:
   every call.
 - Sign-in on the authorize page reuses the email sign-in with a 6-digit code
   (links opened from email break in chat apps' in-app browsers).
+- Every AI connection, for team members and employees alike, lasts 90 days,
+  fixed: using it does not extend it, and the person connects again after 90
+  days. Revoke stays instant.
 - Settings shows each person's AI connections with Revoke; platform admins
   can revoke all for a workspace.
 
@@ -239,11 +254,25 @@ Principals:
 
 - Team members connect with their app role (manager, staff, platform admin
   acting as manager on the client host).
-- Employees connect as a new **requester** principal, allowed only when their
-  email is a contact in the workspace's linked Shopify B2B company (Admin
-  GraphQL company contacts, `read_companies` granted); their location comes
-  from Shopify; webhooks and the sync revoke them when Shopify removes them.
-  Requesters never become workspace members and have no app access.
+- A platform admin who connects on the hub gets one connection that may act
+  in any workspace whose AI switch is on. Every tool on it asks which
+  workspace (a `workspace` argument, with a `list_workspaces` tool to pick
+  from), and the server accepts the workspace only when it exists and has AI
+  on, after re-reading on that call that the person is still a platform
+  admin. The connection works only on the hub, and each call is counted,
+  limited and audited in the workspace it names.
+- Employees connect as a new **requester** principal, only on the
+  workspace's own client host, allowed only when their email is a contact in
+  the workspace's linked Shopify B2B company with a role at a location
+  (Admin GraphQL company contacts, `read_companies` granted); their location
+  comes from Shopify; webhooks and the sync revoke them when Shopify removes
+  them. Requesters never become workspace members and have no app access.
+- A contact whose Shopify customer is tagged PENDING APPROVAL (compared in
+  any case) is blocked from AI ordering, even when also tagged APPROVED: no
+  sign-in code is sent, every call is refused, a request is refused right
+  before it is created in Shopify, and the webhooks and the daily pass revoke
+  the identity and its connections. Once the tag is removed in Shopify, the
+  person can sign in again.
 - Employee access is off per workspace by default; a platform admin turns it
   on, first for one pilot location.
 
@@ -252,42 +281,131 @@ Guardrails (all server-side, independent of the chat client):
 - Every write is two steps: `prepare_*` stores a single-use D1 action that
   expires in 10 minutes and returns a plain preview; `confirm_*` must repeat
   readable fields that match it. Auto-allowed tools still cannot skip it.
+- Personalized items: before a request is sent, the person confirms every
+  personalization detail (name, title, phones, email, address) in the chat.
+  The prepare step returns the details exactly as they will go to Shopify,
+  with the instruction "Ask the person to confirm these details are
+  correct."; the confirm step must carry `details_confirmed: true` and the
+  same details in the same order. The details are covered by the prepared
+  action's content hash, so a missing confirmation or a changed detail is
+  refused and the confirmation stays usable. A request without
+  personalization needs neither. There is no "Proof needed" flag, tag, chip,
+  notification line or Approve warning.
 - Tool annotations: read and prepare tools `readOnlyHint: true`; confirms for
   approve, reject, cancel, edit and status `destructiveHint: true`. Do not
   depend on elicitation (claude.ai does not support it yet).
 - Same role rules as the app; requesters only for themselves at their own
-  location.
+  location, and only items Locksmith allows them (see Employee catalog
+  below).
 - Daily limits per person (adjustable per workspace): requester 5 requests
   and 200 reads; staff 50 changes; manager 100 changes; 1,000 reads.
 - Every action records source "via AI" on the timeline and an audit row
   (who, tool, target, outcome).
 - Prompt injection: order text returned to the chatbot is labelled data,
-  with links and images stripped and no markdown passed through.
+  with links and images stripped and no markdown passed through. The one
+  exception is the personalization a person just entered: the prepare step
+  returns it verbatim so they can confirm it, after checking it has no
+  links and no control characters.
 
 Tools:
 
 - Team: search (same AI search), get order, employee and location lookups;
-  prepare and confirm for status change, note, approve (warns on Proof
-  needed), reject, cancel, edit request; managers also place a request for
-  anyone at any location.
-- Employees: browse the catalog with their contextual $0 prices and sizes
-  (`read_products` is granted); their past orders; place a request; check the
-  status of their own requests including the rejection reason.
+  prepare and confirm for status change, note, approve, reject, cancel, edit
+  request; managers and platform admins also place a request for anyone at
+  any location. On a platform admin's hub connection every tool takes a
+  `workspace` argument, and `list_workspaces` names the workspaces with AI
+  on.
+- Employees: browse only the items Locksmith allows them, with their
+  contextual prices and sizes at their own location (`read_products` is
+  granted; every request must still total $0); their past orders; place a
+  request; check the status of their own requests including the rejection
+  reason.
 - Placing a request is a Shopify `draftOrderCreate` for the B2B company
   contact at the location (purchasing entity company, contact and location),
   shipping to the location's address, personalization in line item custom
-  attributes with the personalizer's keys, a "Proof needed" tag and chip when
-  a personalized item has no proof, the $0 total checked first with
-  `draftOrderCalculate`, sent once with a marker tag so a timeout never
-  creates a duplicate.
+  attributes with the personalizer's keys (only after the person confirmed
+  every detail, see Guardrails), the tags `via AI` and a marker tag and no
+  other tag, the $0 total checked first with `draftOrderCalculate`, sent once
+  with the marker tag so a timeout never creates a duplicate. For an
+  employee's request, every line is checked against Locksmith's rules again
+  right before `draftOrderCreate`, with the rules, the customer's tags and
+  the products' collections read fresh. The app never passes
+  `bypassCartValidations`, so Shopify's checkout validation rules apply to
+  the drafts it creates and approves; when Shopify refuses, Ordering Desk
+  shows Shopify's message and changes nothing.
 - Stage 0 before Wave 3: confirm an API-created B2B draft behaves like a
   checkout-to-draft one (price list at $0 at every location, visible to the
   employee, Shopify emails, a contact without a role at the location
-  refused).
+  refused), and that Test in Settings reads IMPACT's Locksmith rules as
+  expected (Locksmith does not document the shape of its answer).
+
+Employee catalog (Locksmith):
+
+- Locksmith has no access check that outside apps can call, and it does
+  nothing to draft orders, so Ordering Desk applies Locksmith's rules
+  itself. It only reads Locksmith, never writes to it.
+- Reading: Locksmith's Admin API at `https://uselocksmith.com/api/unstable`,
+  `GET /locks.json` for the rules and `GET /shop.json` to check the token,
+  with the headers `x-shopify-shop-domain` (the store's myshopify.com
+  domain) and `x-locksmith-access-token`, and a 10 second timeout.
+- The token: Ryan creates it in Locksmith > Settings > Access tokens. A
+  platform admin pastes it into Ordering Desk Settings (Employee AI, on the
+  hub), never through chat. It is checked with `/shop.json` before it is
+  saved, encrypted with AES-GCM like the Shopify secrets (additional data:
+  the workspace id), and never logged, returned by any route or shown again.
+  A Test button calls `/shop.json`, then reads the rules and shows a
+  summary. Managers see only whether Locksmith is connected and when it was
+  last read.
+- Defensive parsing: Locksmith documents no response shape for
+  `/locks.json` and says fields starting with `_` may change. Ordering Desk
+  never reads an `_` field and treats anything it does not understand as
+  "cannot check".
+- Supported: conditions on a customer tag (one tag, compared trimmed and in
+  any case), inverted conditions or keys, and always open; locks on the
+  resource types `product`, `custom_collection`, `smart_collection` and
+  `shop` (the whole store). Locks on pages and blogs never cover a product
+  and are ignored.
+- Fail closed: a product covered by a lock with a condition Ordering Desk
+  cannot evaluate from Shopify data (passcodes, secret links, email lists,
+  dates, locations, custom Liquid and the like) is left out. A lock on any
+  other resource type or an answer of unknown shape leaves the whole catalog
+  empty until it is fixed. With no token or no readable rules, employees get
+  a plain refusal and nothing is listed or requested.
+- Evaluating: a product is allowed when every lock that covers it (by the
+  product, by one of its collections, or the whole store) opens for the
+  employee's customer tags. The tags and the product's collections are read
+  from the Shopify Admin API.
+- Cache: the parsed rule set (never Locksmith's raw answer) is kept per
+  workspace with the time it was read and the last error. The cron refreshes
+  it on every tick (the Worker's existing 10 minute schedule), Test
+  refreshes it on demand, and browsing uses it while it is at most an hour
+  old; older or missing, it is read from Locksmith first.
+- Re-check: right before every `draftOrderCreate` for an employee, Ordering
+  Desk reads Locksmith, the customer's tags and the products' collections
+  again and checks every line. The app never passes
+  `bypassCartValidations`.
+- IMPACT's rules as of Oct 7, 2026 (decoded, and confirmed by Ryan as
+  complete): the whole store needs the customer tag `approved`; Apparel,
+  Office & Desk and Accessories are locked for customers tagged
+  `second line management`; the Sign Up and Custom Shop pages are open to
+  everyone.
+- Storefront gap: the collection lock does not hide those products from
+  grids or search, and no checkout rule exists, so the storefront can still
+  sell them. Ryan received steps to close it
+  (`exports/LOCKSMITH_CLOSE_STOREFRONT_GAP.md` in the client folder, outside
+  this repo): hide the lock's content from lists, and a Locksmith checkout
+  validation rule for the product tag `full-catalog` and the customer tag
+  `Full Catalog`. Shopify runs checkout validation on draft orders too
+  unless `bypassCartValidations` is passed, which the app never does. Once
+  the rule is on, Shopify refuses Approve on a draft that holds a
+  `full-catalog` item for a requester without `Full Catalog`, and Ordering
+  Desk shows Shopify's message. Nothing in Ordering Desk reads those two
+  tags.
 
 Before Wave 3 goes live: Ryan confirms with IMPACT that employees may use
-their personal Claude or ChatGPT accounts with company order data, and picks
-the pilot location.
+their personal Claude or ChatGPT accounts with company order data, picks
+the pilot location, and saves the Locksmith access token in Settings (then
+presses Test).
 
 ## 5. Wave 4: fulfillment, POs, visibility
 
@@ -326,6 +444,10 @@ migration):
   `ai_usage` (daily counters), `audit_log`, `requester_identities`;
   `OAUTH_KV` KV binding; `AI` Workers AI binding. Never add a `build` field to
   wrangler.jsonc.
+- Locksmith (Wave 3, migration 0015): on `store_connections` (one row per
+  workspace), the encrypted Locksmith token and the parsed rule set with the
+  time it was read, the time it was last checked and the last error. Never
+  Locksmith's raw answer.
 
 Failure handling:
 
@@ -334,6 +456,10 @@ Failure handling:
   timeout the app reads Shopify and never resends; plain-language errors; no
   half-done state.
 - MCP tools return structured errors; prepared actions expire.
+- Locksmith unreachable or unreadable: employees are offered nothing and
+  cannot request (fail closed). The rule set from the last good read counts
+  for browsing for at most an hour, never for the final check before
+  `draftOrderCreate`, which always reads Locksmith fresh.
 
 Testing:
 
