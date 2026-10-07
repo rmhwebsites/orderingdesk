@@ -280,6 +280,7 @@ export async function insertNewOrder(
       statusKey: initialStatusFor(order, statusRows, statusRows[0]?.key ?? "new"),
       createdAt: order.createdAt || now,
       syncedAt: now,
+      locationId: order.locationId,
       ...(imported ? { notifiedAt: now } : {}),
     })
     .onConflictDoNothing();
@@ -365,7 +366,9 @@ export async function writeOrderSnapshot(
   // match; rows-affected says whether the write landed.
   const snapshotResult = await db
     .update(orders)
-    .set({ shopify: order, syncedAt: now })
+    // The card's company location follows the snapshot when the snapshot
+    // names one; a snapshot without one keeps what the card knew.
+    .set({ shopify: order, syncedAt: now, ...(order.locationId !== null ? { locationId: order.locationId } : {}) })
     .where(and(eq(orders.id, existing.id), lte(orders.syncedAt, now)));
   if (changesOf(snapshotResult) !== 1) {
     return { kind: "none" };

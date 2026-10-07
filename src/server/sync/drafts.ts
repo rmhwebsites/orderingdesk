@@ -525,6 +525,7 @@ async function insertDraftCard(
       ...(silent ? { notifiedAt: now } : {}),
       shopifyDraftId: draft.shopifyDraftId,
       draftName: draft.name,
+      locationId: draft.locationId,
     })
     .onConflictDoNothing();
   const insertEvent = db
@@ -643,7 +644,12 @@ export async function writeDraftSnapshot(
   // answers for again loses the mark.
   const result = await db
     .update(orders)
-    .set({ shopify: draft, syncedAt: now, ...(revived ? { draftDeletedAt: null } : {}) })
+    .set({
+      shopify: draft,
+      syncedAt: now,
+      ...(revived ? { draftDeletedAt: null } : {}),
+      ...(draft.locationId !== null ? { locationId: draft.locationId } : {}),
+    })
     .where(and(eq(orders.id, existing.id), lte(orders.syncedAt, now), isNull(orders.shopifyOrderId)));
   if (changesOf(result) !== 1) {
     return { kind: "none" };
