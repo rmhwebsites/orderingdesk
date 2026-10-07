@@ -88,3 +88,11 @@ export function actionsFor(p: Principal, card: CardRow, canWrite: boolean): stri
   }
   return list;
 }
+
+export async function loadCardById(db: Db, workspaceId: string, id: string | null): Promise<CardRow | null> {
+  if (!id) {
+    return null;
+  }
+  const rows = await db.select().from(orders).where(and(eq(orders.workspaceId, workspaceId), eq(orders.id, id))).limit(1);
+  return rows[0] ?? null;
+}
