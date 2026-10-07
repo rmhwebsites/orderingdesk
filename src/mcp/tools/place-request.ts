@@ -8,11 +8,12 @@
 // and refuses anything but exactly $0.00, and returns every personalization
 // detail verbatim for the person to confirm (owner decision 4, Oct 7:
 // src/mcp/details.ts); the confirm must carry details_confirmed: true and
-// those details, then sends draftOrderCreate once; after a timeout it looks
-// the draft up by its marker, and an unanswered create stays "unknown" so
-// the same confirmation can only look it up again. The person is named by
-// their stored name through personLabel (Decision 13): a stored name that is
-// Shopify's email or phone fallback is no name, and the request is refused.
+// those details, then sends draftOrderCreate once; after a timeout or any
+// error other than userErrors it looks the draft up by its marker, and a
+// create it cannot find stays "unknown" so the same confirmation can only
+// look it up again. The person is named by their stored name through
+// personLabel (Decision 13): a stored name that is Shopify's email or phone
+// fallback is no name, and the request is refused.
 // The new draft is written onto the desk like a webhook would write it, gets
 // a "request_placed" entry via AI, and is announced like any new request.
 // Relative imports only.
@@ -400,9 +401,15 @@ export const confirmPlaceRequest = defineTool({
       await finishAction(deps.db, action.id, "done", "created_unread");
       return ok({ done: true, message: "Shopify created the request; it appears on the desk with the next sync." });
     }
-    if (sent.kind !== "transient") {
+    // Only userErrors, or a token Shopify rejected before reading the
+    // mutation, say for certain that nothing was created. Any other error
+    // (a timeout, or an HTTP 200 with a top-level error such as
+    // INTERNAL_SERVER_ERROR, which Shopify can send after the draft was
+    // committed) is followed by a read, never a resend (ground rule 10).
+    if (sent.kind === "refused" || sent.kind === "auth") {
       await finishAction(deps.db, action.id, "failed", "refused");
-      return fail("refused", `Shopify did not create the request: ${plainText(failureText(sent), 300)}. Nothing was created.`);
+      const detail = plainText(failureText(sent), 300).replace(/[\s.]+$/, "");
+      return fail("refused", `Shopify did not create the request: ${detail}. Nothing was created.`);
     }
     const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
     for (let attempt = 0; attempt < REVIEW_READY_TRIES; attempt++) {
@@ -412,10 +419,11 @@ export const confirmPlaceRequest = defineTool({
         return land(deps, action, payload, node);
       }
     }
-    await finishAction(deps.db, action.id, "unknown", "no_answer");
+    await finishAction(deps.db, action.id, "unknown", sent.kind === "transient" ? "no_answer" : "error_answer");
+    const answered = sent.kind === "transient" ? "Shopify did not answer" : "Shopify answered with an error";
     return fail(
       "unknown_outcome",
-      "Shopify did not answer, so it is not known whether the request was created. Ordering Desk never sends it twice: call confirm_place_request again with the same confirmation in a minute, and it will look for the request in Shopify.",
+      `${answered}, so it is not known whether the request was created. Ordering Desk never sends it twice: call confirm_place_request again with the same confirmation in a minute, and it will look for the request in Shopify.`,
     );
   },
 });

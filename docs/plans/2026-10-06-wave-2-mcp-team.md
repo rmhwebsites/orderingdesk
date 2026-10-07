@@ -9043,6 +9043,55 @@ describe("placing a request through an AI app", () => {
     expect(shop.ops().filter((op) => op === "PlaceRequest")).toHaveLength(1);
   });
 
+  // Ground rule 10 and Decision 11: Shopify can answer HTTP 200 with a
+  // top-level INTERNAL_SERVER_ERROR after the mutation committed, so only
+  // userErrors (or a rejected token) say for certain that nothing was
+  // created. Any other error is followed by a read, never a resend.
+  it("treats a top-level GraphQL error as an unknown outcome: looks the draft up by its marker and never sends twice", async () => {
+    const db = await setup();
+    let marker = "";
+    let shopifyHasIt = false;
+    const shop = fakeShop({
+      ContactOfCustomer: () => profiles(),
+      CalculateRequest: (variables) => {
+        marker = (variables.input as { tags: string[] }).tags[1];
+        return calculated();
+      },
+      PlaceRequest: () =>
+        Response.json({ errors: [{ message: "Internal error. Looks like something went wrong on our end.", extensions: { code: "INTERNAL_SERVER_ERROR" } }] }),
+      DraftByMarker: () => ({ draftOrders: { nodes: shopifyHasIt ? [created(["via AI", marker])] : [] } }),
+    });
+    const deps = toolDeps(db, principalFor(), { fetchImpl: shop.impl, sleep: async () => undefined });
+    const prepared = (await call(preparePlaceRequest, request, deps)).data;
+    const confirm = confirmed(prepared.confirmation_id);
+    const unknown = await call(confirmPlaceRequest, confirm, deps);
+    expect(unknown.data.error).toMatchObject({ code: "unknown_outcome", retryable: true });
+    expect(unknown.data.error.message).not.toContain("Nothing was created");
+    expect(unknown.data.error.message).not.toContain("..");
+    expect(shop.ops()).toContain("DraftByMarker");
+    expect((await db.select().from(schema.aiActions))[0]).toMatchObject({ status: "unknown" });
+    shopifyHasIt = true;
+    const later = await call(confirmPlaceRequest, confirm, toolDeps(db, principalFor(), { fetchImpl: shop.impl, now: () => NOW + 60000 }));
+    expect(later.data).toMatchObject({ done: true, request: "#D40" });
+    expect(shop.ops().filter((op) => op === "PlaceRequest")).toHaveLength(1);
+  });
+
+  it("reports userErrors as a definite refusal, in Shopify's words with one period, and looks nothing up", async () => {
+    const db = await setup();
+    const shop = fakeShop({
+      ContactOfCustomer: () => profiles(),
+      CalculateRequest: () => calculated(),
+      PlaceRequest: () => ({ draftOrderCreate: { draftOrder: null, userErrors: [{ field: ["input", "lineItems"], message: "Variant is not available." }] } }),
+    });
+    const deps = toolDeps(db, principalFor(), { fetchImpl: shop.impl, sleep: async () => undefined });
+    const prepared = (await call(preparePlaceRequest, request, deps)).data;
+    const refused = await call(confirmPlaceRequest, confirmed(prepared.confirmation_id), deps);
+    expect(refused.data.error).toMatchObject({ code: "refused" });
+    expect(refused.data.error.message).toBe("Shopify did not create the request: Variant is not available. Nothing was created.");
+    expect(shop.ops()).not.toContain("DraftByMarker");
+    expect((await db.select().from(schema.aiActions))[0]).toMatchObject({ status: "failed", outcome: "refused" });
+  });
+
   it("is for managers, and refuses links in personalization", async () => {
     const db = await setup();
     expect((await call(preparePlaceRequest, request, toolDeps(db, principalFor("staff")))).data.error).toMatchObject({ code: "forbidden" });
@@ -9154,9 +9203,10 @@ Create `src/mcp/tools/place-request.ts`:
 // and refuses anything but exactly $0.00, and returns every personalization
 // detail verbatim for the person to confirm (owner decision 4, Oct 7:
 // src/mcp/details.ts); the confirm must carry details_confirmed: true and
-// those details, then sends draftOrderCreate once; after a timeout it looks the draft up by its
-// marker, and an unanswered create stays "unknown" so the same confirmation
-// can only look it up again. The new draft is written onto the desk like a
+// those details, then sends draftOrderCreate once; after a timeout or any
+// error other than userErrors it looks the draft up by its marker, and a
+// create it cannot find stays "unknown" so the same confirmation can only
+// look it up again. The new draft is written onto the desk like a
 // webhook would write it, gets a "request_placed" entry via AI, and is
 // announced like any new request. Relative imports only.
 
@@ -9539,9 +9589,15 @@ export const confirmPlaceRequest = defineTool({
       await finishAction(deps.db, action.id, "done", "created_unread");
       return ok({ done: true, message: "Shopify created the request; it appears on the desk with the next sync." });
     }
-    if (sent.kind !== "transient") {
+    // Only userErrors, or a token Shopify rejected before reading the
+    // mutation, say for certain that nothing was created. Any other error
+    // (a timeout, or an HTTP 200 with a top-level error such as
+    // INTERNAL_SERVER_ERROR, which Shopify can send after the draft was
+    // committed) is followed by a read, never a resend (ground rule 10).
+    if (sent.kind === "refused" || sent.kind === "auth") {
       await finishAction(deps.db, action.id, "failed", "refused");
-      return fail("refused", `Shopify did not create the request: ${plainText(failureText(sent), 300)}. Nothing was created.`);
+      const detail = plainText(failureText(sent), 300).replace(/[\s.]+$/, "");
+      return fail("refused", `Shopify did not create the request: ${detail}. Nothing was created.`);
     }
     const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
     for (let attempt = 0; attempt < REVIEW_READY_TRIES; attempt++) {
@@ -9551,10 +9607,11 @@ export const confirmPlaceRequest = defineTool({
         return land(deps, action, payload, node);
       }
     }
-    await finishAction(deps.db, action.id, "unknown", "no_answer");
+    await finishAction(deps.db, action.id, "unknown", sent.kind === "transient" ? "no_answer" : "error_answer");
+    const answered = sent.kind === "transient" ? "Shopify did not answer" : "Shopify answered with an error";
     return fail(
       "unknown_outcome",
-      "Shopify did not answer, so it is not known whether the request was created. Ordering Desk never sends it twice: call confirm_place_request again with the same confirmation in a minute, and it will look for the request in Shopify.",
+      `${answered}, so it is not known whether the request was created. Ordering Desk never sends it twice: call confirm_place_request again with the same confirmation in a minute, and it will look for the request in Shopify.`,
     );
   },
 });
