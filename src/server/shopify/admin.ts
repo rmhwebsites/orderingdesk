@@ -734,3 +734,103 @@ export async function createFulfillment(
   const refused = userErrorsOf(result.data.fulfillmentCreate);
   return refused ? { kind: "refused", detail: refused } : { kind: "ok" };
 }
+
+// ---------------------------------------------------------------------------
+// Cancel an order (comprehensive design section 2)
+
+// Read right before a cancel and after a timeout: whether Shopify cancelled
+// it already, how it is fulfilled, and its total (Ordering Desk cancels only
+// $0 orders, because it never refunds).
+export const ORDER_CANCEL_STATE_QUERY = `query OrderCancelState($id: ID!) {
+  order(id: $id) {
+    id
+    name
+    cancelledAt
+    displayFulfillmentStatus
+    currentTotalPriceSet { shopMoney { amount currencyCode } }
+  }
+}`;
+
+export type OrderCancelState = {
+  name: string;
+  // Shopify's ISO time, or null while the order is not cancelled.
+  cancelledAt: string | null;
+  // Shopify's own value, for example UNFULFILLED or FULFILLED.
+  fulfillment: string;
+  total: string | null;
+  currency: string;
+};
+
+export async function fetchOrderCancelState(
+  shopDomain: string,
+  token: string,
+  orderGid: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ kind: "ok"; order: OrderCancelState | null } | AdminFailure> {
+  const result = await shopifyGraphql(shopDomain, token, ORDER_CANCEL_STATE_QUERY, { id: orderGid }, fetchImpl);
+  if (result.kind !== "ok") {
+    return failed(result);
+  }
+  const node = result.data.order;
+  if (!isRecord(node)) {
+    return { kind: "ok", order: null };
+  }
+  const money =
+    isRecord(node.currentTotalPriceSet) && isRecord(node.currentTotalPriceSet.shopMoney) ? node.currentTotalPriceSet.shopMoney : {};
+  const amount = money.amount;
+  return {
+    kind: "ok",
+    order: {
+      name: typeof node.name === "string" ? node.name : "",
+      cancelledAt: typeof node.cancelledAt === "string" && node.cancelledAt.length > 0 ? node.cancelledAt : null,
+      fulfillment: typeof node.displayFulfillmentStatus === "string" ? node.displayFulfillmentStatus : "",
+      total: typeof amount === "string" ? amount : typeof amount === "number" && Number.isFinite(amount) ? String(amount) : null,
+      currency: typeof money.currencyCode === "string" ? money.currencyCode : "USD",
+    },
+  };
+}
+
+// 2026-10: orderCancel(orderId, reason, restock, notifyCustomer,
+// refundMethod, staffNote). refundMethod is left out, which refunds nothing
+// (Shopify voids an authorization either way; every IMPACT order is $0).
+// The deprecated refund argument and userErrors field are not used. Shopify
+// cancels in a background job: an accepted cancel returns the job, and the
+// order shows cancelledAt once the job is done.
+export const CANCEL_ORDER_MUTATION = `mutation CancelOrder($orderId: ID!, $reason: OrderCancelReason!, $restock: Boolean!, $notifyCustomer: Boolean, $staffNote: String) {
+  orderCancel(orderId: $orderId, reason: $reason, restock: $restock, notifyCustomer: $notifyCustomer, staffNote: $staffNote) {
+    job { id done }
+    orderCancelUserErrors { field message code }
+  }
+}`;
+
+// Shopify's limit for a cancellation's staff note.
+export const STAFF_NOTE_MAX = 255;
+
+// Sends the cancel once. The customer is never emailed, nothing is
+// restocked and nothing is refunded. Refusals come back as refused, in
+// Shopify's words.
+export async function cancelOrderInShopify(
+  shopDomain: string,
+  token: string,
+  orderGid: string,
+  staffNote: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ kind: "ok"; jobId: string | null; done: boolean } | AdminFailure> {
+  const result = await shopifyGraphql(
+    shopDomain,
+    token,
+    CANCEL_ORDER_MUTATION,
+    { orderId: orderGid, reason: "OTHER", restock: false, notifyCustomer: false, staffNote: staffNote.slice(0, STAFF_NOTE_MAX) },
+    fetchImpl,
+  );
+  if (result.kind !== "ok") {
+    return failed(result);
+  }
+  const payload = isRecord(result.data.orderCancel) ? result.data.orderCancel : {};
+  const refused = userErrorsOf({ userErrors: payload.orderCancelUserErrors });
+  if (refused) {
+    return { kind: "refused", detail: refused };
+  }
+  const job = isRecord(payload.job) ? payload.job : null;
+  return { kind: "ok", jobId: typeof job?.id === "string" ? job.id : null, done: job?.done === true };
+}

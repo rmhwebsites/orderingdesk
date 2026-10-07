@@ -16,10 +16,12 @@ import {
 } from "./client";
 import {
   APPROVE_DRAFT_MUTATION,
+  CANCEL_ORDER_MUTATION,
   DRAFT_BEFORE_APPROVE_QUERY,
   DRAFT_LINK_CHUNK,
   DRAFT_LINKS_QUERY,
   DRAFT_ORDER_QUERY,
+  ORDER_CANCEL_STATE_QUERY,
   ORDER_LINE_ITEMS_QUERY,
   STATUS_TAGS_QUERY,
 } from "./admin";
@@ -924,5 +926,14 @@ describe("company location documents", () => {
     expect(requestedQueryCost(COMPANY_LOCATIONS_QUERY)).toBe(3 + 50 * 3);
     expect(requestedQueryCost(COMPANY_LOCATION_QUERY)).toBe(3);
     expect(requestedQueryCost(COMPANY_LOCATIONS_QUERY)).toBeLessThanOrEqual(QUERY_COST_BUDGET);
+  });
+});
+
+describe("cancel documents", () => {
+  it("prices the state read and the cancel", () => {
+    // The order and its total (a price set of two objects); the mutation
+    // with its job and its error list.
+    expect(requestedQueryCost(ORDER_CANCEL_STATE_QUERY)).toBe(3);
+    expect(requestedQueryCost(CANCEL_ORDER_MUTATION)).toBe(3);
   });
 });
