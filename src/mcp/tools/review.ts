@@ -6,7 +6,9 @@
 // (owner decision 4, Oct 7: personalization is confirmed by the person when
 // the request is placed). Relative imports only.
 
+import { and, eq } from "drizzle-orm";
 import * as z from "zod";
+import { locations } from "../../db/schema";
 import { broadcast, broadcastSync } from "../../server/broadcast";
 import { formatMoney } from "../../lib/format";
 import { NOTE_MAX } from "../../lib/limits";
@@ -15,7 +17,7 @@ import { roleAtLeast } from "../../lib/roles";
 import { REVIEW_COPY, approveRequest, followApproval, followRejection, linkedStatus, rejectRequest, shopifyAccess } from "../../server/desk/review";
 import { draftGid, failureText, fetchDraftForApprove } from "../../server/shopify/admin";
 import { beginConfirm, cardState, finishAction, prepareAction, preparedResult, stateMatches } from "../actions";
-import { personLabel, plainText, untrusted, NAME_MAX } from "../output";
+import { personLabel, plainText, untrusted, NAME_MAX, type Untrusted } from "../output";
 import { findCard, loadCardById, type CardRow } from "./cards";
 import { PO_NOTE, confirmationInput, followDeps, orderInput, orderMismatch, refusal, reviewCtx, reviewDeps, textMismatch } from "./common";
 import { CONFIRM_DESTRUCTIVE, PREPARE, defineTool, fail, ok, type ToolDeps } from "./define";
@@ -38,12 +40,27 @@ async function requestCard(deps: ToolDeps, ref: string): Promise<{ card: CardRow
   return { card };
 }
 
-// "For Employee Name" is a person's name only when it reads as one
-// (personLabel, Decision 13): a typed email or phone number is left out, as
-// get_order leaves it out.
-function whoAndWhere(card: CardRow): { forPerson: string; location: string } {
+// Who and where, for the preview's details (Decision 13). "For Employee
+// Name" and "Ship to Branch" are text people typed, so they come back as
+// { untrusted } and never in the summary, which reads as Ordering Desk's own
+// words. "For Employee Name" is a name only when it reads as one
+// (personLabel): a typed email or phone number is left out, as get_order
+// leaves it out. The location is named from the synced company location
+// (Shopify admin data) when the card has one, else from the typed branch.
+async function whoAndWhere(deps: ToolDeps, card: CardRow): Promise<{ forPerson: Untrusted | null; location: string | Untrusted | null }> {
   const fields = requestFieldsOf(card.shopify, card.draftSnapshot);
-  return { forPerson: personLabel(fields.requestFor) ?? "", location: plainText(fields.branch || fields.location, NAME_MAX) };
+  const synced = card.locationId
+    ? await deps.db
+        .select({ name: locations.name })
+        .from(locations)
+        .where(and(eq(locations.workspaceId, deps.principal.workspaceId), eq(locations.shopifyLocationId, card.locationId)))
+        .limit(1)
+    : [];
+  const locationName = plainText(synced[0]?.name, NAME_MAX);
+  return {
+    forPerson: untrusted(personLabel(fields.requestFor), NAME_MAX),
+    location: locationName || untrusted(fields.branch, NAME_MAX),
+  };
 }
 
 export const prepareApprove = defineTool({
@@ -91,7 +108,7 @@ export const prepareApprove = defineTool({
       const amount = total ? formatMoney(total, read.draft.currency) : "an amount Shopify did not report";
       return fail("refused", `Shopify reports ${amount} for this request. Ordering Desk only approves requests that total $0.00. Complete it in Shopify instead.`, target);
     }
-    const { forPerson, location } = whoAndWhere(card);
+    const { forPerson, location } = await whoAndWhere(deps, card);
     const payload: ApprovePayload = { order: card.name, approvedLabel: approved.label };
     const prepared = await prepareAction(deps.db, p, { tool: "approve", targetId: card.id, payload, state: cardState(card) }, deps.now());
     const warnings = [
@@ -101,8 +118,8 @@ export const prepareApprove = defineTool({
     return preparedResult(
       prepared,
       {
-        summary: `Approve request ${card.name}${forPerson ? ` for ${forPerson}` : ""}${location ? ` at ${location}` : ""}: Shopify completes the $0.00 draft and it becomes an order. Status becomes ${plainText(approved.label, 80)}.`,
-        details: { order: card.name, for_person: forPerson || null, location: location || null, total: `0.00 ${read.draft.currency}` },
+        summary: `Approve request ${card.name}: Shopify completes the $0.00 draft and it becomes an order. Status becomes ${plainText(approved.label, 80)}.`,
+        details: { order: card.name, for_person: forPerson, location, total: `0.00 ${read.draft.currency}` },
         warnings,
         confirm: { tool: "confirm_approve", fields: { order: card.name } },
       },
