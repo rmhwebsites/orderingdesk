@@ -20,6 +20,18 @@ export type AiSearchOutcome =
 
 type AiSearchContext = { workspaceId: string; userId: string; now: number };
 
+// Lowercase words between single spaces, for whole-word matching.
+function wordsOf(text: string): string {
+  return ` ${text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim()} `;
+}
+
+// The model sometimes picks a status nobody asked for (live check,
+// 2026-10-07), so a status counts only when the question names its label.
+function namesStatus(question: string, label: string): boolean {
+  const name = wordsOf(label);
+  return name.trim().length > 0 && wordsOf(question).includes(name);
+}
+
 function logged(ctx: AiSearchContext, outcome: AiSearchOutcome, ms: number): AiSearchOutcome {
   const result = outcome.kind === "filter" ? "ok" : outcome.kind === "fallback" ? outcome.reason : "invalid";
   console.log("[search] " + JSON.stringify({ workspaceId: ctx.workspaceId, ai: result, ms }));
@@ -54,6 +66,12 @@ export async function aiSearch(
     return logged(ctx, translated, Date.now() - started);
   }
   const query = validateAiFilter(translated.raw, loaded.vocab);
+  if (query?.status) {
+    const label = loaded.vocab.statuses.find((status) => status.key === query.status)?.label ?? "";
+    if (!namesStatus(q, label)) {
+      query.status = null;
+    }
+  }
   return logged(
     ctx,
     query && !isEmptyQuery(query) ? { kind: "filter", query } : { kind: "fallback", reason: "invalid" },

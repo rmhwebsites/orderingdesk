@@ -66,6 +66,23 @@ describe("aiSearch", () => {
     expect(usage).toMatchObject({ principalId: "u_staff", day: usageDay(NOW), kind: "search", count: 1 });
   });
 
+  // A live answer (glm-4.7-flash, 2026-10-07) picked Shipped for questions
+  // that named no status.
+  it("keeps a status only when the question names it", async () => {
+    const db = await setup();
+    expect(await aiSearch(db, model(answer({ status: "Shipped", locations: ["North Yard"] })).ai, ctx, { q: QUESTION })).toMatchObject({
+      kind: "filter",
+      query: { status: "shipped", locations: ["loc_north"] },
+    });
+    expect(
+      await aiSearch(db, model(answer({ status: "Shipped", locations: ["North Yard"] })).ai, ctx, { q: "business cards for north yard last month" }),
+    ).toMatchObject({ kind: "filter", query: { status: null, locations: ["loc_north"] } });
+    expect(await aiSearch(db, model(answer({ status: "Shipped" })).ai, ctx, { q: "anything for the yard crew" })).toEqual({
+      kind: "fallback",
+      reason: "invalid",
+    });
+  });
+
   it("answers numbers and short searches without the model", async () => {
     const db = await setup();
     const { ai, run } = model(answer({}));

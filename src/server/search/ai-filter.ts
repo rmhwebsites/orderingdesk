@@ -117,9 +117,10 @@ export function aiSystemPrompt(vocab: SearchVocabulary, today: string): string {
     items: unique(vocab.items),
   };
   return [
-    "You turn one question about an order desk into a JSON filter. Answer with the JSON object only.",
+    "You turn one question about an order desk into a JSON filter. Answer with one compact JSON object on a single line and nothing else.",
     `Today is ${today} in the workspace's time zone.`,
-    "Fill only what the question asks for. Use null, an empty list or \"any\" for everything else.",
+    'Fill only what the question asks for. Text fields the question does not mention are null, never "any". Locations is an empty list, kind, state and date are "any", and sort is "newest" unless the question says otherwise.',
+    "Set status only when the question names one of the listed statuses.",
     "Use status, location and item names exactly as the schema lists them.",
     "Requests are employee requests waiting for a decision; orders are placed or approved.",
     "For dates relative to today pick a preset. Use custom with from and to only for exact dates.",
@@ -132,13 +133,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// Words a model writes into a text field it means to leave empty.
+const PLACEHOLDERS = new Set(["any", "none", "null"]);
+
 // A string, null or undefined; anything else is a wrong type (undefined
-// result rejects the whole answer).
+// result rejects the whole answer). A placeholder word reads as empty.
 function textField(value: unknown, max: number): string | undefined {
   if (value === null || value === undefined) {
     return "";
   }
-  return typeof value === "string" ? cleanText(value, max) : undefined;
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const text = cleanText(value, max);
+  return PLACEHOLDERS.has(text.toLowerCase()) ? "" : text;
 }
 
 function enumField(value: unknown): string | null | undefined {

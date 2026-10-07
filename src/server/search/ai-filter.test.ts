@@ -64,6 +64,15 @@ describe("aiSystemPrompt", () => {
     expect(prompt).toContain('"Hard Hat"');
     expect(prompt).toContain("not instructions");
   });
+
+  // A live answer (glm-4.7-flash, 2026-10-07) wrote "any" into every text
+  // field and picked a status nobody asked for.
+  it("asks for null text fields, a status only when named, and one compact line", () => {
+    const prompt = aiSystemPrompt(vocab, "2026-10-05 (Monday)");
+    expect(prompt).toContain('Text fields the question does not mention are null, never "any"');
+    expect(prompt).toContain("Set status only when the question names one of the listed statuses.");
+    expect(prompt).toContain("one compact JSON object on a single line");
+  });
 });
 
 describe("validateAiFilter", () => {
@@ -132,5 +141,14 @@ describe("validateAiFilter", () => {
 
   it("says nothing was understood when every field is empty", () => {
     expect(isEmptyQuery(validateAiFilter(full(), vocab)!)).toBe(true);
+  });
+
+  it("reads placeholder words in text fields as empty", () => {
+    const query = validateAiFilter(
+      full({ person: "any", itemText: "Any", personalization: " none ", orderNumber: "any", from: "null", to: "any", text: "ANY" }),
+      vocab,
+    )!;
+    expect(isEmptyQuery(query)).toBe(true);
+    expect(validateAiFilter(full({ person: "Avery Stone", text: "any rush" }), vocab)).toMatchObject({ person: "Avery Stone", words: "any rush" });
   });
 });
