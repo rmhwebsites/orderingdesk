@@ -135,7 +135,8 @@ describe("refreshConnection", () => {
     expect(store.calls[0].query).toBe("mint");
     expect(store.calls.slice(1).every((call) => call.token === MINTED)).toBe(true);
     expect(store.created().slice(-3)).toEqual(["DRAFT_ORDERS_CREATE", "DRAFT_ORDERS_UPDATE", "DRAFT_ORDERS_DELETE"]);
-    expect(store.created()).toHaveLength(13);
+    expect(store.created().slice(10, 13)).toEqual(["COMPANY_LOCATIONS_CREATE", "COMPANY_LOCATIONS_UPDATE", "COMPANY_LOCATIONS_DELETE"]);
+    expect(store.created()).toHaveLength(16);
     const row = await stored(db);
     expect(row.scopes).toEqual([...REQUIRED, "write_draft_orders", "read_companies"]);
     expect(await decryptSecret(row.encryptedAccessToken!, KEY, WS)).toBe(MINTED);

@@ -750,3 +750,67 @@ describe("receiveShopifyWebhook: draft orders", () => {
     expect(await orderRows(db)).toHaveLength(2);
   });
 });
+
+// Comprehensive design section 2: company_locations/* keep the locations
+// table current between the daily syncs.
+describe("company location webhooks", () => {
+  const locationNode = {
+    id: "gid://shopify/CompanyLocation/101",
+    name: "Buford HQ",
+    company: { id: "gid://shopify/Company/7" },
+    shippingAddress: {
+      address1: "100 Example Way",
+      address2: "",
+      city: "Buford",
+      province: "Georgia",
+      zoneCode: "GA",
+      zip: "30518",
+      country: "United States",
+      countryCode: "US",
+      phone: "",
+      companyName: "Example Rentals",
+    },
+  };
+
+  function locationStore(node: unknown) {
+    const impl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Query;
+      if (body.query.includes("query CompanyLocationById")) {
+        return Response.json({ data: { companyLocation: node } });
+      }
+      throw new Error("unexpected request: " + body.query);
+    }) as typeof fetch;
+    return impl;
+  }
+
+  it("stores a created or updated location, and keeps a deleted one inactive", async () => {
+    const db = await setup({ scopes: ["read_orders", "read_customers", "read_companies"] });
+    const { env } = fakeEnv();
+    const receipt = await deliver(
+      db,
+      env,
+      { topic: "company_locations/update", payload: { id: 101, admin_graphql_api_id: "gid://shopify/CompanyLocation/101" } },
+      locationStore(locationNode),
+    );
+    expect(receipt.status).toBe(200);
+    await receipt.work?.();
+    expect(await db.select().from(schema.locations)).toEqual([
+      expect.objectContaining({ workspaceId: WS, shopifyLocationId: "101", companyId: "7", name: "Buford HQ", active: true, updatedAt: NOW }),
+    ]);
+    const gone = await deliver(db, env, {
+      topic: "company_locations/delete",
+      payload: { id: 101 },
+      webhookId: "c0ffee00-0000-4000-8000-000000000001",
+    });
+    await gone.work?.();
+    expect((await db.select().from(schema.locations))[0]).toMatchObject({ active: false });
+  });
+
+  it("ignores location webhooks for a store without a companies scope", async () => {
+    const db = await setup({ scopes: ["read_orders", "read_customers"] });
+    const { env } = fakeEnv();
+    const receipt = await deliver(db, env, { topic: "company_locations/create", payload: { id: 102 } });
+    await receipt.work?.();
+    expect(await db.select().from(schema.locations)).toEqual([]);
+  });
+});

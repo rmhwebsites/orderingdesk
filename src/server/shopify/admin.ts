@@ -102,13 +102,30 @@ export const BASE_WEBHOOK_TOPICS = [
 // the draft scopes.
 export const DRAFT_WEBHOOK_TOPICS = ["DRAFT_ORDERS_CREATE", "DRAFT_ORDERS_UPDATE", "DRAFT_ORDERS_DELETE"] as const;
 
-export type WebhookTopic = (typeof BASE_WEBHOOK_TOPICS)[number] | (typeof DRAFT_WEBHOOK_TOPICS)[number];
+// Company locations (comprehensive design section 2), only with a companies
+// scope. Shopify accepts them with read_customers too, which every
+// connection holds, so they can never be the refusal that stops
+// registration; they still go before the draft topics, which stay last.
+export const COMPANY_LOCATION_WEBHOOK_TOPICS = [
+  "COMPANY_LOCATIONS_CREATE",
+  "COMPANY_LOCATIONS_UPDATE",
+  "COMPANY_LOCATIONS_DELETE",
+] as const;
+
+export type WebhookTopic =
+  | (typeof BASE_WEBHOOK_TOPICS)[number]
+  | (typeof COMPANY_LOCATION_WEBHOOK_TOPICS)[number]
+  | (typeof DRAFT_WEBHOOK_TOPICS)[number];
 
 // The topics to register for a grant. Shopify refuses a draft subscription
 // without the scope, and replaceWebhookSubscriptions stops at the first
 // refusal, so the draft topics are requested only with the scope, and last.
 export function webhookTopicsFor(granted: readonly string[] | null | undefined): WebhookTopic[] {
-  return draftsEnabled(granted) ? [...BASE_WEBHOOK_TOPICS, ...DRAFT_WEBHOOK_TOPICS] : [...BASE_WEBHOOK_TOPICS];
+  return [
+    ...BASE_WEBHOOK_TOPICS,
+    ...(companiesEnabled(granted) ? COMPANY_LOCATION_WEBHOOK_TOPICS : []),
+    ...(draftsEnabled(granted) ? DRAFT_WEBHOOK_TOPICS : []),
+  ];
 }
 
 // Where Shopify delivers a workspace's webhooks: always the platform host

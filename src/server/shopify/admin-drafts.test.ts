@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   BASE_WEBHOOK_TOPICS,
+  COMPANY_LOCATION_WEBHOOK_TOPICS,
   companiesEnabled,
   completeDraft,
   DRAFT_LINK_CHUNK,
@@ -264,6 +265,18 @@ describe("webhook topics", () => {
     expect(webhookTopicsFor(null)).toEqual([...BASE_WEBHOOK_TOPICS]);
     expect(webhookTopicsFor(["write_orders", "write_draft_orders"])).toEqual([
       ...BASE_WEBHOOK_TOPICS,
+      ...DRAFT_WEBHOOK_TOPICS,
+    ]);
+  });
+
+  // Comprehensive design section 2: company locations, only with a companies
+  // scope, after the base topics and before the draft topics (which stay last).
+  it("adds the company location topics before the draft topics, only with a companies scope", () => {
+    expect(COMPANY_LOCATION_WEBHOOK_TOPICS).toEqual(["COMPANY_LOCATIONS_CREATE", "COMPANY_LOCATIONS_UPDATE", "COMPANY_LOCATIONS_DELETE"]);
+    expect(webhookTopicsFor(["write_orders", "read_companies"])).toEqual([...BASE_WEBHOOK_TOPICS, ...COMPANY_LOCATION_WEBHOOK_TOPICS]);
+    expect(webhookTopicsFor(["write_orders", "write_draft_orders", "write_companies"])).toEqual([
+      ...BASE_WEBHOOK_TOPICS,
+      ...COMPANY_LOCATION_WEBHOOK_TOPICS,
       ...DRAFT_WEBHOOK_TOPICS,
     ]);
   });

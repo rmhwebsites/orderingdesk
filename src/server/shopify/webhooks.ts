@@ -35,6 +35,10 @@
 //   order with no card is first looked up against the open draft cards
 //   (upsertFetchedOrder's link); if that lookup fails nothing is written and
 //   the cron sync lands the order.
+// - Company location topics (comprehensive design section 2), only while
+//   the stored grant holds a companies scope: the location is re-fetched
+//   and stored (src/server/sync/locations.ts); company_locations/delete,
+//   and a location Shopify no longer has, keep the row inactive.
 // - Anything else: 200 and ignored.
 //
 // Payloads carry customer data: they are never logged, and failures are
@@ -49,6 +53,7 @@ import { broadcast, broadcastMerges, broadcastSync, kickUsers } from "../broadca
 import { decryptSecret } from "../crypto";
 import { notifyActivity, notifyNewOrders } from "../notify";
 import { ensureOrderSnapshots, markDraftDeleted, upsertFetchedDraft } from "../sync/drafts";
+import { applyLocationWebhook } from "../sync/locations";
 import { upsertFetchedOrder } from "../sync/run";
 import { companiesEnabled, draftsEnabled, failureText, fetchCustomer, fetchDraftNode, fetchOrderNode, legacyIdOf } from "./admin";
 import { shareShopifyMoves } from "./fanout";
@@ -73,6 +78,7 @@ const ORDER_TOPICS = new Set([
 const FULFILLMENT_TOPICS = new Set(["fulfillments/create", "fulfillments/update"]);
 const CUSTOMER_TOPICS = new Set(["customers/create", "customers/update", "customers/delete"]);
 const DRAFT_TOPICS = new Set(["draft_orders/create", "draft_orders/update", "draft_orders/delete"]);
+const LOCATION_TOPICS = new Set(["company_locations/create", "company_locations/update", "company_locations/delete"]);
 
 export type WebhookReceipt = { status: number; work?: () => Promise<void> };
 
@@ -83,7 +89,9 @@ type Job =
   | { kind: "customer"; customerGid: string; customerId: string }
   | { kind: "customer-deleted"; customerId: string }
   | { kind: "draft"; draftGid: string }
-  | { kind: "draft-deleted"; draftId: string };
+  | { kind: "draft-deleted"; draftId: string }
+  | { kind: "location"; locationGid: string }
+  | { kind: "location-deleted"; locationId: string };
 
 const encoder = new TextEncoder();
 
@@ -142,7 +150,7 @@ export async function verifyShopifyHmac(
 function gidOf(
   payload: Record<string, unknown>,
   field: "id" | "order_id",
-  type: "Order" | "Customer" | "DraftOrder",
+  type: "Order" | "Customer" | "DraftOrder" | "CompanyLocation",
 ): string | null {
   const prefix = `gid://shopify/${type}/`;
   const apiId = payload.admin_graphql_api_id;
@@ -168,6 +176,15 @@ function jobFor(topic: string, payload: unknown): Job | null {
       return null;
     }
     return topic === "draft_orders/delete" ? { kind: "draft-deleted", draftId: legacyIdOf(draftGid) } : { kind: "draft", draftGid };
+  }
+  if (LOCATION_TOPICS.has(topic)) {
+    const locationGid = gidOf(payload, "id", "CompanyLocation");
+    if (!locationGid) {
+      return null;
+    }
+    return topic === "company_locations/delete"
+      ? { kind: "location-deleted", locationId: legacyIdOf(locationGid) }
+      : { kind: "location", locationGid };
   }
   const customerGid = gidOf(payload, "id", "Customer");
   if (!customerGid) {
@@ -236,7 +253,13 @@ export async function receiveShopifyWebhook(
   }
 
   const topic = (input.headers.get("x-shopify-topic") ?? "").trim();
-  if (!ORDER_TOPICS.has(topic) && !FULFILLMENT_TOPICS.has(topic) && !CUSTOMER_TOPICS.has(topic) && !DRAFT_TOPICS.has(topic)) {
+  if (
+    !ORDER_TOPICS.has(topic) &&
+    !FULFILLMENT_TOPICS.has(topic) &&
+    !CUSTOMER_TOPICS.has(topic) &&
+    !DRAFT_TOPICS.has(topic) &&
+    !LOCATION_TOPICS.has(topic)
+  ) {
     return { status: 200 };
   }
   const webhookId = (input.headers.get("x-shopify-webhook-id") ?? "").trim();
@@ -340,6 +363,10 @@ async function runJob(
   const now = clock();
   if (job.kind === "customer-deleted") {
     await kickUsers(env, workspaceId, await applyRosterCustomer(db, workspaceId, job.customerId, null, now));
+    return;
+  }
+  if (job.kind === "location" || job.kind === "location-deleted") {
+    await applyLocationWebhook(db, env, workspaceId, job, { fetchImpl: opts?.fetchImpl, now: clock });
     return;
   }
   const drafts = await draftState(db, workspaceId);
