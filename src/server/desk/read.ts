@@ -2,7 +2,7 @@
 // full, and the activity feed. Callers authorize first (route guards); every
 // query here is still scoped to the workspace it is given.
 
-import { and, asc, count, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
 import type { Db } from "@/db";
 import {
   events,
@@ -132,7 +132,10 @@ export type DeskPayload = {
   // False while the search backfill still indexes older cards: words may
   // miss some of those until it finishes.
   searchReady: boolean;
-  // Active company locations by Shopify location id, for the filter chips.
+  // Company locations by Shopify location id, for the filter chips: every
+  // active one, and the ones the location filter names whatever their state
+  // ("See all on the desk" on an inactive location's page). No picker reads
+  // this list (pickers offer active locations only).
   locations: { id: string; name: string }[];
   // AI search on for this workspace (Settings > Search).
   aiSearch: boolean;
@@ -297,7 +300,7 @@ export async function loadDesk(
   }
   const settingsRow = settingsRows[0];
   const zone = settingsRow?.timeZone;
-  const [page, requesterRows] = await Promise.all([
+  const [page, requesterRows, filteredLocationRows] = await Promise.all([
     searchOrders(db, workspaceId, query, {
       now: opts?.now ?? Date.now(),
       timeZone: isTimeZone(zone) ? zone : DEFAULT_TIME_ZONE,
@@ -311,8 +314,19 @@ export async function loadDesk(
           .where(and(eq(people.workspaceId, workspaceId), eq(people.id, query.requester)))
           .limit(1)
       : Promise.resolve([]),
+    // The filtered locations, active or not (at most LIST_MAX ids), so an
+    // inactive one's chip has its name too.
+    query.locations.length > 0
+      ? db
+          .select({ id: locations.shopifyLocationId, name: locations.name })
+          .from(locations)
+          .where(and(eq(locations.workspaceId, workspaceId), inArray(locations.shopifyLocationId, query.locations)))
+      : Promise.resolve([] as { id: string; name: string }[]),
   ]);
   const requester = requesterRows[0];
+  // The active ones by name, then any filtered one that is not active.
+  const activeIds = new Set(locationRows.map((row) => row.id));
+  const chipLocations = [...locationRows, ...filteredLocationRows.filter((row) => !activeIds.has(row.id))];
 
   // Every status gets an entry (0 when unused) so the count strip needs no
   // fallback. A key with orders but no status row (one removed while an
@@ -348,7 +362,7 @@ export async function loadDesk(
     nextCursor: page.nextCursor,
     matchCount: page.total,
     searchReady: (settingsRow?.searchIndexedAt ?? null) !== null,
-    locations: locationRows,
+    locations: chipLocations,
     aiSearch: settingsRow ? Boolean(settingsRow.aiSearch) : true,
     requester: requester ? { id: requester.id, name: requester.name || requester.email || "Unknown person" } : null,
   };

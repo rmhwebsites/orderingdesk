@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { and, eq } from "drizzle-orm";
 import type { Db } from "@/db";
 import * as schema from "@/db/schema";
-import { DESK_PAGE_SIZE, EMPTY_QUERY } from "@/lib/desk-query";
+import { DESK_PAGE_SIZE, EMPTY_QUERY, filterChips, parseDeskQuery } from "@/lib/desk-query";
 import { indexOrders } from "@/server/search/index-orders";
 import {
   EVENT_FEED_CAP,
@@ -406,6 +406,37 @@ describe("loadDesk with a search", () => {
     });
     await db.update(schema.workspaceSettings).set({ searchIndexedAt: 5 }).where(eq(schema.workspaceSettings.workspaceId, WS));
     expect((await loadDesk(db, WS))?.searchReady).toBe(true);
+  });
+});
+
+// "See all on the desk" on an inactive location's page (location-view.tsx)
+// filters the desk by that location; its chip must name it. Inactive
+// locations stay out of the unfiltered list (no picker offers them).
+describe("loadDesk location chip names", () => {
+  it("names a filtered location that is no longer active", async () => {
+    const db = await setup();
+    await seedLocation(db, WS, { shopifyLocationId: "101", name: "North Yard" });
+    await seedLocation(db, WS, { shopifyLocationId: "102", name: "Old Yard", active: false });
+    await seedLocation(db, WS, { shopifyLocationId: "103", name: "Closed Depot", active: false });
+    await seedOrder(db, WS, { id: "o1" });
+    await setOrderLocation(db, "o1", "102");
+    // The address deskHref builds for the location page's link.
+    const query = parseDeskQuery(new URLSearchParams("location=102&view=all"));
+    const desk = await loadDesk(db, WS, { query });
+    expect(desk?.orders.map((order) => order.id)).toEqual(["o1"]);
+    expect(desk?.locations).toEqual([
+      { id: "101", name: "North Yard" },
+      { id: "102", name: "Old Yard" },
+    ]);
+    expect(filterChips(query, { locations: desk?.locations ?? [], requesterName: null }).map((chip) => chip.label)).toEqual(["Old Yard"]);
+    expect((await loadDesk(db, WS))?.locations).toEqual([{ id: "101", name: "North Yard" }]);
+  });
+
+  it("stays inside the workspace", async () => {
+    const db = await setup();
+    await seedLocation(db, OTHER, { shopifyLocationId: "102", name: "Their Yard", active: false });
+    const desk = await loadDesk(db, WS, { query: parseDeskQuery(new URLSearchParams("location=102&view=all")) });
+    expect(desk?.locations).toEqual([]);
   });
 });
 
