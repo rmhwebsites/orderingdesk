@@ -6,7 +6,8 @@
 //   with the origin;
 // - a code lives 10 minutes and allows 5 tries; it is bound to the host and
 //   to the OAuth client that asked;
-// - at most 5 codes per email per host and 20 per IP per hour;
+// - at most 5 codes per email per host and 20 per IP per hour, counted and
+//   written in one statement, so a burst of requests cannot pass them;
 // - a code is sent only to an email that may connect (lookupUser), but a
 //   row is written for everyone and everyone gets the same page, so the page
 //   reveals nothing about who has access;
@@ -18,7 +19,7 @@
 //   10 minutes.
 // Relative imports only.
 
-import { and, count, eq, gt, isNotNull, isNull, lt, sql } from "drizzle-orm";
+import { and, eq, gt, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import type { Db } from "../../db";
 import { aiSignInCodes } from "../../db/schema";
 import { CODE_ATTEMPTS, CODE_TTL_MS, CODES_PER_EMAIL_HOUR, CODES_PER_IP_HOUR, CONSENT_AFTER_CODE_MS } from "../constants";
@@ -56,29 +57,25 @@ export async function requestSignInCode(
   const id = newId();
   const ipHash = await sha256Hex(`ordering-desk.ai-ip.v1\n${input.origin}\n${input.ip}`);
   const since = now - HOUR_MS;
-  const [byEmail, byIp] = await Promise.all([
-    db
-      .select({ n: count() })
-      .from(aiSignInCodes)
-      .where(and(eq(aiSignInCodes.origin, input.origin), eq(aiSignInCodes.email, input.email), gt(aiSignInCodes.createdAt, since))),
-    db.select({ n: count() }).from(aiSignInCodes).where(and(eq(aiSignInCodes.ipHash, ipHash), gt(aiSignInCodes.createdAt, since))),
-  ]);
-  if (Number(byEmail[0]?.n ?? 0) >= CODES_PER_EMAIL_HOUR || Number(byIp[0]?.n ?? 0) >= CODES_PER_IP_HOUR) {
+  const code = sixDigitCode();
+  const hash = await codeHash(input.origin, id, code);
+  // The caps and the insert are ONE statement (D1 runs each statement alone),
+  // so requests sent together cannot all count below the cap and all insert.
+  // Values in the table's column order: id, origin, email, user_id,
+  // client_id, code_hash, ip_hash, attempts, created_at, expires_at,
+  // verified_at, consumed_at.
+  const written = await db
+    .insert(aiSignInCodes)
+    .select(
+      sql`select ${id}, ${input.origin}, ${input.email}, null, ${input.clientId}, ${hash}, ${ipHash}, 0, ${now}, ${now + CODE_TTL_MS}, null, null
+        where (select count(*) from ${aiSignInCodes} where ${aiSignInCodes.origin} = ${input.origin} and ${aiSignInCodes.email} = ${input.email} and ${aiSignInCodes.createdAt} > ${since}) < ${CODES_PER_EMAIL_HOUR}
+        and (select count(*) from ${aiSignInCodes} where ${aiSignInCodes.ipHash} = ${ipHash} and ${aiSignInCodes.createdAt} > ${since}) < ${CODES_PER_IP_HOUR}`,
+    )
+    .returning({ id: aiSignInCodes.id });
+  if (written.length === 0) {
     console.log("[oauth] " + JSON.stringify({ code: "rate_limited" }));
     return id;
   }
-  const code = sixDigitCode();
-  await db.insert(aiSignInCodes).values({
-    id,
-    origin: input.origin,
-    email: input.email,
-    userId: null,
-    clientId: input.clientId,
-    codeHash: await codeHash(input.origin, id, code),
-    ipHash,
-    createdAt: now,
-    expiresAt: now + CODE_TTL_MS,
-  });
   deps.background(
     (async () => {
       const userId = await deps.lookupUser(input.email);

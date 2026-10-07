@@ -43,7 +43,7 @@ Repo: `/Users/ryboss/Documents/RMH LLC/Clients/Impact Rentals/order-desk`, branc
 2. **One `OAuthProvider` per origin**, cached in a module Map: issuer is the origin, resource is `<origin>/mcp`, endpoints `/oauth/authorize` (ours), `/oauth/token`, `/oauth/register` (the library's). Client ID Metadata Documents on (the `global_fetch_strictly_public` flag is already set; the library then advertises `client_id_metadata_document_supported: true` and `none` in `token_endpoint_auth_methods_supported`, the two values Claude needs before it uses its metadata document instead of registering). Dynamic registration stays on for clients without a metadata document (the MCP spec revision 2026-07-28 deprecates it but keeps it for compatibility), refused unless every redirect URI is one of the AI apps' exact callbacks (`https://claude.ai/api/mcp/auth_callback`, `https://claude.com/api/mcp/auth_callback`, `https://chatgpt.com/connector_platform_oauth_redirect`, `https://chatgpt.com/connector/oauth/<id>`) or a loopback `http` URI. The authorize page requires PKCE with `S256` from every client (the library itself requires it only from public clients). Access tokens live 30 minutes; a grant and its refresh token live 90 days, fixed (owner decision 1 of Oct 7: no idle extension, revoke stays instant): people reconnect every 90 days. `GRANT_TTL_S` is the one constant behind the refresh token lifetime, the mirror's `expires_at` and the Settings copy.
 3. **Scopes:** `desk.read`, `desk.write` and `offline_access` are supported; `requiredScopes` is left unset, so the consent page picks: "Look things up and make changes" (read and write, the default) or "Look things up only" (read). Without `desk.write` no prepare or confirm tool is listed.
 4. **Hosts:** on a client host a connection is for that workspace only. On the hub a member's consent page picks one of their workspaces. A platform admin on the hub gets one connection for every workspace (owner decision 3 of Oct 7): the consent page names every workspace with AI on and picks none, the grant mirror stores `workspace_id` null, every tool takes a `workspace` argument (an id or name from the extra read tool `list_workspaces`), each call resolves it into the per-workspace principal (role platform, the workspace's manager limit, its own counts and audit rows), and a workspace that does not exist or has AI off is refused with a structured error. The connection itself keeps working only while the person is a platform admin (re-read on every call) and only on the hub. The provider's user id is `encodeURIComponent("<workspaceId>.<userId>")`, with `*` for the every-workspace connection, so one connection per app per workspace can coexist.
-5. **Sign-in on the authorize page is always the 6-digit email code** (a browser session is not reused: better-auth's module imports `next/headers` and stays out of the worker graph). New table `ai_sign_in_codes`: the code is stored as SHA-256 of origin, row id and code; 10 minutes; 5 attempts; at most 5 codes per email per host per hour and 20 per IP per hour; a code is sent only to an existing account that may connect on this host (closed sign-up unchanged: no account is created here); everyone gets the same page and the same timing, because who may connect is looked up only after the page has answered (in the background with the email send), so a slow lookup (Wave 3's Shopify check for employees) never shows in the response time. The code email comes from the workspace's sender in its look, the code also in the subject (the local email fallback logs subjects).
+5. **Sign-in on the authorize page is always the 6-digit email code** (a browser session is not reused: better-auth's module imports `next/headers` and stays out of the worker graph). New table `ai_sign_in_codes`: the code is stored as SHA-256 of origin, row id and code; 10 minutes; 5 attempts; at most 5 codes per email per host per hour and 20 per IP per hour (counted and written in one statement, so requests sent together cannot all pass); a code is sent only to an existing account that may connect on this host (closed sign-up unchanged: no account is created here); everyone gets the same page and the same timing, because who may connect is looked up only after the page has answered (in the background with the email send), so a slow lookup (Wave 3's Shopify check for employees) never shows in the response time. The code email comes from the workspace's sender in its look, the code also in the subject (the local email fallback logs subjects).
 6. **Who may connect:** a person whose live role in the workspace is staff or higher (a member, or a platform admin: role platform on the hub, manager on the client host, as in `src/server/guard.ts`), while the workspace's `ai_team` switch is on.
 7. **Grant mirror:** `ai_grants` (app id, workspace or null for a platform admin's every-workspace hub connection, user, host, client id, client kind, verified client domain, redirect host, scopes, created, expires, last used, revoked). It is written after `completeAuthorization` succeeds; reconnecting the same app replaces the older row of the same kind (`revoke_reason = 'replaced'`, as the library revokes the older KV grant). Every MCP call loads it and refuses (HTTP 401 `invalid_token`) unless it is active, on this host, for this workspace and user (for an every-workspace row: on the hub, for a person who is still a platform admin). Revoking sets `revoked_at` (instant, from Settings or member removal); the cron then revokes the KV grant and stamps `kv_revoked_at` (the OAuth library imports `cloudflare:workers`, so only the custom worker's bundle may load it, never Next.js code).
 8. **Kill switch:** `workspace_settings.ai_team` (default on), changed only by platform admins on the hub. Off blocks every call and every new connection without revoking (an every-workspace connection is refused for that workspace only); "Revoke all" is a separate platform admin action and also ends every platform admin's every-workspace connection, since each can act in the workspace.
@@ -3129,6 +3129,20 @@ describe("sign-in codes", () => {
     expect((await ask(db, { now: NOW + 3600001 })).code).not.toBeNull();
   });
 
+  // The count and the insert are one statement, so a burst of requests sent
+  // together cannot all see room under the cap (each extra row would be 5
+  // more guesses at a 6-digit code).
+  it("holds both hourly caps when many requests arrive together", async () => {
+    const db = await setupMcp();
+    const byEmail = await Promise.all(Array.from({ length: 12 }, (_, i) => ask(db, { ip: `198.51.100.${i}` })));
+    expect(byEmail.filter((entry) => entry.code !== null)).toHaveLength(5);
+    expect(await db.select().from(schema.aiSignInCodes)).toHaveLength(5);
+    expect(new Set(byEmail.map((entry) => entry.handle)).size).toBe(12);
+    const byIp = await Promise.all(Array.from({ length: 30 }, (_, i) => ask(db, { email: `burst${i}@example.com`, ip: "192.0.2.9" })));
+    expect(byIp.filter((entry) => entry.code !== null)).toHaveLength(20);
+    expect(await db.select().from(schema.aiSignInCodes)).toHaveLength(25);
+  });
+
   it("accepts the right code once, for the same host and app, within ten minutes", async () => {
     const db = await setupMcp();
     const { handle, code } = await ask(db);
@@ -3256,7 +3270,8 @@ Expected: FAIL: both modules are missing.
 //   with the origin;
 // - a code lives 10 minutes and allows 5 tries; it is bound to the host and
 //   to the OAuth client that asked;
-// - at most 5 codes per email per host and 20 per IP per hour;
+// - at most 5 codes per email per host and 20 per IP per hour, counted and
+//   written in one statement, so a burst of requests cannot pass them;
 // - a code is sent only to an email that may connect (lookupUser), but a
 //   row is written for everyone and everyone gets the same page, so the page
 //   reveals nothing about who has access;
@@ -3268,7 +3283,7 @@ Expected: FAIL: both modules are missing.
 //   10 minutes.
 // Relative imports only.
 
-import { and, count, eq, gt, isNotNull, isNull, lt, sql } from "drizzle-orm";
+import { and, eq, gt, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import type { Db } from "../../db";
 import { aiSignInCodes } from "../../db/schema";
 import { CODE_ATTEMPTS, CODE_TTL_MS, CODES_PER_EMAIL_HOUR, CODES_PER_IP_HOUR, CONSENT_AFTER_CODE_MS } from "../constants";
@@ -3306,29 +3321,25 @@ export async function requestSignInCode(
   const id = newId();
   const ipHash = await sha256Hex(`ordering-desk.ai-ip.v1\n${input.origin}\n${input.ip}`);
   const since = now - HOUR_MS;
-  const [byEmail, byIp] = await Promise.all([
-    db
-      .select({ n: count() })
-      .from(aiSignInCodes)
-      .where(and(eq(aiSignInCodes.origin, input.origin), eq(aiSignInCodes.email, input.email), gt(aiSignInCodes.createdAt, since))),
-    db.select({ n: count() }).from(aiSignInCodes).where(and(eq(aiSignInCodes.ipHash, ipHash), gt(aiSignInCodes.createdAt, since))),
-  ]);
-  if (Number(byEmail[0]?.n ?? 0) >= CODES_PER_EMAIL_HOUR || Number(byIp[0]?.n ?? 0) >= CODES_PER_IP_HOUR) {
+  const code = sixDigitCode();
+  const hash = await codeHash(input.origin, id, code);
+  // The caps and the insert are ONE statement (D1 runs each statement alone),
+  // so requests sent together cannot all count below the cap and all insert.
+  // Values in the table's column order: id, origin, email, user_id,
+  // client_id, code_hash, ip_hash, attempts, created_at, expires_at,
+  // verified_at, consumed_at.
+  const written = await db
+    .insert(aiSignInCodes)
+    .select(
+      sql`select ${id}, ${input.origin}, ${input.email}, null, ${input.clientId}, ${hash}, ${ipHash}, 0, ${now}, ${now + CODE_TTL_MS}, null, null
+        where (select count(*) from ${aiSignInCodes} where ${aiSignInCodes.origin} = ${input.origin} and ${aiSignInCodes.email} = ${input.email} and ${aiSignInCodes.createdAt} > ${since}) < ${CODES_PER_EMAIL_HOUR}
+        and (select count(*) from ${aiSignInCodes} where ${aiSignInCodes.ipHash} = ${ipHash} and ${aiSignInCodes.createdAt} > ${since}) < ${CODES_PER_IP_HOUR}`,
+    )
+    .returning({ id: aiSignInCodes.id });
+  if (written.length === 0) {
     console.log("[oauth] " + JSON.stringify({ code: "rate_limited" }));
     return id;
   }
-  const code = sixDigitCode();
-  await db.insert(aiSignInCodes).values({
-    id,
-    origin: input.origin,
-    email: input.email,
-    userId: null,
-    clientId: input.clientId,
-    codeHash: await codeHash(input.origin, id, code),
-    ipHash,
-    createdAt: now,
-    expiresAt: now + CODE_TTL_MS,
-  });
   deps.background(
     (async () => {
       const userId = await deps.lookupUser(input.email);

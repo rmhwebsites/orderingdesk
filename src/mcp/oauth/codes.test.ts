@@ -98,6 +98,20 @@ describe("sign-in codes", () => {
     expect((await ask(db, { now: NOW + 3600001 })).code).not.toBeNull();
   });
 
+  // The count and the insert are one statement, so a burst of requests sent
+  // together cannot all see room under the cap (each extra row would be 5
+  // more guesses at a 6-digit code).
+  it("holds both hourly caps when many requests arrive together", async () => {
+    const db = await setupMcp();
+    const byEmail = await Promise.all(Array.from({ length: 12 }, (_, i) => ask(db, { ip: `198.51.100.${i}` })));
+    expect(byEmail.filter((entry) => entry.code !== null)).toHaveLength(5);
+    expect(await db.select().from(schema.aiSignInCodes)).toHaveLength(5);
+    expect(new Set(byEmail.map((entry) => entry.handle)).size).toBe(12);
+    const byIp = await Promise.all(Array.from({ length: 30 }, (_, i) => ask(db, { email: `burst${i}@example.com`, ip: "192.0.2.9" })));
+    expect(byIp.filter((entry) => entry.code !== null)).toHaveLength(20);
+    expect(await db.select().from(schema.aiSignInCodes)).toHaveLength(25);
+  });
+
   it("accepts the right code once, for the same host and app, within ten minutes", async () => {
     const db = await setupMcp();
     const { handle, code } = await ask(db);
