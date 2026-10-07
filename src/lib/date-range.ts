@@ -3,7 +3,7 @@
 // Pure; Intl does the zone math. Weeks start on Monday. Every range is
 // [from, to): from inclusive, to exclusive, in ms. Relative imports only.
 
-type DatePreset = "today" | "yesterday" | "this_week" | "last_week" | "this_month" | "last_month" | "last_7_days" | "last_30_days";
+import type { DatePreset } from "./desk-query";
 
 export const DEFAULT_TIME_ZONE = "America/New_York";
 
