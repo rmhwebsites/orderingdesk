@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { createElement } from "react";
+import { createElement, isValidElement, type ReactElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { formatDate, formatDateTime } from "@/lib/format";
 import type { AiSettingsView } from "@/server/ai-connections";
-import { AiConnectionsSection, connectionDetails } from "./ai-connections";
+import { AiConnectionsSection, ConnectionRow, connectionDetails, revokeFocusOrder } from "./ai-connections";
 
 const NOW = Date.parse("2026-10-07T15:00:00.000Z");
 
@@ -33,6 +33,24 @@ const view = (overrides: Partial<AiSettingsView> = {}): AiSettingsView => ({
 });
 
 const render = (initial: AiSettingsView) => renderToStaticMarkup(createElement(AiConnectionsSection, { workspaceId: "ws_impact", initial }));
+
+// The first element of `type` in a rendered tree (host elements only), as
+// in kit.test.ts.
+function findElement(node: ReactNode, type: string): ReactElement<Record<string, unknown>> | null {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = findElement(child, type);
+      if (found) {
+        return found;
+      }
+    }
+    return null;
+  }
+  if (!isValidElement<Record<string, unknown>>(node)) {
+    return null;
+  }
+  return node.type === type ? node : findElement(node.props.children as ReactNode, type);
+}
 
 describe("AiConnectionsSection", () => {
   it("shows the address to add, the apps' steps and the person's own connection with Revoke", () => {
@@ -103,3 +121,70 @@ describe("AiConnectionsSection", () => {
     expect(connectionDetails({ ...own, clientDomain: null }, 0)).toBe("");
   });
 });
+
+// The rows follow the Settings patterns for row actions (team.tsx,
+// vendors.tsx, statuses.tsx): a button named for its row, focus kept while
+// the action runs, and focus moved to the nearest row when the row goes.
+// No DOM in vitest: the focus move itself is checked in the browser.
+describe("connection rows", () => {
+  const [own] = view().connections;
+  const other = { ...own, id: "g3", person: "Jordan Vale", mine: false, app: "ChatGPT", clientDomain: "chatgpt.com", redirectHost: "chatgpt.com" };
+
+  it("names the app and the person on every Revoke button", () => {
+    const html = render(view({ canManage: true, connections: [own, other] }));
+    expect(html).toContain('aria-label="Revoke Claude for you"');
+    expect(html).toContain('aria-label="Revoke ChatGPT for Jordan Vale"');
+    expect(html).toContain('data-connection="g1"');
+    expect(html).toContain('data-connection="g3"');
+  });
+
+  // Disabling the button that was just clicked drops keyboard focus to the
+  // page while the revoke runs, and again when it fails; a running revoke
+  // marks every Revoke button aria-disabled instead and ignores clicks.
+  it("keeps every Revoke button focusable while a revoke runs, and ignores clicks meanwhile", () => {
+    const revoked: string[] = [];
+    const row = (connection: typeof own, busyId: string | null) =>
+      ConnectionRow({ connection, showPeople: true, canRevoke: true, busyId, now: 0, onRevoke: () => revoked.push(connection.id) });
+    const button = (connection: typeof own, busyId: string | null) => findElement(row(connection, busyId), "button");
+
+    const running = button(own, "g1");
+    expect(running?.props["aria-disabled"]).toBe(true);
+    expect(running?.props["aria-busy"]).toBe(true);
+    expect(running?.props.disabled).toBeFalsy();
+    const markup = renderToStaticMarkup(row(own, "g1"));
+    expect(markup).toContain('aria-disabled="true"');
+    expect(markup).toContain("Revoking");
+    expect(markup).not.toMatch(/<button[^>]*\sdisabled=""/);
+
+    const waiting = button(other, "g1");
+    expect(waiting?.props["aria-disabled"]).toBe(true);
+    expect(waiting?.props["aria-busy"]).toBeFalsy();
+    expect(waiting?.props.disabled).toBeFalsy();
+
+    (running?.props.onClick as () => void)();
+    (waiting?.props.onClick as () => void)();
+    expect(revoked).toEqual([]);
+
+    const idle = button(other, null);
+    expect(idle?.props["aria-disabled"]).toBeFalsy();
+    (idle?.props.onClick as () => void)();
+    expect(revoked).toEqual(["g3"]);
+  });
+
+  it("has no Revoke button on a row the viewer may not revoke", () => {
+    expect(findElement(ConnectionRow({ connection: other, showPeople: true, canRevoke: false, busyId: null, now: 0, onRevoke: () => {} }), "button")).toBeNull();
+  });
+
+  // After a revoke, focus goes to the row that took the revoked row's
+  // place, else the nearest one (the caller falls back to the section
+  // heading when none is left). A revoke that failed leaves the row, and
+  // focus stays on its button.
+  it("moves focus to the nearest remaining row after a revoke, and stays when the row is still there", () => {
+    expect(revokeFocusOrder(["a", "b", "c"], ["a", "c"], "b")).toEqual(["c", "a"]);
+    expect(revokeFocusOrder(["a", "b", "c"], ["a", "b"], "c")).toEqual(["b", "a"]);
+    expect(revokeFocusOrder(["a", "b", "c"], ["b", "c"], "a")).toEqual(["b", "c"]);
+    expect(revokeFocusOrder(["a"], [], "a")).toEqual([]);
+    expect(revokeFocusOrder(["a", "b"], ["a", "b"], "b")).toEqual(["b"]);
+  });
+});
+
