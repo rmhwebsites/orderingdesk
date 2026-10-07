@@ -39,7 +39,7 @@
 8. **Cancel scope.** Managers and platform admins, orders only, $0 orders only (Ordering Desk never refunds). `orderCancel(orderId, reason: OTHER, restock: false, notifyCustomer: false, staffNote: "Ordering Desk: <reason>" cut to 255)`, `refundMethod` left out (2026-10: no refund when omitted). Shopify cancels in a background job: an accepted cancel is read back up to 3 times; the card moves either way, and the drawer says "not confirmed yet" until the snapshot carries `cancelledAt`.
 9. **Cancelled status rules.** The status control never moves a card into the status linked to `cancelled` (orders: "Use Cancel order..."; requests: "A request is rejected, not cancelled..."). Only a manager moves a card out of it, and only to a status with no Shopify link.
 10. **Shopify to app.** An order snapshot that newly carries `cancelledAt` moves the card to the cancelled status from any status ("Cancelled in Shopify. Status set to Cancelled"); it wins over a tag, a fulfillment or a draft completion in the same change. A status tag never moves a card into Cancelled. An order first seen already cancelled starts in Cancelled.
-11. **Backfill.** Cards stored before 0012 get `location_id` after each location sync when their stored location name matches exactly one location of the workspace. New snapshots carry the id and need no backfill.
+11. **Backfill.** Cards stored before 0012 get `location_id` after each location sync when their stored location name matches exactly one location of the workspace. New snapshots carry the id and need no backfill. The backfill is one UPDATE over every card of the workspace still without a location (no newest-N window, which plain orders that never name a location would fill and stall), so it stays cheap enough to run after each location webhook too.
 
 ## Shopify documents (validated against the Admin schema with the Shopify dev validator; `orderCancel` arguments checked on shopify.dev/docs/api/admin-graphql/2026-10/mutations/orderCancel)
 
@@ -1858,7 +1858,7 @@ import { asc, eq } from "drizzle-orm";
 import type { Db } from "../../db";
 import * as schema from "../../db/schema";
 import { encryptSecret } from "../crypto";
-import { draftSnapshotOf, openTestDb, seedDraft, seedLocation, seedOrder, seedWorkspace } from "../desk/test-helpers";
+import { draftSnapshotOf, openTestDb, seedDraft, seedLocation, seedOrder, seedWorkspace, snapshotOf } from "../desk/test-helpers";
 import {
   LOCATIONS_SYNC_EVERY_MS,
   applyLocationWebhook,
@@ -2046,6 +2046,45 @@ describe("backfillLocationIds", () => {
     expect(await locationIdOf(db, "d4")).toBe("999");
     expect(await locationIdOf(db, "o1")).toBe("101");
   });
+
+  // Plain orders never carry a location name, so their cards stay null for
+  // good; they must not hide an older card that names its location.
+  it("reaches an older named card behind 500 newer cards that carry no name", async () => {
+    const db = await setup();
+    await seedLocation(db, WS, { shopifyLocationId: "101", name: "Buford HQ" });
+    await seedDraft(db, WS, { id: "older", createdAt: 1, shopify: draftSnapshotOf({ location: "Buford HQ" }) });
+    await db.insert(schema.orders).values(
+      Array.from({ length: 500 }, (_, i) => ({
+        id: `plain${i}`,
+        workspaceId: WS,
+        shopifyOrderId: `plain-${i}`,
+        name: `#${2000 + i}`,
+        shopify: snapshotOf({ shopifyOrderId: `plain-${i}`, name: `#${2000 + i}` }),
+        statusKey: "new",
+        createdAt: 1000 + i,
+        syncedAt: 2000,
+      })),
+    );
+
+    expect(await backfillLocationIds(db, WS)).toBe(1);
+    expect(await locationIdOf(db, "older")).toBe("101");
+    expect(await backfillLocationIds(db, WS)).toBe(0);
+  });
+
+  it("trims the stored name and stays inside the workspace", async () => {
+    const db = await setup();
+    await seedWorkspace(db, "ws_other");
+    await seedLocation(db, WS, { shopifyLocationId: "101", name: "Buford HQ" });
+    await seedLocation(db, "ws_other", { shopifyLocationId: "201", name: "Buford HQ" });
+    await seedDraft(db, WS, { id: "padded", shopify: draftSnapshotOf({ location: "  Buford HQ  " }) });
+    await seedDraft(db, WS, { id: "blank", shopify: draftSnapshotOf({ location: "   " }) });
+    await seedDraft(db, "ws_other", { id: "theirs", shopify: draftSnapshotOf({ location: "Buford HQ" }) });
+
+    expect(await backfillLocationIds(db, WS)).toBe(1);
+    expect(await locationIdOf(db, "padded")).toBe("101");
+    expect(await locationIdOf(db, "blank")).toBeNull();
+    expect(await locationIdOf(db, "theirs")).toBeNull();
+  });
 });
 
 describe("syncLocationsIfDue", () => {
@@ -2120,7 +2159,7 @@ Expected: FAIL, `Failed to resolve import "./locations"`.
 // location by name (backfillLocationIds). Needs a companies scope; never
 // throws. Relative imports on purpose: the cron path bundles this.
 
-import { and, asc, desc, eq, isNull, lt, max } from "drizzle-orm";
+import { and, asc, eq, isNull, lt, max, sql, type AnyColumn } from "drizzle-orm";
 import type { Db } from "../../db";
 import { rowsAffected } from "../../db/batch";
 import { locations, orders, storeConnections } from "../../db/schema";
@@ -2132,8 +2171,6 @@ import { safeErrorReason } from "../shopify/status-sync";
 import { getAccessToken } from "../shopify/token";
 
 export const LOCATIONS_SYNC_EVERY_MS = 24 * 60 * 60 * 1000;
-// Cards looked at per backfill pass (newest first).
-const BACKFILL_MAX = 500;
 
 export type LocationSyncResult =
   | { kind: "skipped"; reason: "no-connection" | "no-companies-scope" | "not-due" }
@@ -2151,10 +2188,6 @@ export type LocationView = {
 export type LocationJob = { kind: "location"; locationGid: string } | { kind: "location-deleted"; locationId: string };
 
 type Deps = { fetchImpl?: typeof fetch; now?: () => number };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function locationView(row: typeof locations.$inferSelect): LocationView {
   return {
@@ -2203,46 +2236,34 @@ export async function deactivateLocation(db: Db, workspaceId: string, shopifyLoc
     .where(and(eq(locations.workspaceId, workspaceId), eq(locations.shopifyLocationId, shopifyLocationId)));
 }
 
-function locationNameOf(snapshot: unknown): string {
-  return isRecord(snapshot) && typeof snapshot.location === "string" ? snapshot.location.trim() : "";
-}
+// The location name a card stored before 0012 carries: the current
+// snapshot's, else the draft snapshot's, trimmed; null when neither has one.
+// Only draft snapshots name a location (an order snapshot has no location
+// field), so backfillLocationIds first skips cards that never were drafts
+// (no draft id, no draft snapshot) without reading any JSON.
+const nameIn = (snapshot: AnyColumn) => sql`nullif(trim(json_extract(${snapshot}, '$.location')), '')`;
+const cardLocationName = sql`coalesce(${nameIn(orders.shopify)}, ${nameIn(orders.draftSnapshot)})`;
 
 // Cards stored before 0012 name their location only by the draft's
 // location name: a name that exactly one location of the workspace has
-// gives the card that location. Ambiguous or unknown names stay null.
+// gives the card that location. Ambiguous or unknown names stay null. One
+// statement over every card of the workspace still without a location, so
+// cards that can never match (no name) cannot hide older ones that can.
 export async function backfillLocationIds(db: Db, workspaceId: string): Promise<number> {
-  const places = await db
-    .select({ id: locations.shopifyLocationId, name: locations.name })
-    .from(locations)
-    .where(eq(locations.workspaceId, workspaceId));
-  // null marks a name two locations share.
-  const byName = new Map<string, string | null>();
-  for (const place of places) {
-    byName.set(place.name, byName.has(place.name) ? null : place.id);
-  }
-  if (byName.size === 0) {
-    return 0;
-  }
-  const cards = await db
-    .select({ id: orders.id, shopify: orders.shopify, draftSnapshot: orders.draftSnapshot })
-    .from(orders)
-    .where(and(eq(orders.workspaceId, workspaceId), isNull(orders.locationId)))
-    .orderBy(desc(orders.createdAt))
-    .limit(BACKFILL_MAX);
-  let updated = 0;
-  for (const card of cards) {
-    const name = locationNameOf(card.shopify) || locationNameOf(card.draftSnapshot);
-    const id = name ? byName.get(name) : undefined;
-    if (!id) {
-      continue;
-    }
-    const result = await db
-      .update(orders)
-      .set({ locationId: id })
-      .where(and(eq(orders.id, card.id), eq(orders.workspaceId, workspaceId), isNull(orders.locationId)));
-    updated += rowsAffected(result, "locations");
-  }
-  return updated;
+  const sameName = sql`${locations.workspaceId} = ${workspaceId} and ${locations.name} = ${cardLocationName}`;
+  const result = await db
+    .update(orders)
+    .set({ locationId: sql`(select ${locations.shopifyLocationId} from ${locations} where ${sameName})` })
+    .where(
+      and(
+        eq(orders.workspaceId, workspaceId),
+        isNull(orders.locationId),
+        sql`(${orders.shopifyDraftId} is not null or ${orders.draftSnapshot} is not null)`,
+        sql`${cardLocationName} is not null`,
+        sql`(select count(*) from ${locations} where ${sameName}) = 1`,
+      ),
+    );
+  return rowsAffected(result, "locations");
 }
 
 export async function syncLocations(

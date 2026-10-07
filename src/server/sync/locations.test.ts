@@ -3,7 +3,7 @@ import { asc, eq } from "drizzle-orm";
 import type { Db } from "../../db";
 import * as schema from "../../db/schema";
 import { encryptSecret } from "../crypto";
-import { draftSnapshotOf, openTestDb, seedDraft, seedLocation, seedOrder, seedWorkspace } from "../desk/test-helpers";
+import { draftSnapshotOf, openTestDb, seedDraft, seedLocation, seedOrder, seedWorkspace, snapshotOf } from "../desk/test-helpers";
 import {
   LOCATIONS_SYNC_EVERY_MS,
   applyLocationWebhook,
@@ -190,6 +190,45 @@ describe("backfillLocationIds", () => {
     expect(await locationIdOf(db, "d3")).toBeNull();
     expect(await locationIdOf(db, "d4")).toBe("999");
     expect(await locationIdOf(db, "o1")).toBe("101");
+  });
+
+  // Plain orders never carry a location name, so their cards stay null for
+  // good; they must not hide an older card that names its location.
+  it("reaches an older named card behind 500 newer cards that carry no name", async () => {
+    const db = await setup();
+    await seedLocation(db, WS, { shopifyLocationId: "101", name: "Buford HQ" });
+    await seedDraft(db, WS, { id: "older", createdAt: 1, shopify: draftSnapshotOf({ location: "Buford HQ" }) });
+    await db.insert(schema.orders).values(
+      Array.from({ length: 500 }, (_, i) => ({
+        id: `plain${i}`,
+        workspaceId: WS,
+        shopifyOrderId: `plain-${i}`,
+        name: `#${2000 + i}`,
+        shopify: snapshotOf({ shopifyOrderId: `plain-${i}`, name: `#${2000 + i}` }),
+        statusKey: "new",
+        createdAt: 1000 + i,
+        syncedAt: 2000,
+      })),
+    );
+
+    expect(await backfillLocationIds(db, WS)).toBe(1);
+    expect(await locationIdOf(db, "older")).toBe("101");
+    expect(await backfillLocationIds(db, WS)).toBe(0);
+  });
+
+  it("trims the stored name and stays inside the workspace", async () => {
+    const db = await setup();
+    await seedWorkspace(db, "ws_other");
+    await seedLocation(db, WS, { shopifyLocationId: "101", name: "Buford HQ" });
+    await seedLocation(db, "ws_other", { shopifyLocationId: "201", name: "Buford HQ" });
+    await seedDraft(db, WS, { id: "padded", shopify: draftSnapshotOf({ location: "  Buford HQ  " }) });
+    await seedDraft(db, WS, { id: "blank", shopify: draftSnapshotOf({ location: "   " }) });
+    await seedDraft(db, "ws_other", { id: "theirs", shopify: draftSnapshotOf({ location: "Buford HQ" }) });
+
+    expect(await backfillLocationIds(db, WS)).toBe(1);
+    expect(await locationIdOf(db, "padded")).toBe("101");
+    expect(await locationIdOf(db, "blank")).toBeNull();
+    expect(await locationIdOf(db, "theirs")).toBeNull();
   });
 });
 

@@ -9,7 +9,7 @@
 // location by name (backfillLocationIds). Needs a companies scope; never
 // throws. Relative imports on purpose: the cron path bundles this.
 
-import { and, asc, desc, eq, isNull, lt, max } from "drizzle-orm";
+import { and, asc, eq, isNull, lt, max, sql, type AnyColumn } from "drizzle-orm";
 import type { Db } from "../../db";
 import { rowsAffected } from "../../db/batch";
 import { locations, orders, storeConnections } from "../../db/schema";
@@ -21,8 +21,6 @@ import { safeErrorReason } from "../shopify/status-sync";
 import { getAccessToken } from "../shopify/token";
 
 export const LOCATIONS_SYNC_EVERY_MS = 24 * 60 * 60 * 1000;
-// Cards looked at per backfill pass (newest first).
-const BACKFILL_MAX = 500;
 
 export type LocationSyncResult =
   | { kind: "skipped"; reason: "no-connection" | "no-companies-scope" | "not-due" }
@@ -40,10 +38,6 @@ export type LocationView = {
 export type LocationJob = { kind: "location"; locationGid: string } | { kind: "location-deleted"; locationId: string };
 
 type Deps = { fetchImpl?: typeof fetch; now?: () => number };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function locationView(row: typeof locations.$inferSelect): LocationView {
   return {
@@ -92,46 +86,34 @@ export async function deactivateLocation(db: Db, workspaceId: string, shopifyLoc
     .where(and(eq(locations.workspaceId, workspaceId), eq(locations.shopifyLocationId, shopifyLocationId)));
 }
 
-function locationNameOf(snapshot: unknown): string {
-  return isRecord(snapshot) && typeof snapshot.location === "string" ? snapshot.location.trim() : "";
-}
+// The location name a card stored before 0012 carries: the current
+// snapshot's, else the draft snapshot's, trimmed; null when neither has one.
+// Only draft snapshots name a location (an order snapshot has no location
+// field), so backfillLocationIds first skips cards that never were drafts
+// (no draft id, no draft snapshot) without reading any JSON.
+const nameIn = (snapshot: AnyColumn) => sql`nullif(trim(json_extract(${snapshot}, '$.location')), '')`;
+const cardLocationName = sql`coalesce(${nameIn(orders.shopify)}, ${nameIn(orders.draftSnapshot)})`;
 
 // Cards stored before 0012 name their location only by the draft's
 // location name: a name that exactly one location of the workspace has
-// gives the card that location. Ambiguous or unknown names stay null.
+// gives the card that location. Ambiguous or unknown names stay null. One
+// statement over every card of the workspace still without a location, so
+// cards that can never match (no name) cannot hide older ones that can.
 export async function backfillLocationIds(db: Db, workspaceId: string): Promise<number> {
-  const places = await db
-    .select({ id: locations.shopifyLocationId, name: locations.name })
-    .from(locations)
-    .where(eq(locations.workspaceId, workspaceId));
-  // null marks a name two locations share.
-  const byName = new Map<string, string | null>();
-  for (const place of places) {
-    byName.set(place.name, byName.has(place.name) ? null : place.id);
-  }
-  if (byName.size === 0) {
-    return 0;
-  }
-  const cards = await db
-    .select({ id: orders.id, shopify: orders.shopify, draftSnapshot: orders.draftSnapshot })
-    .from(orders)
-    .where(and(eq(orders.workspaceId, workspaceId), isNull(orders.locationId)))
-    .orderBy(desc(orders.createdAt))
-    .limit(BACKFILL_MAX);
-  let updated = 0;
-  for (const card of cards) {
-    const name = locationNameOf(card.shopify) || locationNameOf(card.draftSnapshot);
-    const id = name ? byName.get(name) : undefined;
-    if (!id) {
-      continue;
-    }
-    const result = await db
-      .update(orders)
-      .set({ locationId: id })
-      .where(and(eq(orders.id, card.id), eq(orders.workspaceId, workspaceId), isNull(orders.locationId)));
-    updated += rowsAffected(result, "locations");
-  }
-  return updated;
+  const sameName = sql`${locations.workspaceId} = ${workspaceId} and ${locations.name} = ${cardLocationName}`;
+  const result = await db
+    .update(orders)
+    .set({ locationId: sql`(select ${locations.shopifyLocationId} from ${locations} where ${sameName})` })
+    .where(
+      and(
+        eq(orders.workspaceId, workspaceId),
+        isNull(orders.locationId),
+        sql`(${orders.shopifyDraftId} is not null or ${orders.draftSnapshot} is not null)`,
+        sql`${cardLocationName} is not null`,
+        sql`(select count(*) from ${locations} where ${sameName}) = 1`,
+      ),
+    );
+  return rowsAffected(result, "locations");
 }
 
 export async function syncLocations(
