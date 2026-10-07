@@ -4,11 +4,13 @@
 
 import { and, asc, count, desc, eq, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
 import type { Db } from "@/db";
-import { events, orders, purchaseOrders, statuses, storeConnections, user, workspaceSettings, workspaces } from "@/db/schema";
+import { events, locations, orders, purchaseOrders, statuses, storeConnections, user, workspaceSettings, workspaces } from "@/db/schema";
+import { placeLabel } from "@/lib/address";
 import type { DeskView, ViewCounts } from "@/lib/desk-query";
 import type { QueueSettingsView } from "@/lib/queue-settings";
 import { requestFieldsOf } from "@/lib/request-fields";
 import { draftsEnabled, missingDraftScopes } from "@/server/shopify/admin";
+import { getLocation, type LocationView } from "@/server/sync/locations";
 import {
   eventView,
   isRecord,
@@ -64,7 +66,14 @@ export type OrderSummary = {
   company: string;
   location: string;
   requestFor: string;
+  // The synced company location's name, else "Ship to Branch", else the draft's location (src/lib/address.ts placeLabel).
   branch: string;
+  // The card's Shopify company location (comprehensive design section 2):
+  // its legacy id, and its synced name ("" until the location is synced).
+  locationId: string | null;
+  locationName: string;
+  // Shopify reports the order cancelled (cancelledAt on the snapshot).
+  cancelled: boolean;
   // What a desk search matches besides the name, customer, email and items.
   searchText: string[];
   // The card has at least one purchase order, of any state (an order whose
@@ -119,7 +128,7 @@ function quantity(item: Record<string, unknown>): number {
 // snapshot is served per order by getOrderDetail. Snapshots are read
 // defensively: a malformed one degrades to empty fields instead of failing
 // the whole desk.
-function summarize(row: typeof orders.$inferSelect, hasPo: boolean): OrderSummary {
+function summarize(row: typeof orders.$inferSelect, hasPo: boolean, locationName: string | null): OrderSummary {
   const snapshot = isRecord(row.shopify) ? row.shopify : {};
   const items = Array.isArray(snapshot.items) ? snapshot.items.filter(isRecord) : [];
   const kind = row.shopifyOrderId === null ? "draft" : "order";
@@ -152,10 +161,18 @@ function summarize(row: typeof orders.$inferSelect, hasPo: boolean): OrderSummar
     company: request.company,
     location: request.location,
     requestFor: request.requestFor,
-    branch: request.branch,
-    searchText: [row.draftName ?? "", request.company, request.location, request.requestFor, request.branch].filter(
-      (part) => part.length > 0,
-    ),
+    branch: placeLabel(locationName, request.branch),
+    locationId: row.locationId ?? null,
+    locationName: locationName ?? "",
+    cancelled: typeof snapshot.cancelledAt === "number" && snapshot.cancelledAt > 0,
+    searchText: [
+      row.draftName ?? "",
+      request.company,
+      request.location,
+      request.requestFor,
+      request.branch,
+      locationName ?? "",
+    ].filter((part) => part.length > 0),
     hasPo,
   };
 }
@@ -232,9 +249,10 @@ export async function loadDesk(
       .groupBy(orders.statusKey),
     // One row past the cap answers hasMore without a second count query.
     db
-      .select({ order: orders, hasPo: hasPurchaseOrder })
+      .select({ order: orders, hasPo: hasPurchaseOrder, locationName: locations.name })
       .from(orders)
       .leftJoin(statuses, statusJoin)
+      .leftJoin(locations, and(eq(locations.workspaceId, orders.workspaceId), eq(locations.shopifyLocationId, orders.locationId)))
       .where(and(eq(orders.workspaceId, workspaceId), viewCondition(view)))
       .orderBy(desc(orders.createdAt), desc(orders.id))
       .limit(limit + 1),
@@ -285,7 +303,7 @@ export async function loadDesk(
     statuses: statusRows.map(statusView),
     settings: settingsView(settingsRows[0]),
     statusCounts,
-    orders: orderRows.slice(0, limit).map((row) => summarize(row.order, Boolean(row.hasPo))),
+    orders: orderRows.slice(0, limit).map((row) => summarize(row.order, Boolean(row.hasPo), row.locationName)),
     hasMore: orderRows.length > limit,
     draftCount: draftsCounted(false),
     deletedDraftCount: draftsCounted(true),
@@ -306,6 +324,8 @@ export type OrderDetail = {
   // Computed from the snapshot with the list's rule, so the drawer does not
   // re-implement it.
   itemsTruncated: boolean;
+  // The card's synced company location, or null.
+  location: LocationView | null;
 };
 
 export async function getOrderDetail(
@@ -319,7 +339,11 @@ export async function getOrderDetail(
     .where(and(eq(orders.id, orderId), eq(orders.workspaceId, workspaceId)))
     .limit(1);
   const order = rows[0];
-  return order ? { order, itemsTruncated: itemsTruncatedOf(order.shopify) } : null;
+  if (!order) {
+    return null;
+  }
+  const location = order.locationId ? await getLocation(db, workspaceId, order.locationId) : null;
+  return { order, itemsTruncated: itemsTruncatedOf(order.shopify), location };
 }
 
 export type EventsResult = { kind: "ok"; events: EventView[] } | { kind: "not-found" };

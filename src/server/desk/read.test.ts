@@ -15,6 +15,7 @@ import {
   openTestDb,
   seedDraft,
   seedDraftStatuses,
+  seedLocation,
   seedOrder,
   seedUser,
   seedWorkspace,
@@ -135,6 +136,9 @@ describe("loadDesk", () => {
         location: "",
         requestFor: "",
         branch: "",
+        locationId: null,
+        locationName: "",
+        cancelled: false,
         searchText: [],
         hasPo: false,
       },
@@ -192,6 +196,22 @@ describe("loadDesk", () => {
     // Open requests, and requests whose draft Shopify deleted.
     expect(desk!.draftCount).toBe(1);
     expect(desk!.deletedDraftCount).toBe(1);
+  });
+
+  // Comprehensive design section 2: the Branch column and the cancelled mark.
+  it("names each card's branch by its synced company location, else the request's own field", async () => {
+    const db = await setup();
+    await seedLocation(db, WS, { shopifyLocationId: "101", name: "Mableton" });
+    await seedLocation(db, OTHER, { shopifyLocationId: "101", name: "Elsewhere" });
+    await seedDraft(db, WS, { id: "d1", createdAt: 3000, shopify: draftSnapshotOf({ location: "Buford, GA" }) });
+    await seedDraft(db, WS, { id: "d2", createdAt: 2000, shopify: draftSnapshotOf({ location: "Buford, GA" }) });
+    await db.update(schema.orders).set({ locationId: "101" }).where(eq(schema.orders.id, "d1"));
+    await seedOrder(db, WS, { id: "o1", createdAt: 1000, shopify: snapshotOf({ cancelledAt: 5000 }) });
+    const desk = await loadDesk(db, WS);
+    const byId = new Map(desk!.orders.map((order) => [order.id, order]));
+    expect(byId.get("d1")).toMatchObject({ locationId: "101", locationName: "Mableton", branch: "Mableton", cancelled: false });
+    expect(byId.get("d2")).toMatchObject({ locationId: null, locationName: "", branch: "Buford, GA", cancelled: false });
+    expect(byId.get("o1")).toMatchObject({ locationId: null, locationName: "", branch: "", cancelled: true });
   });
 
   it("says whether draft orders sync for the store, from the stored grant", async () => {
@@ -380,6 +400,36 @@ describe("getOrderDetail", () => {
         locationId: null,
       },
       itemsTruncated: false,
+      location: null,
+    });
+  });
+
+  it("returns the card's synced location with the order", async () => {
+    const db = await setup();
+    await seedLocation(db, WS, {
+      shopifyLocationId: "101",
+      name: "Mableton",
+      address: {
+        address1: "5 Example Rd",
+        address2: "",
+        city: "Mableton",
+        province: "Georgia",
+        provinceCode: "GA",
+        zip: "30126",
+        country: "United States",
+        countryCode: "US",
+        phone: "",
+        company: "Example Rentals",
+      },
+    });
+    await seedDraft(db, WS, { id: "d1" });
+    expect((await getOrderDetail(db, WS, "d1"))?.location).toBeNull();
+    await db.update(schema.orders).set({ locationId: "101" }).where(eq(schema.orders.id, "d1"));
+    expect((await getOrderDetail(db, WS, "d1"))?.location).toMatchObject({
+      shopifyLocationId: "101",
+      name: "Mableton",
+      active: true,
+      address: { address1: "5 Example Rd", provinceCode: "GA" },
     });
   });
 
