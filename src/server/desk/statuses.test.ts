@@ -444,6 +444,42 @@ describe("replaceStatuses", () => {
     ]);
   });
 
+  // Wave 1a final review: new orders and requests land in the first status,
+  // so it can never be closed, whether the list marks it, keeps a stored
+  // flag or moves a closed status to the top.
+  it("refuses a closed first status, saying why, and changes nothing", async () => {
+    const { db } = await setup();
+    const before = await statusRows(db);
+    const error = "New is the first status, where new orders and requests land, so it cannot be closed. Turn off Closed for it or move another status to the top.";
+    expect(
+      await replaceStatuses(db, WS, [
+        { key: "new", label: "New", color: "lime", triggersPo: false, closed: true },
+        { key: "shipped", label: "Shipped", color: "violet", triggersPo: false },
+      ]),
+    ).toEqual({ kind: "invalid", error });
+    await db.update(schema.statuses).set({ closed: true }).where(eq(schema.statuses.id, WS + "_st_new"));
+    const closedBefore = await statusRows(db);
+    expect(
+      await replaceStatuses(db, WS, [
+        { key: "new", label: "New", color: "lime", triggersPo: false },
+        { key: "shipped", label: "Shipped", color: "violet", triggersPo: false },
+      ]),
+    ).toEqual({ kind: "invalid", error });
+    expect(await statusRows(db)).toEqual(closedBefore);
+    await db.update(schema.statuses).set({ closed: false }).where(eq(schema.statuses.id, WS + "_st_new"));
+    expect(await statusRows(db)).toEqual(before);
+    // A closed status lower down is fine, and so is the same status once it
+    // is no longer first.
+    const ok = await replaceStatuses(db, WS, [
+      { key: "shipped", label: "Shipped", color: "violet", triggersPo: false },
+      { key: "new", label: "New", color: "lime", triggersPo: false, closed: true },
+    ]);
+    expect(ok.kind === "ok" ? ok.statuses.map((s) => [s.key, s.closed]) : ok).toEqual([
+      ["shipped", false],
+      ["new", true],
+    ]);
+  });
+
   it("refuses a closed flag that is not true or false", async () => {
     const { db } = await setup();
     expect(await replaceStatuses(db, WS, [entry("New", { closed: "yes" })])).toEqual({

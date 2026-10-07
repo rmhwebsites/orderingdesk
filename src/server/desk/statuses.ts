@@ -2,7 +2,8 @@
 //
 // The lowest-sort status is the default for new synced orders (runSync picks
 // it), so the first entry of the list an admin saves becomes the status every
-// newly synced order starts in.
+// newly synced order starts in. That is why the first status is never
+// closed: a new card must land in the Open view.
 
 import { and, asc, count, eq, inArray, notExists, sql } from "drizzle-orm";
 import type { Db } from "@/db";
@@ -204,6 +205,22 @@ export async function replaceStatuses(
     }
   }
 
+  // The first status never closes, however its flag would come out.
+  const storedClosed = new Map(existing.map((row) => [row.key, row.closed]));
+  const closedFlags = entries.map((entry, i) =>
+    entry.closed !== undefined
+      ? entry.closed
+      : entry.key !== null
+        ? (storedClosed.get(entry.key) ?? false)
+        : closedByDefault(links[i]),
+  );
+  if (closedFlags[0]) {
+    return {
+      kind: "invalid",
+      error: `${entries[0].label} is the first status, where new orders and requests land, so it cannot be closed. Turn off Closed for it or move another status to the top.`,
+    };
+  }
+
   if (removedKeys.length > 0) {
     const usage = await db
       .select({ statusKey: orders.statusKey, count: count() })
@@ -227,7 +244,6 @@ export async function replaceStatuses(
   // removed in this same save, so no statement below can trip the
   // (workspace, key) unique index whatever happens to the delete.
   const taken = new Set(existingKeys);
-  const storedClosed = new Map(existing.map((row) => [row.key, row.closed]));
   const statements: PromiseLike<unknown>[] = [];
   if (removedKeys.length > 0) {
     // Guarded in SQL as well: a status that some order uses at the moment
@@ -273,19 +289,13 @@ export async function replaceStatuses(
     );
   }
   entries.forEach((entry, sort) => {
-    const closed =
-      entry.closed !== undefined
-        ? entry.closed
-        : entry.key !== null
-          ? (storedClosed.get(entry.key) ?? false)
-          : closedByDefault(links[sort]);
     const fields = {
       label: entry.label,
       color: entry.color,
       sort,
       triggersPo: entry.triggersPo,
       shopifyLink: links[sort],
-      closed,
+      closed: closedFlags[sort],
     };
     if (entry.key !== null) {
       statements.push(

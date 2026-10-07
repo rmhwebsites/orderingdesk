@@ -17,6 +17,18 @@ describe("StatusesSection", () => {
     expect(switches.filter((input) => input.includes('checked=""'))).toHaveLength(1);
     expect(html).toContain("Closed (leaves the Open view)");
   });
+
+  // Wave 1a final review: new orders and requests land in the first status,
+  // so its Closed switch cannot be turned on (only off, should a closed
+  // status be moved to the top).
+  it("disables the first status's Closed switch and says why", () => {
+    const html = renderToStaticMarkup(createElement(StatusesSection, { workspaceId: "ws_impact", initial: STATUSES }));
+    expect(html).toMatch(/<input[^>]*id="status-new-closed"[^>]*disabled=""/);
+    expect(html).toMatch(/<input[^>]*id="status-new-closed"[^>]*aria-describedby="status-new-closed-hint"/);
+    expect(html).toContain('id="status-new-closed-hint"');
+    expect(html).toContain("New orders and requests land here, so it stays open.");
+    expect(html).not.toMatch(/<input[^>]*id="status-delivered-closed"[^>]*disabled=""/);
+  });
 });
 
 // The statuses editor offers every Shopify link the server accepts

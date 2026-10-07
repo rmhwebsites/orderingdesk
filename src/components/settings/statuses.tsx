@@ -168,7 +168,7 @@ export function StatusesSection({
         </p>
         <p className="text-sm text-ink-2">
           Closed statuses are finished work: their cards leave the Open view and their age stops turning amber or red.
-          Delivered and Rejected start closed.
+          Delivered and Rejected start closed. The first status is never closed.
         </p>
         <p className="sr-only" aria-live="polite">
           {announcement}
@@ -284,12 +284,22 @@ export function StatusesSection({
                       onChange={(checked) => update(row.uid, { triggersPo: checked })}
                       label="Starts a purchase order"
                     />
+                    {/* New orders and requests land in the first status, so it
+                        never closes (the server refuses it too); its switch
+                        only turns off, should a closed status move up. */}
                     <Switch
                       id={`${id}-closed`}
                       checked={row.closed}
                       onChange={(checked) => update(row.uid, { closed: checked })}
                       label="Closed (leaves the Open view)"
+                      disabled={index === 0 && !row.closed}
+                      describedBy={index === 0 ? `${id}-closed-hint` : undefined}
                     />
+                    {index === 0 ? (
+                      <p id={`${id}-closed-hint`} className="basis-full text-xs text-ink-2">
+                        New orders and requests land here, so it stays open.
+                      </p>
+                    ) : null}
                   </div>
                 </div>
               </li>
