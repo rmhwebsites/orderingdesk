@@ -49,6 +49,36 @@ describe("approve through an AI app", () => {
     expect(afterWork).toHaveLength(1);
   });
 
+  // Decision 13: every person's name a tool returns goes through personLabel,
+  // so a "For Employee Name" typed as an email or phone number is left out of
+  // the summary and of for_person, as get_order already leaves it out.
+  it("leaves out a For Employee Name that is really an email or a phone number", async () => {
+    for (const typed of ["riley.oakes@example.com", "+1 (555) 555-0142"]) {
+      const db = await setupMcp();
+      await db
+        .update(schema.orders)
+        .set({
+          shopify: draftSnapshotOf({
+            shopifyDraftId: "12",
+            name: "#D12",
+            attributes: [
+              { key: "For Employee Name", value: typed },
+              { key: "Ship to Branch", value: "North Yard" },
+            ],
+          }),
+        })
+        .where(eq(schema.orders.id, "d1"));
+      const shop = fakeShop({ DraftBeforeApprove: () => beforeApprove() });
+      const { result, data } = await call(prepareApprove, { order: "#D12" }, toolDeps(db, principalFor(), { fetchImpl: shop.impl }));
+      expect(data.preview, typed).toMatchObject({ for_person: null, location: "North Yard" });
+      expect(data.preview.summary, typed).toBe(
+        "Approve request #D12 at North Yard: Shopify completes the $0.00 draft and it becomes an order. Status becomes Approved.",
+      );
+      expect(JSON.stringify(result), typed).not.toContain(typed);
+      expect(JSON.stringify(result), typed).not.toContain("555-0142");
+    }
+  });
+
   it("refuses a draft that does not total $0.00 at preview time, sending nothing", async () => {
     const db = await setupMcp();
     const shop = fakeShop({ DraftBeforeApprove: () => beforeApprove("48.00") });

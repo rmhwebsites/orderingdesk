@@ -15,7 +15,7 @@ import { roleAtLeast } from "../../lib/roles";
 import { REVIEW_COPY, approveRequest, followApproval, followRejection, linkedStatus, rejectRequest, shopifyAccess } from "../../server/desk/review";
 import { draftGid, failureText, fetchDraftForApprove } from "../../server/shopify/admin";
 import { beginConfirm, cardState, finishAction, prepareAction, preparedResult, stateMatches } from "../actions";
-import { plainText, untrusted, NAME_MAX } from "../output";
+import { personLabel, plainText, untrusted, NAME_MAX } from "../output";
 import { findCard, loadCardById, type CardRow } from "./cards";
 import { PO_NOTE, confirmationInput, followDeps, orderInput, orderMismatch, refusal, reviewCtx, reviewDeps, textMismatch } from "./common";
 import { CONFIRM_DESTRUCTIVE, PREPARE, defineTool, fail, ok, type ToolDeps } from "./define";
@@ -38,9 +38,12 @@ async function requestCard(deps: ToolDeps, ref: string): Promise<{ card: CardRow
   return { card };
 }
 
+// "For Employee Name" is a person's name only when it reads as one
+// (personLabel, Decision 13): a typed email or phone number is left out, as
+// get_order leaves it out.
 function whoAndWhere(card: CardRow): { forPerson: string; location: string } {
   const fields = requestFieldsOf(card.shopify, card.draftSnapshot);
-  return { forPerson: plainText(fields.requestFor, NAME_MAX), location: plainText(fields.branch || fields.location, NAME_MAX) };
+  return { forPerson: personLabel(fields.requestFor) ?? "", location: plainText(fields.branch || fields.location, NAME_MAX) };
 }
 
 export const prepareApprove = defineTool({
