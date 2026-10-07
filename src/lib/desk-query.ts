@@ -241,11 +241,6 @@ export function mergeDeskSearch(currentSearch: string, patch: Partial<DeskQuery>
 // The query with nothing in the URL: Open, newest first, no filter.
 export const EMPTY_QUERY: DeskQuery = parseDeskQuery(new URLSearchParams());
 
-// No filter beyond the view and the sort (AI search understood nothing).
-export function isEmptyQuery(query: DeskQuery): boolean {
-  return deskParams({ ...query, view: "open", sort: defaultSort("open") }).toString() === "";
-}
-
 // The view a query's list covers: All while plain words search, the picked
 // view otherwise (listScope).
 function scopeView(query: Pick<DeskQuery, "view" | "q">): DeskView {

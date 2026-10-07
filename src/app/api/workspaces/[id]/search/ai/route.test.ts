@@ -70,6 +70,17 @@ describe("POST /api/workspaces/[id]/search/ai", () => {
     expect(Object.fromEntries(params)).toEqual({ view: "all", kind: "orders", location: "loc_north", date: "last_month" });
   });
 
+  // Owner decision (2026-10-07): an answer that understood only a state
+  // applies it (the desk shows it as a chip).
+  it("sends the view of an answer that understood only a state", async () => {
+    state.session = { user: { id: "u_staff", email: "staff@example.com" } };
+    state.run = vi.fn(async () => ({
+      choices: [{ message: { content: JSON.stringify({ ...FILTER, kind: "any", locations: [], date: "any", state: "closed" }) } }],
+    }));
+    const response = await ask({ q: "show me the closed ones" });
+    expect(await response.json()).toEqual({ params: "view=closed" });
+  });
+
   it("answers a fallback for a short search and 400 for no question or a huge body", async () => {
     state.session = { user: { id: "u_staff", email: "staff@example.com" } };
     expect(await (await ask({ q: "#1024" })).json()).toEqual({ fallback: "shortcut" });

@@ -10,7 +10,6 @@ import {
   deskParams,
   deskSearch,
   filterChips,
-  isEmptyQuery,
   listScope,
   mergeDeskSearch,
   normalizeOrderNumber,
@@ -182,13 +181,6 @@ describe("search filters in the URL", () => {
     expect(deskSearch(EMPTY_QUERY)).toBe("");
     expect(deskParams(EMPTY_QUERY).toString()).toBe("");
     expect(mergeDeskSearch("?order=o1&q=hat", { locations: ["101"] })).toBe("?q=hat&location=101&order=o1");
-  });
-
-  it("knows when a query holds no filter beyond its view and sort", () => {
-    expect(isEmptyQuery({ ...EMPTY_QUERY, view: "all", sort: "oldest" })).toBe(true);
-    expect(isEmptyQuery({ ...EMPTY_QUERY, kind: "orders" })).toBe(false);
-    expect(isEmptyQuery({ ...EMPTY_QUERY, locations: ["101"] })).toBe(false);
-    expect(isEmptyQuery({ ...EMPTY_QUERY, words: "blue" })).toBe(false);
   });
 });
 

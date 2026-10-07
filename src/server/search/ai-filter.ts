@@ -11,6 +11,7 @@ import {
   cleanText,
   DATE_PRESETS,
   DAYS_MAX,
+  deskParams,
   EMPTY_QUERY,
   FILTER_TEXT_MAX,
   isCalendarDate,
@@ -247,4 +248,22 @@ export function validateAiFilter(raw: unknown, vocab: SearchVocabulary): DeskQue
     // Never q: q holds only words a person typed (listScope widens it to All).
     words: text ?? "",
   };
+}
+
+// The desk query of an answer that sets nothing (every field missing or
+// null), which is also what the prompt has the model write for a question
+// that names nothing: kind, state and date "any", sort "newest", no filter.
+const NOTHING_UNDERSTOOD = deskParams(validateAiFilter({}, { statuses: [], locations: [], items: [] }) ?? EMPTY_QUERY).toString();
+
+// Whether a validated answer understood nothing (AI search then falls back
+// with invalid). Owner decision (2026-10-07): an answer applies its own
+// state (view) and sort as chips, so every field it set counts, the state
+// and the sort included, and a state of open counts although open is the
+// desk's own default view. Only an answer whose every field is still at the
+// value above once validation dropped unknown names and placeholder words
+// (no fields at all, or only empty leftovers) understood nothing. The
+// strict schema requires state and sort, so "any" and "newest" alone cannot
+// be told apart from a question the model could not read.
+export function understoodNothing(query: DeskQuery): boolean {
+  return deskParams(query).toString() === NOTHING_UNDERSTOOD;
 }

@@ -6,10 +6,10 @@
 
 import type { Db } from "../../db";
 import { describeToday } from "../../lib/date-range";
-import { cleanText, isEmptyQuery, type DeskQuery } from "../../lib/desk-query";
+import { cleanText, type DeskQuery } from "../../lib/desk-query";
 import { AI_QUERY_MAX, shouldAskAi } from "../../lib/search-shortcut";
 import { translateQuery, type AiRunner, type FallbackReason } from "./ai";
-import { validateAiFilter } from "./ai-filter";
+import { understoodNothing, validateAiFilter } from "./ai-filter";
 import { claimAiSearch } from "./usage";
 import { loadVocabulary } from "./vocabulary";
 
@@ -74,7 +74,7 @@ export async function aiSearch(
   }
   return logged(
     ctx,
-    query && !isEmptyQuery(query) ? { kind: "filter", query } : { kind: "fallback", reason: "invalid" },
+    query && !understoodNothing(query) ? { kind: "filter", query } : { kind: "fallback", reason: "invalid" },
     Date.now() - started,
   );
 }

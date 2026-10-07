@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { isEmptyQuery, listScope } from "@/lib/desk-query";
-import { AI_FILTER_KEYS, aiFilterSchema, aiSystemPrompt, validateAiFilter, type SearchVocabulary } from "./ai-filter";
+import { listScope } from "@/lib/desk-query";
+import { AI_FILTER_KEYS, aiFilterSchema, aiSystemPrompt, understoodNothing, validateAiFilter, type SearchVocabulary } from "./ai-filter";
 
 const vocab: SearchVocabulary = {
   statuses: [
@@ -140,7 +140,21 @@ describe("validateAiFilter", () => {
   });
 
   it("says nothing was understood when every field is empty", () => {
-    expect(isEmptyQuery(validateAiFilter(full(), vocab)!)).toBe(true);
+    expect(understoodNothing(validateAiFilter(full(), vocab)!)).toBe(true);
+    expect(understoodNothing(validateAiFilter({}, vocab)!)).toBe(true);
+    expect(understoodNothing(validateAiFilter(full({ status: "Archived", locations: ["Elsewhere"], itemTitle: "Gloves" }), vocab)!)).toBe(true);
+  });
+
+  // Owner decision (2026-10-07): an answer applies its own state and sort,
+  // so either alone is understood, a state of open (the desk's own default
+  // view) included.
+  it("counts a state or a sort the answer set as understood", () => {
+    expect(understoodNothing(validateAiFilter(full({ state: "closed" }), vocab)!)).toBe(false);
+    expect(understoodNothing(validateAiFilter(full({ state: "open" }), vocab)!)).toBe(false);
+    expect(understoodNothing(validateAiFilter({ state: "open" }, vocab)!)).toBe(false);
+    expect(understoodNothing(validateAiFilter(full({ sort: "oldest" }), vocab)!)).toBe(false);
+    expect(understoodNothing(validateAiFilter(full({ sort: "waiting" }), vocab)!)).toBe(false);
+    expect(understoodNothing(validateAiFilter(full({ kind: "requests" }), vocab)!)).toBe(false);
   });
 
   it("reads placeholder words in text fields as empty", () => {
@@ -148,7 +162,7 @@ describe("validateAiFilter", () => {
       full({ person: "any", itemText: "Any", personalization: " none ", orderNumber: "any", from: "null", to: "any", text: "ANY" }),
       vocab,
     )!;
-    expect(isEmptyQuery(query)).toBe(true);
+    expect(understoodNothing(query)).toBe(true);
     expect(validateAiFilter(full({ person: "Avery Stone", text: "any rush" }), vocab)).toMatchObject({ person: "Avery Stone", words: "any rush" });
   });
 });

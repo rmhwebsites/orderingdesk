@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { eq } from "drizzle-orm";
 import * as schema from "@/db/schema";
+import { deskParams, parseDeskQuery, understoodChips } from "@/lib/desk-query";
 import type { AiRunner } from "./ai";
 import { aiSearch } from "./ai-search";
 import { AI_SEARCH_DAILY_CAP, usageDay } from "./usage";
@@ -115,6 +116,64 @@ describe("aiSearch", () => {
       reason: "invalid",
     });
     expect(await aiSearch(db, model(answer({})).ai, ctx, { q: QUESTION })).toEqual({ kind: "fallback", reason: "invalid" });
+  });
+
+  // Owner decision (2026-10-07): an AI answer applies its own state (view)
+  // and sort as chips, so an answer that understood only those is a filter,
+  // even when the state is the desk's own default (open).
+  it.each([
+    {
+      q: "show me the closed ones",
+      filter: { state: "closed" },
+      query: { view: "closed", sort: "newest" },
+      params: "view=closed",
+      chips: ["Closed cards"],
+    },
+    {
+      q: "open cards waiting longest first",
+      filter: { state: "open", sort: "waiting" },
+      query: { view: "open", sort: "waiting" },
+      params: "sort=waiting",
+      chips: ["Waiting longest"],
+    },
+    {
+      q: "everything oldest first",
+      filter: { state: "any", sort: "oldest" },
+      query: { view: "all", sort: "oldest" },
+      params: "view=all&sort=oldest",
+      chips: ["All cards", "Oldest first"],
+    },
+  ])("applies the state and sort of '$q' as its desk query and chips, counted once", async ({ q, filter, query, params, chips }) => {
+    const db = await setup();
+    const { ai, run } = model(answer(filter));
+    const outcome = await aiSearch(db, ai, ctx, { q });
+    expect(outcome).toMatchObject({ kind: "filter", query: { ...query, q: "", status: null, kind: "all", locations: [], words: "" } });
+    if (outcome.kind !== "filter") {
+      return;
+    }
+    // What the route sends and the desk applies, asked from the Open view.
+    expect(deskParams(outcome.query).toString()).toBe(params);
+    const applied = parseDeskQuery(new URLSearchParams(params));
+    expect(applied).toMatchObject(query);
+    expect(understoodChips(applied, applied, "open", []).map((chip) => chip.label)).toEqual(chips);
+    expect(run).toHaveBeenCalledTimes(1);
+    const usage = await db.select().from(schema.aiUsage);
+    expect(usage).toHaveLength(1);
+    expect(usage[0]).toMatchObject({ principalId: "u_staff", kind: "search", count: 1 });
+  });
+
+  it("still falls back on an answer with no fields at all, or only empty leftovers", async () => {
+    const db = await setup();
+    const raw = (content: string) => ({ choices: [{ message: { content } }] });
+    expect(await aiSearch(db, model(raw("{}")).ai, ctx, { q: QUESTION })).toEqual({ kind: "fallback", reason: "invalid" });
+    expect(await aiSearch(db, model(raw('{"text":"  "}')).ai, ctx, { q: QUESTION })).toEqual({ kind: "fallback", reason: "invalid" });
+    expect(await aiSearch(db, model(answer({ text: " any ", person: "none" })).ai, ctx, { q: QUESTION })).toEqual({
+      kind: "fallback",
+      reason: "invalid",
+    });
+    // Each question still counted once against the cap.
+    const [usage] = await db.select().from(schema.aiUsage);
+    expect(usage.count).toBe(3);
   });
 
   it("refuses a missing question and never logs the question's text", async () => {
