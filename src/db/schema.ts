@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { sqliteTable, text, integer, uniqueIndex, index, check } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, uniqueIndex, index, check, primaryKey } from "drizzle-orm/sqlite-core";
 import type { WorkspaceBranding } from "../lib/branding";
 import type { LocationAddress } from "../lib/address";
 import { PRICE_DISPLAY_VALUES } from "../lib/queue-settings";
@@ -346,6 +346,16 @@ export const workspaceSettings = sqliteTable("workspace_settings", {
   ageRedDays: integer("age_red_days").notNull().default(4),
   // Totals and the Paid chip on the desk (src/lib/queue-settings.ts).
   priceDisplay: text("price_display", { enum: PRICE_DISPLAY_VALUES }).notNull().default("auto"),
+  // Migration 0013 (Wave 1c). The IANA time zone search dates ("today",
+  // "last month") are computed in (src/lib/date-range.ts).
+  timeZone: text("time_zone").notNull().default("America/New_York"),
+  // AI search on or off for this workspace (Settings > Search).
+  aiSearch: integer("ai_search", { mode: "boolean" }).notNull().default(true),
+  // When the search backfill (src/server/search/search-tick.ts) finished its
+  // first full pass over the workspace's cards; null while it runs.
+  searchIndexedAt: integer("search_indexed_at"),
+  // "<createdAt>~<orderId>" of the last card that pass indexed.
+  searchBackfillCursor: text("search_backfill_cursor"),
 });
 
 export const notificationPrefs = sqliteTable("notification_prefs", {
@@ -445,3 +455,63 @@ export const inviteSends = sqliteTable("invite_sends", {
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id),
   sentAt: integer("sent_at").notNull(),
 }, (t) => [index("invite_sends_window").on(t.workspaceId, t.sentAt)]);
+
+// One search row per card (design section 3), rewritten after every
+// snapshot write, edit and status change (src/server/search/index-orders.ts)
+// and repaired by the cron's search tick. haystack: lowercased text with
+// single spaces (order and draft numbers, requester name and email, request
+// fields, location name, item titles, SKUs, sizes, personalization values,
+// PO numbers). The other columns copy the card's filter fields. No foreign
+// keys: a card folded into another (drafts.ts mergeOrderIntoDraft) is
+// deleted, and its search row goes with the next index or sweep. No FTS5:
+// D1 cannot export a database that has virtual tables.
+export const orderSearch = sqliteTable("order_search", {
+  orderId: text("order_id").primaryKey(),
+  workspaceId: text("workspace_id").notNull(),
+  haystack: text("haystack").notNull(),
+  kind: text("kind", { enum: ["draft", "order"] }).notNull(),
+  statusKey: text("status_key").notNull(),
+  // 1 while the card's status is closed (statuses.closed), else 0.
+  closed: integer("closed").notNull(),
+  locationId: text("location_id"),
+  // people.id of the requester, or null.
+  requesterId: text("requester_id"),
+  createdAt: integer("created_at").notNull(),
+  statusSetAt: integer("status_set_at"),
+}, (t) => [
+  index("search_ws_closed_created").on(t.workspaceId, t.closed, t.createdAt),
+  index("search_ws_status").on(t.workspaceId, t.statusKey),
+  index("search_ws_location").on(t.workspaceId, t.locationId),
+  index("search_ws_requester").on(t.workspaceId, t.requesterId),
+]);
+
+// The workspace's requesters (design section 3, employee pages), built
+// from the cards' Shopify customers. The newest card a person is seen on
+// decides their name, email, company contact and home location.
+export const people = sqliteTable("people", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull(),
+  // The Shopify customer's legacy id.
+  shopifyCustomerId: text("shopify_customer_id").notNull(),
+  name: text("name"),
+  email: text("email"),
+  // The B2B company contact's legacy id, when a draft named one.
+  companyContactId: text("company_contact_id"),
+  // The Shopify location id (as orders.location_id holds it) of their
+  // newest card's company location.
+  locationId: text("location_id"),
+  firstSeenAt: integer("first_seen_at").notNull(),
+  lastSeenAt: integer("last_seen_at").notNull(),
+}, (t) => [uniqueIndex("people_customer_unique").on(t.workspaceId, t.shopifyCustomerId)]);
+
+// Daily counters per principal (a member's user id now; Wave 3 requesters
+// later) and kind ("search" for AI search questions). day is the UTC day,
+// YYYY-MM-DD, because the Workers AI allowance resets at 00:00 UTC. Rows
+// older than AI_USAGE_RETENTION_DAYS are pruned by the cron.
+export const aiUsage = sqliteTable("ai_usage", {
+  workspaceId: text("workspace_id").notNull(),
+  principalId: text("principal_id").notNull(),
+  day: text("day").notNull(),
+  kind: text("kind").notNull(),
+  count: integer("count").notNull().default(0),
+}, (t) => [primaryKey({ columns: [t.workspaceId, t.principalId, t.day, t.kind] })]);

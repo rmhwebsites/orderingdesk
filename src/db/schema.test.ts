@@ -16,11 +16,14 @@ import * as schema from "./schema";
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "../../drizzle");
 
 const APP_TABLES = [
+  "ai_usage",
   "events",
   "locations",
   "notification_prefs",
+  "order_search",
   "orders",
   "pending_invites",
+  "people",
   "platform_admins",
   "purchase_orders",
   "push_subscriptions",
@@ -275,8 +278,9 @@ describe("schema migrations", () => {
       (value): value is SQLiteTable => is(value, SQLiteTable),
     );
     // 17 app tables (invite_sends since 0005, locations since 0012) +
-    // user/session/account/verification + rate_limit.
-    expect(tables.length).toBe(22);
+    // user/session/account/verification + rate_limit + order_search, people
+    // and ai_usage (0013).
+    expect(tables.length).toBe(25);
     const orm = drizzle(db);
     for (const table of tables) {
       expect(() => orm.select().from(table).all()).not.toThrow();
@@ -331,6 +335,59 @@ describe("schema migrations", () => {
       "INSERT INTO orders (id, workspace_id, shopify_order_id, name, shopify, status_key, created_at, synced_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     ).run("o_loc", "ws1", "7101", "#7101", "{}", "new", 1, 1);
     expect(db.prepare("SELECT location_id FROM orders WHERE id = ?").get("o_loc")).toEqual({ location_id: null });
+  });
+
+  // Migration 0013 (Wave 1c): the search index, people, AI usage counters,
+  // and the workspace's time zone and search switches.
+  it("creates the search index and people tables with their indexes", () => {
+    const indexes = (table: string) =>
+      (db.prepare(`PRAGMA index_list("${table}")`).all() as { name: string; unique: number }[]).map((row) => [
+        row.name,
+        row.unique,
+      ]);
+    expect(indexes("order_search")).toEqual(
+      expect.arrayContaining([
+        ["search_ws_closed_created", 0],
+        ["search_ws_status", 0],
+        ["search_ws_location", 0],
+        ["search_ws_requester", 0],
+      ]),
+    );
+    expect(indexes("people")).toEqual(expect.arrayContaining([["people_customer_unique", 1]]));
+    const insertPerson = db.prepare(
+      "INSERT INTO people (id, workspace_id, shopify_customer_id, first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, ?)",
+    );
+    insertPerson.run("p1", "ws1", "77", 1, 1);
+    // Another workspace may know the same customer (no foreign key here).
+    insertPerson.run("p2", "ws_elsewhere", "77", 1, 1);
+    expect(() => insertPerson.run("p3", "ws1", "77", 2, 2)).toThrow(/UNIQUE/);
+    db.prepare(
+      "INSERT INTO order_search (order_id, workspace_id, haystack, kind, status_key, closed, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    ).run("o_search", "ws1", "#1001 | riley oakes", "order", "new", 0, 1);
+    expect(db.prepare("SELECT location_id, requester_id, status_set_at FROM order_search WHERE order_id = 'o_search'").get()).toEqual({
+      location_id: null,
+      requester_id: null,
+      status_set_at: null,
+    });
+  });
+
+  it("keeps one AI usage counter per workspace, principal, day and kind", () => {
+    const insert = db.prepare("INSERT INTO ai_usage (workspace_id, principal_id, day, kind) VALUES (?, ?, ?, ?)");
+    insert.run("ws1", "u1", "2026-10-05", "search");
+    expect(db.prepare("SELECT count FROM ai_usage WHERE principal_id = 'u1'").get()).toEqual({ count: 0 });
+    insert.run("ws1", "u1", "2026-10-06", "search");
+    insert.run("ws1", "u1", "2026-10-05", "read");
+    expect(() => insert.run("ws1", "u1", "2026-10-05", "search")).toThrow(/UNIQUE/);
+  });
+
+  it("gives workspace settings the search defaults", () => {
+    db.prepare("INSERT INTO workspaces (id, name, slug, created_by, created_at) VALUES ('ws_tz', 'TZ', 'tz', 'user1', 1)").run();
+    db.prepare("INSERT INTO workspace_settings (workspace_id) VALUES ('ws_tz')").run();
+    expect(
+      db
+        .prepare("SELECT time_zone, ai_search, search_indexed_at, search_backfill_cursor FROM workspace_settings WHERE workspace_id = 'ws_tz'")
+        .get(),
+    ).toEqual({ time_zone: "America/New_York", ai_search: 1, search_indexed_at: null, search_backfill_cursor: null });
   });
 });
 
@@ -486,6 +543,10 @@ describe("platform migration of existing rows", () => {
         age_amber_days: 2,
         age_red_days: 4,
         price_display: "auto",
+        time_zone: "America/New_York",
+        ai_search: 1,
+        search_indexed_at: null,
+        search_backfill_cursor: null,
       },
     ]);
   });
@@ -533,5 +594,25 @@ describe("platform migration of existing rows", () => {
       roster_tags: null,
       branding: null,
     });
+  });
+});
+
+describe("migration 0013 on rows in the 0012 shape", () => {
+  it("gives existing workspace settings the search defaults and changes nothing else", () => {
+    const old = new Database(":memory:");
+    old.pragma("foreign_keys = ON");
+    applyMigrations(old, (file) => file.slice(0, 4) <= "0012");
+    old.prepare("INSERT INTO workspaces (id, name, slug, created_by, created_at) VALUES ('ws1', 'Impact', 'impact', 'user1', 1)").run();
+    old.prepare("INSERT INTO workspace_settings (workspace_id, po_prefix) VALUES ('ws1', 'IMP')").run();
+    applyMigrations(old, (file) => file.slice(0, 4) === "0013");
+    expect(old.prepare("SELECT po_prefix, time_zone, ai_search, search_indexed_at FROM workspace_settings").get()).toEqual({
+      po_prefix: "IMP",
+      time_zone: "America/New_York",
+      ai_search: 1,
+      search_indexed_at: null,
+    });
+    expect(old.prepare("SELECT count(*) AS n FROM order_search").get()).toEqual({ n: 0 });
+    expect(old.prepare("SELECT count(*) AS n FROM people").get()).toEqual({ n: 0 });
+    old.close();
   });
 });
