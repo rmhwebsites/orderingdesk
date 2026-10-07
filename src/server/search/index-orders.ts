@@ -258,6 +258,25 @@ export async function safeIndexOrders(
   }
 }
 
+// The cards a sync pass touched: inserted, updated, moved by the Shopify
+// status rules, and both sides of a merge (the folded card is gone, so its
+// search row is dropped by indexOrders).
+export function syncedOrderIds(result: {
+  addedOrderIds: readonly string[];
+  updatedOrderIds: readonly string[];
+  statusChanges?: readonly { order: { id: string } }[];
+  mergedOrders?: readonly { fromId: string; toId: string }[];
+}): string[] {
+  return [
+    ...new Set([
+      ...result.addedOrderIds,
+      ...result.updatedOrderIds,
+      ...(result.statusChanges ?? []).map((change) => change.order.id),
+      ...(result.mergedOrders ?? []).flatMap((merge) => [merge.fromId, merge.toId]),
+    ]),
+  ];
+}
+
 // After a statuses save (Settings can flip a closed flag): every search row
 // takes its status's closed flag again, for the save's own batch. Only rows
 // whose flag differs are written. Raw identifiers on purpose: the

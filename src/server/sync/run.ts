@@ -10,6 +10,7 @@ import { companiesEnabled, draftsEnabled } from "../shopify/admin";
 import { fetchOrdersUpdatedSince } from "../shopify/client";
 import { accessTokenFor } from "../shopify/token";
 import { normalizeOrders, type NormalizedOrder } from "../shopify/normalize";
+import { safeIndexOrders, syncedOrderIds } from "../search/index-orders";
 import {
   evaluateShopifyTransitions,
   initialStatusFor,
@@ -416,7 +417,10 @@ async function recordSyncError(db: Db, workspaceId: string, text: string, now: n
 // order written onto it (attached, never added, so never announced). If
 // the lookup fails nothing is written (deferred); the cron sync lands the
 // order within 10 minutes.
-export async function upsertFetchedOrder(
+//
+// The search index for the card and anything the Shopify status rules or a
+// merge touched follows (upsertFetchedOrder below).
+async function upsertFetchedOrderPass(
   db: Db,
   workspaceId: string,
   order: NormalizedOrder,
@@ -461,7 +465,48 @@ export async function upsertFetchedOrder(
     : { kind: "updated", orderId, statusChanges };
 }
 
+type FetchedOrderOutcome = Awaited<ReturnType<typeof upsertFetchedOrderPass>>;
+
+// upsertFetchedOrderPass, then the search index for the card and anything
+// the Shopify status rules or a merge touched.
+export async function upsertFetchedOrder(
+  db: Db,
+  workspaceId: string,
+  order: NormalizedOrder,
+  now: number,
+  link?: ShopifyAccess,
+): Promise<FetchedOrderOutcome> {
+  const outcome = await upsertFetchedOrderPass(db, workspaceId, order, now, link);
+  if (outcome.kind === "added" || outcome.kind === "updated" || outcome.kind === "attached") {
+    await safeIndexOrders(
+      db,
+      workspaceId,
+      syncedOrderIds({
+        addedOrderIds: [outcome.orderId],
+        updatedOrderIds: [],
+        statusChanges: outcome.statusChanges,
+        mergedOrders: outcome.kind === "attached" ? outcome.mergedOrders : [],
+      }),
+    );
+  }
+  return outcome;
+}
+
+// One sync pass, then the search index for every card it touched, so words
+// find new and changed cards at once. Indexing never fails the run
+// (safeIndexOrders logs); the cron's search tick repairs what it missed.
 export async function runSync(
+  db: Db,
+  env: CloudflareEnv,
+  workspaceId: string,
+  opts?: SyncOptions,
+): Promise<SyncResult> {
+  const result = await runSyncPass(db, env, workspaceId, opts);
+  await safeIndexOrders(db, workspaceId, syncedOrderIds(result));
+  return result;
+}
+
+async function runSyncPass(
   db: Db,
   env: CloudflareEnv,
   workspaceId: string,

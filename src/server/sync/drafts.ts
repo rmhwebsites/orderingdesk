@@ -38,6 +38,7 @@ import { eventView, type EventView } from "../desk/shapes";
 import { failureText, fetchDraftLinks, fetchOrderNode } from "../shopify/admin";
 import { fetchDraftsUpdatedSince } from "../shopify/client";
 import { normalizeDrafts, normalizeOrders, snapshotKind, type NormalizedDraft, type NormalizedOrder } from "../shopify/normalize";
+import { safeIndexOrders, syncedOrderIds } from "../search/index-orders";
 import {
   evaluateShopifyTransitions,
   initialStatusFor,
@@ -1101,7 +1102,10 @@ export async function runDraftPhase(ctx: DraftPhaseContext): Promise<DraftPhaseR
 // rules to a change that landed. `now` must be taken before the draft was
 // fetched, like a run's now. silent: insert a new card without announcing
 // it (a draft that was already waiting before the first draft sync).
-export async function upsertFetchedDraft(
+//
+// The search index for the card and anything the Shopify status rules or a
+// merge touched follows (upsertFetchedDraft below).
+async function upsertFetchedDraftPass(
   db: Db,
   workspaceId: string,
   draft: NormalizedDraft,
@@ -1164,4 +1168,31 @@ export async function upsertFetchedDraft(
     case "none":
       return { kind: "unchanged" };
   }
+}
+
+type FetchedDraftOutcome = Awaited<ReturnType<typeof upsertFetchedDraftPass>>;
+
+// upsertFetchedDraftPass, then the search index for the card and anything
+// the Shopify status rules or a merge touched.
+export async function upsertFetchedDraft(
+  db: Db,
+  workspaceId: string,
+  draft: NormalizedDraft,
+  now: number,
+  opts?: { silent?: boolean },
+): Promise<FetchedDraftOutcome> {
+  const outcome = await upsertFetchedDraftPass(db, workspaceId, draft, now, opts);
+  if (outcome.kind !== "unchanged") {
+    await safeIndexOrders(
+      db,
+      workspaceId,
+      syncedOrderIds({
+        addedOrderIds: [outcome.orderId],
+        updatedOrderIds: [],
+        statusChanges: outcome.kind === "added" ? [] : outcome.statusChanges,
+        mergedOrders: outcome.kind === "attached" && outcome.merged ? [outcome.merged] : [],
+      }),
+    );
+  }
+  return outcome;
 }

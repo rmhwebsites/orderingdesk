@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drizzle } from "drizzle-orm/better-sqlite3";
-import { and, eq, inArray, lt } from "drizzle-orm";
+import { and, count, eq, inArray, lt } from "drizzle-orm";
 import type { Db } from "../../db";
 import * as schema from "../../db/schema";
 import { encryptSecret } from "../crypto";
@@ -2009,7 +2009,7 @@ describe("runSync", () => {
     expect((await connectionOf(db, WS)).lastSyncAt).toBe(T + 1200000);
   });
 
-  it("runs a whole cursor chain on the schema as of migration 0012", async () => {
+  it("runs a whole cursor chain on the schema as of migration 0013", async () => {
     // The sync engine reads and writes whole store_connections rows (and
     // writes events.source), so a column it needs from a migration that has
     // not been applied yet fails every run. This pins that the engine needs
@@ -2028,7 +2028,11 @@ describe("runSync", () => {
     // and the whole-row store_connections read names locations_synced_at.
     // DEPLOY NOTE, run `npm run db:migrate:remote` (applies 0012) BEFORE the
     // code that needs it reaches production.
-    const { db, env } = openDb({ through: "0012" });
+    // Then by search (0013: runSync indexes order_search and people after
+    // every pass; on an older schema the index silently goes stale). DEPLOY
+    // NOTE, run `npm run db:migrate:remote` (applies 0013) BEFORE the code
+    // that needs it reaches production.
+    const { db, env } = openDb({ through: "0013" });
     await seedWorkspace(db, WS);
     const T = Date.parse("2026-09-25T12:00:00.000Z");
     const previousSync = T - 3600000;
@@ -2054,6 +2058,8 @@ describe("runSync", () => {
     expect(afterComplete.syncCursor).toBeNull();
     expect(afterComplete.lastSyncAt).toBe(T + 700 * 60000);
     expect(await ordersIn(db, WS)).toHaveLength(620);
+    const searchRows = await db.select({ n: count() }).from(schema.orderSearch);
+    expect(Number(searchRows[0].n)).toBe(620);
   });
 
   it("recovers when Shopify rejects a persisted cursor", async () => {
@@ -2164,8 +2170,12 @@ describe("runSync", () => {
       now: () => NOW,
     });
     expect(result.added).toBe(1);
-    expect(batched).toHaveLength(1);
+    // The insert pair, then the search index's own batch (Wave 1c): the
+    // card's one search row (the snapshot names no customer, so no people
+    // upsert).
+    expect(batched).toHaveLength(2);
     expect(batched[0]).toHaveLength(2);
+    expect(batched[1]).toHaveLength(1);
     expect(await ordersIn(db, WS)).toHaveLength(1);
     expect(await eventsIn(db, WS, "order_new")).toHaveLength(1);
   });

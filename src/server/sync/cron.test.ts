@@ -23,6 +23,7 @@ vi.mock("../shopify/roster-sync", () => ({
 vi.mock("./locations", () => ({
   syncLocationsIfDue: vi.fn(async () => ({ kind: "skipped", reason: "no-companies-scope" })),
 }));
+vi.mock("../search/index-orders", () => ({ safeIndexOrders: vi.fn(async () => undefined) }));
 
 const { runSync } = await import("./run");
 const { runBackfillTick } = await import("./backfill");
@@ -30,6 +31,7 @@ const { broadcastSync, broadcastMerges, broadcastImported, kickUsers } = await i
 const { syncRoster } = await import("../shopify/roster-sync");
 const { notifyNewOrders } = await import("../notify");
 const { syncLocationsIfDue } = await import("./locations");
+const { safeIndexOrders } = await import("../search/index-orders");
 const { runAllSyncs, WEBHOOK_DELIVERY_RETENTION_MS } = await import("./cron");
 
 const env = { ENCRYPTION_KEY: "unused" } as CloudflareEnv;
@@ -62,6 +64,7 @@ beforeEach(() => {
   vi.mocked(runBackfillTick).mockClear();
   vi.mocked(broadcastImported).mockClear();
   vi.mocked(syncLocationsIfDue).mockClear();
+  vi.mocked(safeIndexOrders).mockClear();
   vi.spyOn(console, "log").mockImplementation(() => undefined);
 });
 
@@ -220,5 +223,17 @@ describe("runAllSyncs company locations", () => {
     });
     await runAllSyncs(db, env);
     expect(vi.mocked(syncLocationsIfDue).mock.calls.map((call) => call[2]).sort()).toEqual(["ws_a", "ws_b"]);
+  });
+});
+
+describe("runAllSyncs and the search index", () => {
+  it("indexes the orders an order history import tick inserted", async () => {
+    const db = await setup();
+    vi.mocked(runSync).mockResolvedValue(result());
+    vi.mocked(runBackfillTick).mockImplementation(async (_db, _env, workspaceId) =>
+      workspaceId === "ws_a" ? { imported: 2, importedOrderIds: ["i1", "i2"] } : { imported: 0, importedOrderIds: [], skipped: "idle" },
+    );
+    await runAllSyncs(db, env);
+    expect(vi.mocked(safeIndexOrders).mock.calls.map((call) => [call[1], call[2]])).toEqual([["ws_a", ["i1", "i2"]]]);
   });
 });

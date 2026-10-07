@@ -3,6 +3,7 @@ import { getDbFromEnv, type Db } from "../../db";
 import { storeConnections, webhookDeliveries } from "../../db/schema";
 import { broadcastImported, broadcastMerges, broadcastSync, kickUsers } from "../broadcast";
 import { notifyNewOrders } from "../notify";
+import { safeIndexOrders } from "../search/index-orders";
 import { shareShopifyMoves } from "../shopify/fanout";
 import { syncRoster } from "../shopify/roster-sync";
 import { runBackfillTick } from "./backfill";
@@ -95,6 +96,10 @@ export async function runAllSyncs(db: Db, env: CloudflareEnv, opts?: SyncOptions
     // nobody is notified, nothing goes back to Shopify.
     try {
       const imported = await runBackfillTick(db, env, workspaceId, opts);
+      // Imported orders are old, but words must find them too.
+      if (imported.importedOrderIds.length > 0) {
+        await safeIndexOrders(db, workspaceId, imported.importedOrderIds);
+      }
       if (imported.skipped !== "idle") {
         await broadcastImported(env, workspaceId, imported.importedOrderIds);
         console.log(
