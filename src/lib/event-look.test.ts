@@ -29,4 +29,19 @@ describe("eventLook", () => {
     // A type added later still gets a neutral look.
     expect(eventLook({ type: "something_new", meta: null, source: "app" })).toEqual({ glyph: "status", tone: "slate" });
   });
+
+  // Comprehensive design section 2: an edited request is a neutral change;
+  // a cancelled order (from the desk or in Shopify) reads red.
+  it("gives an edit a neutral look and a cancellation a red one", () => {
+    expect(eventLook({ type: "draft_edited", meta: null, source: "app" })).toEqual({ glyph: "edit", tone: "slate" });
+    expect(eventLook({ type: "order_cancelled", meta: { confirmed: true }, source: "app" })).toEqual({ glyph: "cancelled", tone: "red" });
+    expect(eventLook({ type: "status", meta: { from: "approved", to: "cancelled", action: "cancel" }, source: "app" })).toEqual({
+      glyph: "cancelled",
+      tone: "red",
+    });
+    expect(eventLook({ type: "status", meta: { from: "shipped", to: "cancelled", reason: "cancelled" }, source: "shopify" })).toEqual({
+      glyph: "cancelled",
+      tone: "red",
+    });
+  });
 });

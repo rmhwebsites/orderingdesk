@@ -273,3 +273,29 @@ export async function seedOrder(
     syncedAt: opts.syncedAt ?? 2000,
   });
 }
+
+// A synced company location (src/server/sync/locations.ts), active unless
+// told otherwise. Ids are Shopify legacy ids, like the sync writes them.
+export async function seedLocation(
+  db: Db,
+  workspaceId: string,
+  opts: {
+    shopifyLocationId: string;
+    name: string;
+    companyId?: string | null;
+    address?: import("@/lib/address").LocationAddress | null;
+    active?: boolean;
+    updatedAt?: number;
+  },
+) {
+  await db.insert(schema.locations).values({
+    id: `${workspaceId}_loc_${opts.shopifyLocationId}`,
+    workspaceId,
+    shopifyLocationId: opts.shopifyLocationId,
+    companyId: opts.companyId ?? "7",
+    name: opts.name,
+    address: opts.address ?? null,
+    active: opts.active ?? true,
+    updatedAt: opts.updatedAt ?? 1,
+  });
+}

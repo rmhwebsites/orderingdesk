@@ -2009,7 +2009,7 @@ describe("runSync", () => {
     expect((await connectionOf(db, WS)).lastSyncAt).toBe(T + 1200000);
   });
 
-  it("runs a whole cursor chain on the schema as of migration 0011", async () => {
+  it("runs a whole cursor chain on the schema as of migration 0012", async () => {
     // The sync engine reads and writes whole store_connections rows (and
     // writes events.source), so a column it needs from a migration that has
     // not been applied yet fails every run. This pins that the engine needs
@@ -2024,7 +2024,10 @@ describe("runSync", () => {
     // neither). DEPLOY NOTE, run `npm run db:migrate:remote` (applies 0011)
     // BEFORE the code that needs it reaches production. Raise the number
     // again only together with a deploy note like this one.
-    const { db, env } = openDb({ through: "0011" });
+    // Raised to 0012 by Wave 1b: every order insert names orders.location_id.
+    // DEPLOY NOTE, run `npm run db:migrate:remote` (applies 0012) BEFORE the
+    // code that needs it reaches production.
+    const { db, env } = openDb({ through: "0012" });
     await seedWorkspace(db, WS);
     const T = Date.parse("2026-09-25T12:00:00.000Z");
     const previousSync = T - 3600000;

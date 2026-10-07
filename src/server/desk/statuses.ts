@@ -32,8 +32,9 @@ export { STATUS_LABEL_MAX };
 // The Shopify states a status may mirror (platform amendment section 4),
 // and the draft order outcomes a status may receive: draft_completed is
 // where Approve (or completing the draft in Shopify) puts a request,
-// draft_rejected where Reject puts it (draft orders spec section 8.1). One
-// status per link.
+// draft_rejected where Reject puts it (draft orders spec section 8.1).
+// cancelled is where Cancel order and Shopify's own cancellations put an
+// order. One status per link.
 export const SHOPIFY_LINKS = SHOPIFY_LINK_VALUES;
 export type ShopifyLink = (typeof SHOPIFY_LINKS)[number];
 const LINK_NAMES: Record<ShopifyLink, string> = {
@@ -41,6 +42,7 @@ const LINK_NAMES: Record<ShopifyLink, string> = {
   delivered: "Shopify's delivered state",
   draft_completed: "Draft approved",
   draft_rejected: "Draft rejected",
+  cancelled: "Shopify's cancelled state",
 };
 
 // Statuses whose cards are finished when they are new: a delivered order
@@ -108,7 +110,7 @@ function parseEntries(body: unknown): Entry[] | string {
     } else if (typeof raw.shopifyLink === "string" && (SHOPIFY_LINKS as readonly string[]).includes(raw.shopifyLink)) {
       shopifyLink = raw.shopifyLink as ShopifyLink;
     } else {
-      return `${position}: the Shopify link must be fulfilled, delivered, draft completed, draft rejected or none`;
+      return `${position}: the Shopify link must be fulfilled, delivered, draft completed, draft rejected, cancelled or none`;
     }
     let closed: boolean | undefined;
     if (raw.closed !== undefined && raw.closed !== null) {

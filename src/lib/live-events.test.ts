@@ -54,7 +54,7 @@ describe("parseLiveEvent", () => {
 
   // Draft orders spec section 11.6 and 11.7.
   it("accepts request entries and a card folded into its request", () => {
-    for (const type of ["draft_completed", "draft_deleted"]) {
+    for (const type of ["draft_completed", "draft_deleted", "draft_edited", "order_cancelled"]) {
       const activity = { kind: "order.activity", event: { ...event, type, actorId: null, text: "Order #1234 created from draft #D12" } };
       expect(parseLiveEvent(JSON.stringify(activity))).toEqual(activity);
     }

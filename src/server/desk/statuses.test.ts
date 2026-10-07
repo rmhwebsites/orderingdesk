@@ -336,10 +336,10 @@ describe("replaceStatuses", () => {
       entry("Done", { shopifyLink: "draft_completed" }),
     ]);
     expect(twice).toEqual({ kind: "invalid", error: "Only one status can follow Draft approved; Approved and Done both do" });
-    const unknown = await replaceStatuses(db, WS, [entry("Bad link", { shopifyLink: "cancelled" })]);
+    const unknown = await replaceStatuses(db, WS, [entry("Bad link", { shopifyLink: "refunded" })]);
     expect(unknown).toEqual({
       kind: "invalid",
-      error: "Status 1: the Shopify link must be fulfilled, delivered, draft completed, draft rejected or none",
+      error: "Status 1: the Shopify link must be fulfilled, delivered, draft completed, draft rejected, cancelled or none",
     });
   });
 
@@ -347,7 +347,7 @@ describe("replaceStatuses", () => {
     const { db } = await setup();
     const before = await statusRows(db);
     for (const body of [
-      [entry("Bad link", { shopifyLink: "cancelled" })],
+      [entry("Bad link", { shopifyLink: "refunded" })],
       [entry("Bad link", { shopifyLink: "Fulfilled" })],
       [entry("Bad link", { shopifyLink: 1 })],
       [
@@ -361,6 +361,31 @@ describe("replaceStatuses", () => {
       expect(result.kind, JSON.stringify(body).slice(0, 80)).toBe("invalid");
     }
     expect(await statusRows(db)).toEqual(before);
+  });
+
+  // Comprehensive design section 2: Cancel order and Shopify's own
+  // cancellations put an order in the status that follows Shopify's
+  // cancelled state. One status per link, like the others.
+  it("lets one status follow Shopify's cancelled state", async () => {
+    const { db } = await setup();
+    const result = await replaceStatuses(db, WS, [
+      entry("New", { key: "new", color: "lime" }),
+      entry("Cancelled", { color: "slate", shopifyLink: "cancelled" }),
+    ]);
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") return;
+    expect(result.statuses.map((s) => [s.key, s.shopifyLink])).toEqual([
+      ["new", null],
+      ["cancelled", "cancelled"],
+    ]);
+    const twice = await replaceStatuses(db, WS, [
+      entry("Cancelled", { key: "cancelled", color: "slate", shopifyLink: "cancelled" }),
+      entry("Void", { shopifyLink: "cancelled" }),
+    ]);
+    expect(twice).toEqual({
+      kind: "invalid",
+      error: "Only one status can follow Shopify's cancelled state; Cancelled and Void both do",
+    });
   });
 
   // Each status is written to its Shopify order as the tag

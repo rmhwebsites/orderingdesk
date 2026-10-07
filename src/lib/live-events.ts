@@ -54,6 +54,8 @@ const EVENT_TYPES = new Set([
   "shopify_write",
   "draft_completed",
   "draft_deleted",
+  "draft_edited",
+  "order_cancelled",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {

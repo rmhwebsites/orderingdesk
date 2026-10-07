@@ -375,6 +375,9 @@ describe("getOrderDetail", () => {
         draftName: null,
         draftSnapshot: null,
         draftDeletedAt: null,
+        // The company location (migration 0012): null until a snapshot
+        // names one.
+        locationId: null,
       },
       itemsTruncated: false,
     });

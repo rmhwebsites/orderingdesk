@@ -17,6 +17,7 @@ const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "../../drizz
 
 const APP_TABLES = [
   "events",
+  "locations",
   "notification_prefs",
   "orders",
   "pending_invites",
@@ -95,7 +96,7 @@ describe("schema migrations", () => {
     expect(() => insert.run("o2", "ws1", "1001", "#1001 dup", "{}", "new", 2, 2)).toThrow(/UNIQUE/);
   });
 
-  it("creates all 15 app tables", () => {
+  it("creates every app table", () => {
     const rows = db
       .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
       .all();
@@ -273,9 +274,9 @@ describe("schema migrations", () => {
     const tables = (Object.values(schema) as unknown[]).filter(
       (value): value is SQLiteTable => is(value, SQLiteTable),
     );
-    // 16 app tables (invite_sends since 0005) + user/session/account/
-    // verification + rate_limit.
-    expect(tables.length).toBe(21);
+    // 17 app tables (invite_sends since 0005, locations since 0012) +
+    // user/session/account/verification + rate_limit.
+    expect(tables.length).toBe(22);
     const orm = drizzle(db);
     for (const table of tables) {
       expect(() => orm.select().from(table).all()).not.toThrow();
@@ -308,6 +309,24 @@ describe("schema migrations", () => {
         .prepare("SELECT draft_last_sync_at, draft_checked_at, draft_sync_cursor, canonical_shop_domain FROM store_connections WHERE workspace_id = ?")
         .get("ws1"),
     ).toEqual({ draft_last_sync_at: 0, draft_checked_at: 0, draft_sync_cursor: null, canonical_shop_domain: null });
+  });
+
+  // Migration 0012 (locations, editing requests, cancel): one row per
+  // Shopify company location and workspace, active unless Shopify dropped
+  // it, and cards that do not know their location yet.
+  it("stores company locations once per workspace and starts cards without a location", () => {
+    const insert = db.prepare(
+      "INSERT INTO locations (id, workspace_id, shopify_location_id, company_id, name, address, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    );
+    insert.run("loc1", "ws1", "101", "7", "Buford HQ", JSON.stringify({ address1: "100 Example Way" }), 1);
+    insert.run("loc2", "ws1", "102", "7", "Mableton", null, 1);
+    expect(() => insert.run("loc3", "ws1", "101", "7", "Buford again", null, 2)).toThrow(/UNIQUE/);
+    expect(() => insert.run("loc4", "ws_missing", "103", null, "Nowhere", null, 2)).toThrow(/FOREIGN KEY/);
+    expect(db.prepare("SELECT active, company_id FROM locations WHERE id = ?").get("loc1")).toEqual({ active: 1, company_id: "7" });
+    db.prepare(
+      "INSERT INTO orders (id, workspace_id, shopify_order_id, name, shopify, status_key, created_at, synced_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run("o_loc", "ws1", "7101", "#7101", "{}", "new", 1, 1);
+    expect(db.prepare("SELECT location_id FROM orders WHERE id = ?").get("o_loc")).toEqual({ location_id: null });
   });
 });
 

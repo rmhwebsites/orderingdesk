@@ -17,7 +17,9 @@ export type EventGlyph =
   | "warning"
   | "shopify"
   | "completed"
-  | "deleted";
+  | "deleted"
+  | "edit"
+  | "cancelled";
 
 export type EventTone = "slate" | "green" | "red" | "amber" | "blue";
 
@@ -48,12 +50,21 @@ export function eventLook(event: { type: string; meta?: unknown; source?: string
       return { glyph: "completed", tone: "green" };
     case "draft_deleted":
       return { glyph: "deleted", tone: "amber" };
+    case "draft_edited":
+      return { glyph: "edit", tone: "slate" };
+    case "order_cancelled":
+      return { glyph: "cancelled", tone: "red" };
     case "status":
       if (meta.action === "approve") {
         return { glyph: "approve", tone: "green" };
       }
       if (meta.action === "reject") {
         return { glyph: "reject", tone: "red" };
+      }
+      // Cancel order from the desk, or Shopify's own cancellation
+      // (comprehensive design section 2).
+      if (meta.action === "cancel" || (event.source === "shopify" && meta.reason === "cancelled")) {
+        return { glyph: "cancelled", tone: "red" };
       }
       if (event.source === "shopify" && (meta.reason === "completed" || meta.completed === true)) {
         return { glyph: "completed", tone: "green" };

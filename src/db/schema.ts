@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import { sqliteTable, text, integer, uniqueIndex, index, check } from "drizzle-orm/sqlite-core";
 import type { WorkspaceBranding } from "../lib/branding";
+import type { LocationAddress } from "../lib/address";
 import { PRICE_DISPLAY_VALUES } from "../lib/queue-settings";
 import { user } from "./auth-schema";
 
@@ -127,7 +128,7 @@ export const storeConnections = sqliteTable("store_connections", {
 
 // The Shopify states and draft order outcomes a status can follow (see
 // statuses.shopify_link).
-export const SHOPIFY_LINK_VALUES = ["fulfilled", "delivered", "draft_completed", "draft_rejected"] as const;
+export const SHOPIFY_LINK_VALUES = ["fulfilled", "delivered", "draft_completed", "draft_rejected", "cancelled"] as const;
 export type ShopifyLinkValue = (typeof SHOPIFY_LINK_VALUES)[number];
 
 export const statuses = sqliteTable("statuses", {
@@ -143,7 +144,9 @@ export const statuses = sqliteTable("statuses", {
   // reporting the order fulfilled or delivered moves it to the linked status.
   // draft_completed: where Approve puts a request and where a request goes
   // when its draft is completed in Shopify. draft_rejected: where Reject
-  // puts a request. Plain text column (no CHECK since 0004).
+  // puts a request. cancelled: where Cancel order and Shopify's own
+  // cancellations put an order (comprehensive design section 2). Plain
+  // text column (no CHECK since 0004).
   shopifyLink: text("shopify_link", { enum: SHOPIFY_LINK_VALUES }),
   // Closed statuses are finished work: their cards leave the Open view and
   // show their age without a warning color (comprehensive desk design
@@ -190,6 +193,12 @@ export const orders = sqliteTable("orders", {
   // When Shopify reported the open draft gone (delete webhook, a null
   // re-fetch, or the hourly check). The card is kept.
   draftDeletedAt: integer("draft_deleted_at"),
+  // The Shopify B2B company location the card ships to (comprehensive
+  // design section 2): the legacy id of the purchasing entity's location,
+  // the same value as locations.shopify_location_id (join on workspace and
+  // that id; no foreign key, the location may not be synced yet). Written
+  // by every snapshot writer; null for a card without a company location.
+  locationId: text("location_id"),
 }, (t) => [
   // SQLite UNIQUE allows many NULLs: open drafts never collide here, and
   // plain orders never collide in order_draft_unique.
@@ -203,6 +212,22 @@ export const orders = sqliteTable("orders", {
   index("order_open_drafts").on(t.workspaceId, t.createdAt).where(sql`shopify_order_id is null`),
   check("order_source", sql`shopify_order_id is not null or shopify_draft_id is not null`),
 ]);
+
+// The workspace's Shopify B2B company locations (comprehensive design
+// section 2), synced by src/server/sync/locations.ts. shopify_location_id
+// and company_id are Shopify legacy ids. active = false: Shopify no longer
+// lists it (kept, so cards still name it). updated_at: when the desk last
+// confirmed the row against Shopify (the daily cron pass reads it).
+export const locations = sqliteTable("locations", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull().references(() => workspaces.id),
+  shopifyLocationId: text("shopify_location_id").notNull(),
+  companyId: text("company_id"),
+  name: text("name").notNull(),
+  address: text("address", { mode: "json" }).$type<LocationAddress>(),
+  active: integer("active", { mode: "boolean" }).notNull().default(true),
+  updatedAt: integer("updated_at").notNull(),
+}, (t) => [uniqueIndex("location_shopify_unique").on(t.workspaceId, t.shopifyLocationId)]);
 
 export const events = sqliteTable("events", {
   id: text("id").primaryKey(),
@@ -226,6 +251,10 @@ export const events = sqliteTable("events", {
       // Shopify no longer has (draft orders spec sections 6.1 and 6.3).
       "draft_completed",
       "draft_deleted",
+      // A manager edited a request before approval, and an order cancelled
+      // from the desk (comprehensive design section 2).
+      "draft_edited",
+      "order_cancelled",
     ],
   }).notNull(),
   text: text("text").notNull(),

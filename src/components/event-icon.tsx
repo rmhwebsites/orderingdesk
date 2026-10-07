@@ -5,6 +5,8 @@ import { CheckCircleIcon } from "@phosphor-icons/react/CheckCircle";
 import { ClipboardTextIcon } from "@phosphor-icons/react/ClipboardText";
 import { FileTextIcon } from "@phosphor-icons/react/FileText";
 import { PaperPlaneTiltIcon } from "@phosphor-icons/react/PaperPlaneTilt";
+import { PencilSimpleIcon } from "@phosphor-icons/react/PencilSimple";
+import { ProhibitIcon } from "@phosphor-icons/react/Prohibit";
 import { ShoppingBagIcon } from "@phosphor-icons/react/ShoppingBag";
 import { StorefrontIcon } from "@phosphor-icons/react/Storefront";
 import { TagIcon } from "@phosphor-icons/react/Tag";
@@ -26,6 +28,8 @@ const GLYPHS: Record<EventGlyph, typeof ChatTextIcon> = {
   shopify: StorefrontIcon,
   completed: CheckCircleIcon,
   deleted: TrashIcon,
+  edit: PencilSimpleIcon,
+  cancelled: ProhibitIcon,
 };
 
 // An activity entry's icon on its tone (src/lib/event-look.ts), the same in
