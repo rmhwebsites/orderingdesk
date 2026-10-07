@@ -5,7 +5,7 @@
 // also removes the KV grant, best effort (KV deletes take up to a minute to
 // spread; the D1 check does not wait for them). Relative imports only.
 
-import { and, eq, gt, isNull, lt, or, type SQL } from "drizzle-orm";
+import { and, eq, gt, inArray, isNotNull, isNull, lt, or, type SQL } from "drizzle-orm";
 import type { OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import type { Db } from "../db";
 import { applyBatch } from "../db/batch";
@@ -143,4 +143,19 @@ export async function revokeInKv(helpers: GrantHelpers, rows: Pick<GrantRow, "id
     }
   }
   return revoked;
+}
+
+// Revoked connections whose KV grant the cron has not revoked yet.
+export async function pendingKvRevokes(db: Db, limit: number): Promise<Pick<GrantRow, "id" | "workspaceId" | "userId">[]> {
+  return db
+    .select({ id: aiGrants.id, workspaceId: aiGrants.workspaceId, userId: aiGrants.userId })
+    .from(aiGrants)
+    .where(and(isNotNull(aiGrants.revokedAt), isNull(aiGrants.kvRevokedAt)))
+    .limit(limit);
+}
+
+export async function markKvRevoked(db: Db, ids: string[], now: number): Promise<void> {
+  if (ids.length > 0) {
+    await db.update(aiGrants).set({ kvRevokedAt: now }).where(inArray(aiGrants.id, ids));
+  }
 }

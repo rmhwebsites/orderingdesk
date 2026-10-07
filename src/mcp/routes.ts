@@ -13,6 +13,7 @@ import { hostOrigin, type HostResolution } from "../server/host";
 import { AUTH_SERVER_METADATA_PATH, AUTHORIZE_PATH, MCP_PATH, OAUTH_PREFIX, PROTECTED_RESOURCE_PATH } from "./constants";
 import { mcpApiHandler } from "./handler";
 import { authorize, type AuthorizeHelpers } from "./oauth/authorize";
+import { notifyNewConnection } from "./oauth/notify-connection";
 import { providerFor, type ProviderHandlers } from "./oauth/provider";
 
 export function isMcpRoute(pathname: string): boolean {
@@ -45,6 +46,7 @@ const authorizePage = {
           clientLabel: message.clientLabel,
           workspace: message.workspaceId ? await loadMailWorkspace(db, message.workspaceId) : null,
         }),
+      notifyConnection: (notice) => notifyNewConnection(db, env, notice),
     });
   },
 };

@@ -1,6 +1,8 @@
 import { lt, ne } from "drizzle-orm";
 import { getDbFromEnv, type Db } from "../../db";
 import { storeConnections, webhookDeliveries } from "../../db/schema";
+import { oauthHelpers } from "../../mcp/oauth/provider";
+import { pruneMcpTables, sweepKvRevokes } from "../../mcp/prune";
 import { broadcastImported, broadcastMerges, broadcastSync, kickUsers } from "../broadcast";
 import { notifyNewOrders } from "../notify";
 import { safeIndexOrders } from "../search/index-orders";
@@ -135,8 +137,19 @@ export async function runAllSyncs(db: Db, env: CloudflareEnv, opts?: SyncOptions
     const now = opts?.now?.() ?? Date.now();
     await db.delete(webhookDeliveries).where(lt(webhookDeliveries.receivedAt, now - WEBHOOK_DELIVERY_RETENTION_MS));
     await pruneAiUsage(db, now);
+    // Prepared actions, sign-in codes and audit rows (src/mcp/prune.ts).
+    await pruneMcpTables(db, now);
   } catch (e) {
     console.log("[sync] " + JSON.stringify({ prune: e instanceof Error ? e.name : "failed" }));
+  }
+
+  // Revoked AI connections: their OAuth grants in KV go too (the D1 revoke
+  // already refuses every call). Its own try, so a failed prune never
+  // skips it.
+  try {
+    await sweepKvRevokes(db, () => oauthHelpers(env), opts?.now?.() ?? Date.now());
+  } catch (e) {
+    console.log("[oauth] " + JSON.stringify({ kvSweep: e instanceof Error ? e.name : "failed" }));
   }
 }
 

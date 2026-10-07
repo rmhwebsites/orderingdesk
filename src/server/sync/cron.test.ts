@@ -27,6 +27,7 @@ vi.mock("../search/index-orders", () => ({ safeIndexOrders: vi.fn(async () => un
 vi.mock("../search/search-tick", () => ({
   runSearchTick: vi.fn(async () => ({ backfilled: 0, repaired: 0, removed: 0 })),
 }));
+vi.mock("../../mcp/prune", () => ({ pruneMcpTables: vi.fn(async () => undefined), sweepKvRevokes: vi.fn(async () => 0) }));
 
 const { runSync } = await import("./run");
 const { runBackfillTick } = await import("./backfill");
@@ -36,6 +37,7 @@ const { notifyNewOrders } = await import("../notify");
 const { syncLocationsIfDue } = await import("./locations");
 const { safeIndexOrders } = await import("../search/index-orders");
 const { runSearchTick } = await import("../search/search-tick");
+const { pruneMcpTables, sweepKvRevokes } = await import("../../mcp/prune");
 const { runAllSyncs, WEBHOOK_DELIVERY_RETENTION_MS } = await import("./cron");
 
 const env = { ENCRYPTION_KEY: "unused" } as CloudflareEnv;
@@ -70,6 +72,8 @@ beforeEach(() => {
   vi.mocked(syncLocationsIfDue).mockClear();
   vi.mocked(safeIndexOrders).mockClear();
   vi.mocked(runSearchTick).mockClear();
+  vi.mocked(pruneMcpTables).mockClear();
+  vi.mocked(sweepKvRevokes).mockClear();
   vi.spyOn(console, "log").mockImplementation(() => undefined);
 });
 
@@ -263,5 +267,20 @@ describe("runAllSyncs housekeeping", () => {
     await db.insert(schema.aiUsage).values({ workspaceId: "ws_a", principalId: "u1", day: "2020-01-01", kind: "search", count: 1 });
     await runAllSyncs(db, env);
     expect(await db.select().from(schema.aiUsage)).toEqual([]);
+  });
+});
+
+// Wave 2: the MCP tables are pruned and KV revokes swept once per run; a
+// failing prune stops neither the sweep nor the run.
+describe("runAllSyncs MCP upkeep", () => {
+  it("prunes the MCP tables and sweeps KV revokes with the run's time", async () => {
+    const db = await setup();
+    vi.mocked(runSync).mockResolvedValue(result());
+    await runAllSyncs(db, env, { now: () => 1_000_000 });
+    expect(vi.mocked(pruneMcpTables)).toHaveBeenCalledWith(db, 1_000_000);
+    expect(vi.mocked(sweepKvRevokes)).toHaveBeenCalledWith(db, expect.any(Function), 1_000_000);
+    vi.mocked(pruneMcpTables).mockRejectedValueOnce(new Error("d1 busy"));
+    await runAllSyncs(db, env, { now: () => 2_000_000 });
+    expect(vi.mocked(sweepKvRevokes)).toHaveBeenLastCalledWith(db, expect.any(Function), 2_000_000);
   });
 });
