@@ -65,6 +65,11 @@ describe("parseLiveEvent", () => {
     expect(parseLiveEvent(JSON.stringify({ kind: "order.merged", fromId: "", toId: "d1" }))).toBeNull();
   });
 
+  it("passes activity entries for a request placed through an AI app", () => {
+    const event = { id: "e9", orderId: "d40", type: "request_placed", text: "Placed this request", actorId: "u_casey", createdAt: 1, meta: null, source: "ai" };
+    expect(parseLiveEvent(JSON.stringify({ kind: "order.activity", event }))).toEqual({ kind: "order.activity", event });
+  });
+
   // The order history import's refresh: a count, never ids to announce.
   it("accepts an import refresh with a positive whole count only", () => {
     expect(parseLiveEvent(JSON.stringify({ kind: "orders.imported", count: 12 }))).toEqual({ kind: "orders.imported", count: 12 });

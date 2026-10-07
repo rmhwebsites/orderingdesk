@@ -56,6 +56,7 @@ const EVENT_TYPES = new Set([
   "draft_deleted",
   "draft_edited",
   "order_cancelled",
+  "request_placed",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {

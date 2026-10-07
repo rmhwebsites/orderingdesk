@@ -44,4 +44,8 @@ describe("eventLook", () => {
       tone: "red",
     });
   });
+
+  it("shows a request placed through an AI app like a new request", () => {
+    expect(eventLook({ type: "request_placed", meta: { ai: { client: "claude" } }, source: "ai" })).toEqual({ glyph: "request", tone: "slate" });
+  });
 });

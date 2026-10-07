@@ -36,6 +36,8 @@ export function eventLook(event: { type: string; meta?: unknown; source?: string
       return { glyph: "note", tone: "slate" };
     case "order_new":
       return meta.kind === "draft" ? { glyph: "request", tone: "slate" } : { glyph: "order", tone: "slate" };
+    case "request_placed":
+      return { glyph: "request", tone: "slate" };
     case "po_draft":
       return { glyph: "po", tone: "slate" };
     case "po_sent":
