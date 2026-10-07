@@ -15,4 +15,8 @@ interface CloudflareEnv {
   // which wrangler types as string, does not conflict); readers treat a
   // missing value as an empty list (src/server/access.ts).
   PLATFORM_ADMIN_EMAILS: string;
+  // Workers AI (wrangler.jsonc "ai"). Tools and tests that build a partial
+  // env leave it out; src/server/search/ai.ts treats a missing binding as
+  // AI search off.
+  AI: Ai;
 }

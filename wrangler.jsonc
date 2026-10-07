@@ -19,6 +19,9 @@
   // Cloudflare Email Service send binding (requires Workers Paid and an
   // onboarded sending domain before production email works)
   "send_email": [{ "name": "EMAIL" }],
+  // Workers AI for AI search (src/server/search/ai.ts). It has no local
+  // simulation: next dev calls the real service and is billed.
+  "ai": { "binding": "AI" },
   "durable_objects": {
     "bindings": [{ "name": "ROOM", "class_name": "WorkspaceRoom" }]
   },
