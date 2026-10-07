@@ -61,7 +61,7 @@ const HUB_BODY_STACK = "'Red Hat Display', 'Helvetica Neue', Helvetica, Arial, s
 const BUTTON_RADIUS: Record<BrandRadius, number> = { sharp: 0, subtle: 4, soft: 8, rounded: 12, pill: 999 };
 const CARD_RADIUS: Record<BrandRadius, number> = { sharp: 0, subtle: 4, soft: 8, rounded: 12, pill: 16 };
 
-type Look = {
+export type Look = {
   name: string;
   logoUrl: string | null;
   primary: string;
@@ -94,7 +94,7 @@ function textOn(fill: string, ink: string): string {
   return contrastRatio(ink, fill) >= contrastRatio(WHITE, fill) ? ink : WHITE;
 }
 
-function lookFor(workspace: EmailWorkspace | null, hubOrigin: string): Look {
+export function lookFor(workspace: EmailWorkspace | null, hubOrigin: string): Look {
   if (!workspace) {
     return {
       name: APP_NAME,
