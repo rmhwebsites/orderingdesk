@@ -5,6 +5,7 @@ import { CopySimpleIcon } from "@phosphor-icons/react/CopySimple";
 import { Chip, Spinner } from "@/components/kit";
 import { ui } from "@/components/ui";
 import { formatDateTime } from "@/lib/format";
+import { useNow } from "@/lib/use-now";
 import { GRANT_TTL_DAYS } from "@/mcp/constants";
 import type { AiConnectionView, AiLimits, AiSettingsView } from "@/server/ai-connections";
 import { ConfirmStep, Field, focusSoon, InlineMessage, Panel, requestJson, SaveStatus, SettingsSection, Switch } from "./kit";
@@ -87,6 +88,21 @@ function ConnectPanel({ mcpUrl }: { mcpUrl: string }) {
   );
 }
 
+// The line under a connection. Dates wait for mount (now > 0): the server
+// renders in UTC (Workers) and the browser in the viewer's own zone, so a
+// date in the first render would not hydrate. Same as store-connection.tsx.
+export function connectionDetails(connection: AiConnectionView, now: number): string {
+  const parts = connection.clientDomain ? [connection.clientDomain] : [];
+  if (now > 0) {
+    parts.push(
+      `connected ${formatDateTime(connection.createdAt)}`,
+      connection.lastUsedAt ? `last used ${formatDateTime(connection.lastUsedAt)}` : "not used yet",
+      `expires ${formatDateTime(connection.expiresAt)}`,
+    );
+  }
+  return parts.join(", ");
+}
+
 function ConnectionList({
   connections,
   showPeople,
@@ -99,6 +115,7 @@ function ConnectionList({
   onRevoke: (id: string) => Promise<void>;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
+  const now = useNow(60000);
   if (connections.length === 0) {
     return (
       <Panel>
@@ -125,10 +142,8 @@ function ConnectionList({
                 </Chip>
               ) : null}
             </p>
-            <p className="mt-1 text-xs text-ink-2">
-              {connection.clientDomain ? `${connection.clientDomain}, ` : ""}connected {formatDateTime(connection.createdAt)}
-              {connection.lastUsedAt ? `, last used ${formatDateTime(connection.lastUsedAt)}` : ", not used yet"}, expires {formatDateTime(connection.expiresAt)}
-            </p>
+            {/* min-h-4 keeps one line's height before the dates arrive. */}
+            <p className="mt-1 min-h-4 text-xs text-ink-2">{connectionDetails(connection, now)}</p>
           </div>
           {connection.mine || canManage ? (
             <button

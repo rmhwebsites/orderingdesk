@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { formatDate, formatDateTime } from "@/lib/format";
 import type { AiSettingsView } from "@/server/ai-connections";
-import { AiConnectionsSection } from "./ai-connections";
+import { AiConnectionsSection, connectionDetails } from "./ai-connections";
 
 const NOW = Date.parse("2026-10-07T15:00:00.000Z");
 
@@ -73,5 +74,32 @@ describe("AiConnectionsSection", () => {
 
   it("explains that AI connections are off", () => {
     expect(render(view({ teamAccess: false }))).toContain("AI connections are off for this workspace");
+  });
+
+  // The server renders in UTC (Workers) and the browser in its own zone, so
+  // a date in the first render would not hydrate. Dates wait for mount, as
+  // in store-connection.tsx and team.tsx.
+  it("leaves every date out of the first render, so the server and the browser agree", () => {
+    const [own] = view().connections;
+    const html = render(view());
+    for (const ms of [own.createdAt, own.lastUsedAt ?? 0, own.expiresAt]) {
+      for (const timeZone of ["UTC", "America/Chicago", "America/Los_Angeles"]) {
+        expect(html).not.toContain(formatDate(ms, timeZone));
+      }
+    }
+    expect(html).not.toMatch(/\d{1,2}:\d{2}\s?[AP]M/);
+    expect(html).toContain("claude.ai");
+  });
+
+  it("shows when a connection was made, last used and expires once mounted", () => {
+    const [own] = view().connections;
+    expect(connectionDetails(own, 0)).toBe("claude.ai");
+    expect(connectionDetails(own, NOW)).toBe(
+      `claude.ai, connected ${formatDateTime(own.createdAt)}, last used ${formatDateTime(NOW - 60000)}, expires ${formatDateTime(own.expiresAt)}`,
+    );
+    expect(connectionDetails({ ...own, clientDomain: null, lastUsedAt: null }, NOW)).toBe(
+      `connected ${formatDateTime(own.createdAt)}, not used yet, expires ${formatDateTime(own.expiresAt)}`,
+    );
+    expect(connectionDetails({ ...own, clientDomain: null }, 0)).toBe("");
   });
 });
