@@ -59,6 +59,20 @@ describe("cancelOrderInShopify", () => {
     expect(String(calls[0].variables.staffNote)).toHaveLength(255);
   });
 
+  // Wave 1b final review: the cut counts code points, so a character
+  // outside the Basic Multilingual Plane is kept whole or dropped whole,
+  // never split into a lone surrogate.
+  it("cuts the staff note by code points, never leaving half a character", async () => {
+    const { impl, calls } = stub(() => ({ data: { orderCancel: { job: null, orderCancelUserErrors: [] } } }));
+    const wide = "\u{1F4E6}";
+    await cancelOrderInShopify(DOMAIN, TOKEN, ORDER, "x".repeat(254) + wide + "y", impl);
+    expect(calls[0].variables.staffNote).toBe("x".repeat(254) + wide);
+    await cancelOrderInShopify(DOMAIN, TOKEN, ORDER, wide.repeat(300), impl);
+    const note = String(calls[1].variables.staffNote);
+    expect(Array.from(note)).toHaveLength(255);
+    expect(note).toBe(wide.repeat(255));
+  });
+
   it("answers Shopify's refusal in its own words", async () => {
     const { impl } = stub(() => ({
       data: {

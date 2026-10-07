@@ -989,7 +989,8 @@ export const CANCEL_ORDER_MUTATION = `mutation CancelOrder($orderId: ID!, $reaso
   }
 }`;
 
-// Shopify's limit for a cancellation's staff note.
+// Shopify's limit for a cancellation's staff note, counted in characters
+// (code points), so the cut never splits a surrogate pair.
 export const STAFF_NOTE_MAX = 255;
 
 // Sends the cancel once. The customer is never emailed, nothing is
@@ -1006,7 +1007,13 @@ export async function cancelOrderInShopify(
     shopDomain,
     token,
     CANCEL_ORDER_MUTATION,
-    { orderId: orderGid, reason: "OTHER", restock: false, notifyCustomer: false, staffNote: staffNote.slice(0, STAFF_NOTE_MAX) },
+    {
+      orderId: orderGid,
+      reason: "OTHER",
+      restock: false,
+      notifyCustomer: false,
+      staffNote: Array.from(staffNote).slice(0, STAFF_NOTE_MAX).join(""),
+    },
     fetchImpl,
   );
   if (result.kind !== "ok") {
