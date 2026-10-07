@@ -58,4 +58,17 @@ describe("statusOptionsFor", () => {
       keys(statusOptionsFor({ kind: "order", role: "staff", currentKey: "rejected", statuses: STATUSES }).options),
     ).toContain("rejected");
   });
+
+  it("keeps the cancelled status out of the control, and locks a cancelled order for staff", () => {
+    const list = [...STATUSES, status("cancelled", 7, "cancelled")];
+    expect(keys(statusOptionsFor({ kind: "order", role: "manager", currentKey: "new", statuses: list }).options)).not.toContain("cancelled");
+    expect(keys(statusOptionsFor({ kind: "draft", role: "manager", currentKey: "new", statuses: list }).options)).not.toContain("cancelled");
+    expect(statusOptionsFor({ kind: "order", role: "staff", currentKey: "cancelled", statuses: list })).toMatchObject({
+      disabled: true,
+      hint: "Only a manager can move a cancelled order.",
+    });
+    const manager = statusOptionsFor({ kind: "order", role: "manager", currentKey: "cancelled", statuses: list });
+    expect(keys(manager.options)).toEqual(["new", "processing", "issue", "cancelled"]);
+    expect(manager.disabled).toBe(false);
+  });
 });

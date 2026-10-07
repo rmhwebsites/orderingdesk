@@ -94,8 +94,10 @@ function statusWrites(db: Db, event: StatusEvent, statusKey: string) {
 // and synced_at belong to the sync engine. Concurrent changes resolve last
 // writer wins; each one still leaves its own event. The rules for which
 // status a card may take (a card is a draft while it has no Shopify order
-// id) live in src/lib/status-rules.ts; triggersPo only for an order (a
-// purchase order needs the Shopify order).
+// id) live in src/lib/status-rules.ts: never into the status linked to
+// cancelled; out of it only for a manager, to a status with no Shopify
+// link. triggersPo only for an order (a purchase order needs the Shopify
+// order).
 export async function changeOrderStatus(
   db: Db,
   ctx: MutationContext,

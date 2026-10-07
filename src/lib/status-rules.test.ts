@@ -73,3 +73,37 @@ describe("planBulkMove", () => {
     ]);
   });
 });
+
+// Comprehensive design section 2: Cancel order and Shopify's cancellations
+// own the cancelled status; Shopify cannot un-cancel an order, so only a
+// manager moves a cancelled card, and only where Shopify is not involved.
+describe("checkStatusMove and the cancelled status", () => {
+  const cancelled = status("Cancelled", "cancelled");
+
+  it("never moves a card into the cancelled status", () => {
+    expect(checkStatusMove({ isDraft: false, role: "manager", current: status("Approved"), target: cancelled })).toEqual({
+      ok: false,
+      forbidden: false,
+      error: "Use Cancel order to cancel an order. It cancels the order in Shopify.",
+    });
+    expect(checkStatusMove({ isDraft: true, role: "manager", current: status("New"), target: cancelled })).toEqual({
+      ok: false,
+      forbidden: false,
+      error: "A request is rejected, not cancelled. Use Reject.",
+    });
+  });
+
+  it("lets only a manager move a cancelled order, and only to a status with no Shopify link", () => {
+    expect(checkStatusMove({ isDraft: false, role: "staff", current: cancelled, target: status("Processing") })).toEqual({
+      ok: false,
+      forbidden: true,
+      error: "Only a manager can move a cancelled order.",
+    });
+    expect(checkStatusMove({ isDraft: false, role: "manager", current: cancelled, target: status("Shipped", "fulfilled") })).toEqual({
+      ok: false,
+      forbidden: false,
+      error: "A cancelled order cannot be marked Shipped. Shopify keeps it cancelled.",
+    });
+    expect(checkStatusMove({ isDraft: false, role: "manager", current: cancelled, target: status("Issue") })).toEqual({ ok: true });
+  });
+});

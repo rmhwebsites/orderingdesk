@@ -24,6 +24,10 @@ export type MoveCheck = { ok: true } | { ok: false; forbidden: boolean; error: s
 // - Out of the draft_rejected status only for a manager or platform admin
 //   (forbidden: the single change answers 403, as before).
 // - An order never moves into the draft_rejected status.
+// - Never into the status linked to cancelled (Cancel order and Shopify's
+//   own cancellations put a card there); out of it only for a manager or
+//   platform admin, and only to a status with no Shopify link (Shopify
+//   cannot un-cancel an order).
 export function checkStatusMove(input: {
   isDraft: boolean;
   role: Role;
@@ -31,6 +35,21 @@ export function checkStatusMove(input: {
   target: RuleStatus;
 }): MoveCheck {
   const { isDraft, role, current, target } = input;
+  if (target.shopifyLink === "cancelled") {
+    return {
+      ok: false,
+      forbidden: false,
+      error: isDraft ? "A request is rejected, not cancelled. Use Reject." : "Use Cancel order to cancel an order. It cancels the order in Shopify.",
+    };
+  }
+  if (current?.shopifyLink === "cancelled") {
+    if (!roleAtLeast(role, "manager")) {
+      return { ok: false, forbidden: true, error: "Only a manager can move a cancelled order." };
+    }
+    if (target.shopifyLink !== null) {
+      return { ok: false, forbidden: false, error: `A cancelled order cannot be marked ${target.label}. Shopify keeps it cancelled.` };
+    }
+  }
   if (isDraft) {
     if (current?.shopifyLink === "draft_rejected" && !roleAtLeast(role, "manager")) {
       return { ok: false, forbidden: true, error: "Only a manager can reopen a rejected request." };

@@ -9,6 +9,9 @@
 //   or platform admin reopens it.
 // - An order takes every status except the one linked to draft_rejected
 //   (unless it is already there).
+// - The cancelled status is never offered (Cancel order sets it); a
+//   cancelled order is locked for staff and moves only to statuses with no
+//   Shopify link.
 
 import type { StatusView } from "../server/desk/shapes";
 import { roleAtLeast, type Role } from "./roles";
@@ -22,8 +25,8 @@ export function statusOptionsFor(input: {
   statuses: StatusView[];
 }): StatusOptions {
   const { kind, role, currentKey, statuses } = input;
+  const current = statuses.find((status) => status.key === currentKey);
   if (kind === "draft") {
-    const current = statuses.find((status) => status.key === currentKey);
     const locked = current?.shopifyLink === "draft_rejected" && !roleAtLeast(role, "manager");
     return {
       options: statuses.filter((status) => status.shopifyLink === null || status.key === currentKey),
@@ -31,8 +34,18 @@ export function statusOptionsFor(input: {
       hint: locked ? "Only a manager can reopen a rejected request." : null,
     };
   }
+  if (current?.shopifyLink === "cancelled") {
+    const locked = !roleAtLeast(role, "manager");
+    return {
+      options: statuses.filter((status) => status.shopifyLink === null || status.key === currentKey),
+      disabled: locked,
+      hint: locked ? "Only a manager can move a cancelled order." : null,
+    };
+  }
   return {
-    options: statuses.filter((status) => status.shopifyLink !== "draft_rejected" || status.key === currentKey),
+    options: statuses.filter(
+      (status) => (status.shopifyLink !== "draft_rejected" && status.shopifyLink !== "cancelled") || status.key === currentKey,
+    ),
     disabled: false,
     hint: null,
   };

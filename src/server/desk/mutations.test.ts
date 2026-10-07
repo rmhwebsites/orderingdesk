@@ -6,6 +6,7 @@ import { NOTE_MAX, addOrderNote, changeOrderStatus, changeOrderStatuses } from "
 import {
   openTestDb,
   seedDraft,
+  seedCancelledStatus,
   seedDraftStatuses,
   seedOrder,
   seedWorkspace,
@@ -343,6 +344,29 @@ describe("addOrderNote", () => {
 
 describe("changeOrderStatuses (bulk)", () => {
   const bulk = (role: "staff" | "manager" = "staff") => ({ workspaceId: WS, userId: USER, role, now: NOW });
+
+  // The same rules hold for one change and for a bulk move.
+  it("keeps the cancelled status for Cancel order, and lets only a manager move a cancelled order to a status with no Shopify link", async () => {
+    const db = await setup();
+    await seedDraftStatuses(db, WS);
+    await seedCancelledStatus(db, WS);
+    expect(await changeOrderStatus(db, ctx("o1", "manager"), { statusKey: "cancelled" })).toEqual({
+      kind: "invalid",
+      error: "Use Cancel order to cancel an order. It cancels the order in Shopify.",
+    });
+    const moved = await changeOrderStatuses(db, bulk("manager"), { orderIds: ["o1"], statusKey: "cancelled" });
+    expect(moved.kind === "ok" ? moved.results.map((row) => row.outcome) : moved).toEqual(["refused"]);
+    await db.update(schema.orders).set({ statusKey: "cancelled" }).where(eq(schema.orders.id, "o1"));
+    expect(await changeOrderStatus(db, ctx("o1", "staff"), { statusKey: "processing" })).toEqual({
+      kind: "forbidden",
+      error: "Only a manager can move a cancelled order.",
+    });
+    expect(await changeOrderStatus(db, ctx("o1", "manager"), { statusKey: "shipped" })).toEqual({
+      kind: "invalid",
+      error: "A cancelled order cannot be marked Shipped. Shopify keeps it cancelled.",
+    });
+    expect((await changeOrderStatus(db, ctx("o1", "manager"), { statusKey: "issue" })).kind).toBe("changed");
+  });
 
   it("moves every card it may in one batch, each with its own status entry", async () => {
     const db = await setup();
