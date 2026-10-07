@@ -48,6 +48,8 @@ export type OrderSnapshot = {
   shipping: SnapshotShipping | null;
   tags: string[];
   note: string;
+  // When Shopify cancelled the order (ms), or null.
+  cancelledAt: number | null;
   // Draft fields ("" or null on an order).
   draftStatus: "open" | "invoice_sent" | "completed" | null;
   orderName: string | null;
@@ -120,6 +122,7 @@ export function readSnapshot(raw: unknown): OrderSnapshot {
       .map((tag) => tag.trim())
       .filter((tag) => tag.length > 0),
     note: str(s.note),
+    cancelledAt: typeof s.cancelledAt === "number" && Number.isFinite(s.cancelledAt) && s.cancelledAt > 0 ? s.cancelledAt : null,
     draftStatus:
       kind === "draft" ? (s.status === "invoice_sent" || s.status === "completed" ? s.status : "open") : null,
     orderName: typeof s.orderName === "string" && s.orderName.length > 0 ? s.orderName : null,

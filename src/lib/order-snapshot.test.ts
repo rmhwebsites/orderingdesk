@@ -89,6 +89,12 @@ describe("readSnapshot", () => {
     expect(snapshot.tags).toEqual([]);
     expect(readSnapshot(null).customerName).toBe("");
   });
+
+  it("reads when Shopify cancelled the order, or null", () => {
+    expect(readSnapshot({ cancelledAt: 5000 }).cancelledAt).toBe(5000);
+    expect(readSnapshot({ cancelledAt: "soon" }).cancelledAt).toBeNull();
+    expect(readSnapshot({}).cancelledAt).toBeNull();
+  });
 });
 
 describe("itemsSubtotal", () => {

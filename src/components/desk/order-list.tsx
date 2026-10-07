@@ -86,7 +86,7 @@ export function BranchCell({ order }: { order: Pick<OrderSummary, "branch"> }) {
 
 // A request's Draft chip, Deleted when Shopify deleted its draft; an order
 // that was a request names its draft.
-function KindMark({ order }: { order: OrderSummary }) {
+function KindMark({ order, cancelledKey }: { order: OrderSummary; cancelledKey: string | undefined }) {
   if (order.kind === "draft") {
     return order.draftDeleted ? (
       <Chip tone="amber" size="sm">
@@ -98,9 +98,22 @@ function KindMark({ order }: { order: OrderSummary }) {
       </Chip>
     );
   }
-  return order.draftName ? (
-    <span className="shrink-0 truncate text-xs text-ink-2">{`from ${order.draftName}`}</span>
-  ) : null;
+  // An order Shopify cancelled while its card sits outside the cancelled
+  // status (none exists, or a manager moved it) says so.
+  const cancelled = order.cancelled && order.statusKey !== cancelledKey;
+  if (!order.draftName && !cancelled) {
+    return null;
+  }
+  return (
+    <>
+      {order.draftName ? <span className="shrink-0 truncate text-xs text-ink-2">{`from ${order.draftName}`}</span> : null}
+      {cancelled ? (
+        <Chip tone="slate" size="sm">
+          Cancelled in Shopify
+        </Chip>
+      ) : null}
+    </>
+  );
 }
 
 // The cards always name the branch here; a table row names it only below
@@ -262,6 +275,7 @@ export function OrderTable({
   closedKeys,
   selection,
 }: ListProps) {
+  const cancelledKey = statuses.find((status) => status.shopifyLink === "cancelled")?.key;
   return (
     <div className="overflow-hidden rounded-panel border border-line bg-surface shadow-panel">
       <table className="w-full table-fixed border-collapse text-left">
@@ -319,7 +333,7 @@ export function OrderTable({
                       <span className="sr-only">{order.kind === "draft" ? "Open request " : "Open order "}</span>
                       {order.name}
                     </button>
-                    <KindMark order={order} />
+                    <KindMark order={order} cancelledKey={cancelledKey} />
                     <PricedMark order={order} />
                   </span>
                 </td>
@@ -374,6 +388,7 @@ export function OrderCards({
   selection,
   showPrices,
 }: ListProps) {
+  const cancelledKey = statuses.find((status) => status.shopifyLink === "cancelled")?.key;
   return (
     <ul className="flex flex-col gap-2">
       {orders.map((order) => (
@@ -401,7 +416,7 @@ export function OrderCards({
               <span className="sr-only">{order.kind === "draft" ? "Open request " : "Open order "}</span>
               {order.name}
             </button>
-            <KindMark order={order} />
+            <KindMark order={order} cancelledKey={cancelledKey} />
             <span className="ml-auto shrink-0">
               <AgeBadge order={order} statuses={statuses} ageRule={ageRule} closedKeys={closedKeys} now={now} withLabel />
             </span>

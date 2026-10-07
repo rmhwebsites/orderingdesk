@@ -78,6 +78,7 @@ function render(
         onAddNote: none,
         onApprove: none,
         onReject: none,
+        onCancelOrder: none,
         onClose: noop,
         onRetry: noop,
         canManagePos: true,

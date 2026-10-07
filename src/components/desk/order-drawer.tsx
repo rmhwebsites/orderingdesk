@@ -34,6 +34,7 @@ import { Chip, Spinner } from "@/components/kit";
 import { CopyButton, Section } from "./drawer-kit";
 import { ItemsSection, RequestSection, ShipToSection, type ShipToLocation } from "./request-parts";
 import { ReviewActions, ReviewSummary, type NextRequest } from "./review-panel";
+import { CancelOrderPanel } from "./cancel-order";
 
 export type DrawerOrder = {
   id: string;
@@ -423,6 +424,7 @@ export function OrderDrawerContent({
   onAddNote,
   onApprove,
   onReject,
+  onCancelOrder,
   nextRequest,
   onApproveAndNext,
   onClose,
@@ -453,6 +455,8 @@ export function OrderDrawerContent({
   // Approve and Reject a request: the error to show, or null.
   onApprove: () => Promise<string | null>;
   onReject: (reason: string) => Promise<string | null>;
+  // Cancel an order after approval: the error to show, or null.
+  onCancelOrder: (reason: string) => Promise<string | null>;
   // Approve and next: the next request waiting, and the approval that then
   // opens it (comprehensive desk design section 1).
   nextRequest?: NextRequest | null;
@@ -505,6 +509,11 @@ export function OrderDrawerContent({
     statusKey !== null ? statusOptionsFor({ kind, role, currentKey: statusKey, statuses }) : null;
   const approvedStatus = statuses.find((status) => status.shopifyLink === "draft_completed");
   const rejectedStatus = statuses.find((status) => status.shopifyLink === "draft_rejected");
+  const cancelledStatus = statuses.find((status) => status.shopifyLink === "cancelled");
+  const inCancelled = cancelledStatus !== undefined && statusKey === cancelledStatus.key;
+  // Shopify cancelled the order but the card sits elsewhere (no cancelled
+  // status, or a manager moved it): say so next to the name.
+  const cancelledChip = kind === "order" && snapshot !== null && snapshot.cancelledAt !== null && !inCancelled;
   const draftsOff = "Draft orders are not enabled for this store's Shopify app.";
   const approveBlock = deleted
     ? "Shopify no longer has this draft."
@@ -584,6 +593,11 @@ export function OrderDrawerContent({
                   {deleted ? (
                     <Chip tone="amber" size="sm">
                       Deleted in Shopify
+                    </Chip>
+                  ) : null}
+                  {cancelledChip ? (
+                    <Chip tone="slate" size="sm">
+                      Cancelled in Shopify
                     </Chip>
                   ) : null}
                 </div>
@@ -742,6 +756,24 @@ export function OrderDrawerContent({
                 refreshKey={poRefreshKey}
                 onCreate={onCreatePo}
                 onEdit={onEditPo}
+              />
+            ) : null}
+
+            {kind === "order" ? (
+              <CancelOrderPanel
+                key={orderId}
+                name={name}
+                canCancel={canReview}
+                cancelled={inCancelled}
+                pending={inCancelled && snapshot.cancelledAt === null}
+                block={cancelledStatus ? null : "No status follows Shopify's cancelled state. A manager can set one in Settings > Statuses."}
+                onCancel={async (reason) => {
+                  const failure = await onCancelOrder(reason);
+                  if (!failure) {
+                    focusSoon(() => document.getElementById(labelId));
+                  }
+                  return failure;
+                }}
               />
             ) : null}
           </>

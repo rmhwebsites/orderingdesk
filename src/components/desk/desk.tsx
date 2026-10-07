@@ -715,6 +715,62 @@ export function Desk() {
     [applyEvent, toast, refreshQueue],
   );
 
+  // Cancel an order after approval (comprehensive design section 2): the
+  // error to show inline, or null. The server reads Shopify first, so a
+  // retry after a lost answer never sends a second cancel.
+  const cancelOrderAction = useCallback(
+    async (orderId: string, reason: string): Promise<string | null> => {
+      let response: Response;
+      try {
+        response = await fetch(`/api/orders/${encodeURIComponent(orderId)}/cancel`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reason }),
+        });
+      } catch {
+        return "Could not reach the server. Check the order before trying again; a cancel that went through is never sent twice.";
+      }
+      const body = (await response.json().catch(() => null)) as {
+        error?: string;
+        kind?: "cancelled" | "already-cancelled" | "cancelled-in-shopify";
+        order?: LiveOrderStatus;
+        events?: EventView[];
+        confirmed?: boolean;
+        message?: string;
+      } | null;
+      if (!response.ok || !body?.kind) {
+        return body?.error ?? `Not cancelled (the server answered ${response.status}). Try again.`;
+      }
+      if (body.kind === "cancelled") {
+        for (const event of body.events ?? []) {
+          if (event.type === "status" && body.order) {
+            applyEvent({ kind: "order.status", event, order: body.order });
+          } else if (event.type === "note") {
+            applyEvent({ kind: "order.note", event });
+          } else {
+            applyEvent({ kind: "order.activity", event });
+          }
+        }
+        toast({
+          title: body.confirmed
+            ? "Cancelled in Shopify. No email, restock or refund."
+            : "Shopify is finishing the cancellation. No email, restock or refund.",
+          tone: "good",
+        });
+      } else if (body.kind === "already-cancelled") {
+        toast({ title: "This order is already cancelled.", tone: "info" });
+      } else {
+        toast({ title: body.message ?? "This order was already cancelled in Shopify.", tone: "info" });
+      }
+      void reload();
+      if (openRef.current === orderId) {
+        void loadDrawer(orderId, true);
+      }
+      return null;
+    },
+    [applyEvent, toast, reload, loadDrawer],
+  );
+
   // Approve and next (comprehensive desk design section 1): approve, then
   // open the next waiting request in place of this one (no extra history
   // entry, so Back still closes the drawer).
@@ -1061,6 +1117,7 @@ export function Desk() {
             onAddNote={(text) => addNote(drawerOrderId, text)}
             onApprove={() => approve(drawerOrderId)}
             onReject={(reason) => reject(drawerOrderId, reason)}
+            onCancelOrder={(reason) => cancelOrderAction(drawerOrderId, reason)}
             nextRequest={nextRequest}
             onApproveAndNext={nextRequest ? () => approveAndNext(drawerOrderId, nextRequest.id) : undefined}
             onClose={closeOrder}
